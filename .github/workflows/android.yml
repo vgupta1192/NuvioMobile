@@ -19,8 +19,6 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - uses: android-actions/setup-android@v3
-
       - name: Create local.properties (self-hosted backend)
         run: |
           cat > local.properties <<'PROPS'
