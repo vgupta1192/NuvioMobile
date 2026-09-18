@@ -1,0 +1,50 @@
+name: Build NuvioMobile APK
+
+on:
+  push:
+    branches: [cmp-rewrite]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Create local.properties (self-hosted backend)
+        run: |
+          cat > local.properties <<'PROPS'
+          NUVIO_SUPABASE_URL=https://nuviobackend.kissmissi.duckdns.org
+          NUVIO_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzg5NzY2MDkyLCJleHAiOjE5NDc0NDYwOTJ9.XB5a12DpW9Uf11QARCv4AAfYHGyk4qRq2Oi_7t8t7X0
+          NUVIO_SUPABASE_FALLBACK_URL=
+          NUVIO_ANDROID_DISTRIBUTION=full
+          PROPS
+          sed -i 's/^          //' local.properties
+
+      - name: Build debug APK
+        run: ./gradlew :androidApp:assembleFullDebug --stacktrace
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: NuvioMobile-apk
+          path: androidApp/build/outputs/apk/full/*/*.apk
+          if-no-files-found: error
+
+      - name: Publish to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: mobile-build-${{ github.run_number }}
+          name: NuvioMobile build ${{ github.run_number }}
+          prerelease: true
+          files: androidApp/build/outputs/apk/full/*/*.apk
