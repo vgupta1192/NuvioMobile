@@ -1,6 +1,8 @@
 package com.nuvio.app.features.tracking
 
+import com.nuvio.app.features.simkl.SimklAuthRepository
 import com.nuvio.app.features.simkl.SimklConfig
+import com.nuvio.app.features.trakt.TraktAuthRepository
 import com.nuvio.app.features.trakt.TraktConfig
 
 /**
@@ -44,11 +46,13 @@ object TrackingApiCredentials {
         TraktConfig.CLIENT_SECRET = secret
         TrackingApiCredentialsStorage.saveTraktClientId(id)
         TrackingApiCredentialsStorage.saveTraktClientSecret(secret)
+        runCatching { TraktAuthRepository.onProfileChanged() }
     }
 
     fun saveSimklClientId(clientId: String) {
         val id = clientId.trim()
         SimklConfig.CLIENT_ID = id
         TrackingApiCredentialsStorage.saveSimklClientId(id)
+        runCatching { SimklAuthRepository.onProfileChanged() }
     }
 }
