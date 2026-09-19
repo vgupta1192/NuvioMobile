@@ -1,11 +1,11 @@
-name: Build NuvioMobile (upstream + self-host backend)
+name: Build NuvioMobile (upstream release sync)
 
 on:
   push:
     branches: [cmp-rewrite]
     paths: ['.github/**']
   schedule:
-    - cron: '0 7 * * 1'
+    - cron: '17 */6 * * *'
   workflow_dispatch:
 
 permissions:
@@ -15,22 +15,35 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Check upstream release
+        id: ver
+        run: |
+          UP=$(curl -s https://api.github.com/repos/NuvioMedia/NuvioMobile/releases/latest | python3 -c "import json,sys;print(json.load(sys.stdin)['tag_name'])")
+          echo "upstream tag: $UP"
+          BUILT=$(curl -s -o /dev/null -w "%{http_code}" "https://api.github.com/repos/vgupta1192/NuvioMobile/releases/tags/mobile-$UP")
+          if [ "$BUILT" = "200" ]; then echo "already built, skipping"; echo "should_build=false" >> "$GITHUB_OUTPUT"; else echo "should_build=true" >> "$GITHUB_OUTPUT"; fi
+          echo "tag=$UP" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
+        if: steps.ver.outputs.should_build == 'true'
         with:
           repository: NuvioMedia/NuvioMobile
           ref: cmp-rewrite
 
       - uses: actions/setup-java@v4
+        if: steps.ver.outputs.should_build == 'true'
         with:
           distribution: temurin
           java-version: '21'
 
       - name: Hide Trakt card (Simkl-only build)
+        if: steps.ver.outputs.should_build == 'true'
         run: |
           curl -sSL https://raw.githubusercontent.com/vgupta1192/NuvioMobile/cmp-rewrite/.github/patches/hide-unconfigured-trakt.patch -o /tmp/trakt.patch
           git apply --3way /tmp/trakt.patch
 
       - name: Create local.properties (self-hosted backend)
+        if: steps.ver.outputs.should_build == 'true'
         run: |
           printf '%s\n' \
             'NUVIO_SUPABASE_URL=https://nuviobackend.kissmissi.duckdns.org' \
@@ -42,11 +55,13 @@ jobs:
             > local.properties
 
       - name: Build debug APK
+        if: steps.ver.outputs.should_build == 'true'
         run: |
           set -o pipefail
           ./gradlew :androidApp:assembleFullDebug --stacktrace 2>&1 | tee build-log.txt
 
       - name: Upload artifacts
+        if: steps.ver.outputs.should_build == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: NuvioMobile-apk
@@ -54,12 +69,29 @@ jobs:
           if-no-files-found: error
 
       - name: Publish to release
+        if: steps.ver.outputs.should_build == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: mobile-build-${{ github.run_number }}
-          name: NuvioMobile upstream build ${{ github.run_number }}
+          tag_name: mobile-${{ steps.ver.outputs.tag }}
+          name: NuvioMobile ${{ steps.ver.outputs.tag }}
           prerelease: true
           files: androidApp/build/outputs/apk/full/*/*.apk
+
+      - name: Notify Telegram
+        if: steps.ver.outputs.should_build == 'true' && env.TG_BOT_TOKEN != '' && env.TG_CHAT_ID != ''
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          REL_TAG: mobile-${{ steps.ver.outputs.tag }}
+          VER: ${{ steps.ver.outputs.tag }}
+        run: |
+          MSG="📱 NuvioMobile ${VER} is ready
+          Upstream release: ${VER}
+          Download: https://github.com/vgupta1192/NuvioMobile/releases/tag/${REL_TAG}
+          (uninstall old app first, then install the APK)"
+          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            --data-urlencode "text=${MSG}" > /dev/null
 
       - name: Attach build log on failure
         if: failure()
