@@ -8,6 +8,7 @@ import com.nuvio.app.features.simkl.SimklTrackingLibraryProvider
 import com.nuvio.app.features.simkl.SimklTrackingProgressProvider
 import com.nuvio.app.features.simkl.SimklWatchedSyncAdapter
 import com.nuvio.app.features.simkl.SimklSyncRepository
+import com.nuvio.app.features.tracking.TrackingApiCredentials
 import com.nuvio.app.features.tracking.TrackingProviderRegistry
 import com.nuvio.app.features.trakt.TraktAuthRepository
 import com.nuvio.app.features.trakt.TraktScrobbleRepository
@@ -16,6 +17,7 @@ import com.nuvio.app.features.trakt.TraktTrackingProgressProvider
 import com.nuvio.app.features.watching.sync.TraktWatchedSyncAdapter
 
 fun ensureTrackingProvidersRegistered() {
+    TrackingApiCredentials.applyStoredOverrides()
     TraktAuthRepository.descriptor
     TraktScrobbleRepository.ensureRegistered()
     SimklAuthRepository.descriptor

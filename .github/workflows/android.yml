@@ -31,7 +31,9 @@ jobs:
           sed -i 's/^          //' local.properties
 
       - name: Build debug APK
-        run: ./gradlew :androidApp:assembleFullDebug --stacktrace
+        run: |
+          set -o pipefail
+          ./gradlew :androidApp:assembleFullDebug --stacktrace 2>&1 | tee build-log.txt
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -47,3 +49,12 @@ jobs:
           name: NuvioMobile build ${{ github.run_number }}
           prerelease: true
           files: androidApp/build/outputs/apk/full/*/*.apk
+
+      - name: Attach build log on failure
+        if: failure()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: mobile-debug-logs
+          name: Mobile CI debug logs
+          prerelease: true
+          files: build-log.txt

@@ -5,8 +5,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import com.nuvio.app.features.tracking.TrackingApiCredentials
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -166,6 +171,10 @@ internal fun LazyListScope.trackingSettingsContent(
                 )
             }
         }
+    }
+
+    item {
+        TrackingApiCredentialsSection(isTablet = isTablet)
     }
 }
 
@@ -647,4 +656,68 @@ private fun animeIdPreferenceLabel(preference: SimklAnimeIdPreference): String =
     SimklAnimeIdPreference.MAL -> stringResource(Res.string.settings_tracking_anime_id_mal)
     SimklAnimeIdPreference.KITSU -> stringResource(Res.string.settings_tracking_anime_id_kitsu)
     SimklAnimeIdPreference.TVDB -> stringResource(Res.string.settings_tracking_anime_id_tvdb)
+}
+
+@Composable
+private fun TrackingApiCredentialsSection(isTablet: Boolean) {
+    var traktClientId by rememberSaveable { mutableStateOf(TrackingApiCredentials.effectiveTraktClientId()) }
+    var traktClientSecret by rememberSaveable { mutableStateOf(TrackingApiCredentials.effectiveTraktClientSecret()) }
+    var simklClientId by rememberSaveable { mutableStateOf(TrackingApiCredentials.effectiveSimklClientId()) }
+    var savedMessage by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    SettingsSection(
+        title = "Tracking API credentials",
+        isTablet = isTablet,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "For self-hosted builds: paste the Client ID/Secret from your own Trakt and Simkl developer apps. Redirect URI for both is nuvio://auth/trakt and nuvio://auth/simkl.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.nuvio.colors.textSecondary,
+            )
+            OutlinedTextField(
+                value = traktClientId,
+                onValueChange = { traktClientId = it },
+                label = { Text("Trakt Client ID") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = traktClientSecret,
+                onValueChange = { traktClientSecret = it },
+                label = { Text("Trakt Client Secret") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = simklClientId,
+                onValueChange = { simklClientId = it },
+                label = { Text("Simkl Client ID") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            TextButton(
+                onClick = {
+                    TrackingApiCredentials.saveTraktCredentials(traktClientId, traktClientSecret)
+                    TrackingApiCredentials.saveSimklClientId(simklClientId)
+                    savedMessage = true
+                },
+            ) {
+                Text("Save credentials")
+            }
+            if (savedMessage) {
+                Text(
+                    text = "Saved. Sign-in should now work.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+    }
 }
