@@ -1,8 +1,11 @@
-name: Build NuvioMobile APK
+name: Build NuvioMobile (upstream + self-host backend)
 
 on:
   push:
     branches: [cmp-rewrite]
+    paths: ['.github/**']
+  schedule:
+    - cron: '0 7 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -13,22 +16,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          repository: NuvioMedia/NuvioMobile
+          ref: cmp-rewrite
 
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
 
+      - name: Apply in-app tracking credentials patch (from fork)
+        run: |
+          curl -sSL https://raw.githubusercontent.com/vgupta1192/NuvioMobile/cmp-rewrite/.github/patches/mobile-selfhost-credentials.patch -o /tmp/selfhost.patch
+          git apply --3way /tmp/selfhost.patch
+
       - name: Create local.properties (self-hosted backend)
         run: |
-          cat > local.properties <<'PROPS'
-          NUVIO_SUPABASE_URL=https://nuviobackend.kissmissi.duckdns.org
-          NUVIO_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzg5NzY2MDkyLCJleHAiOjE5NDc0NDYwOTJ9.XB5a12DpW9Uf11QARCv4AAfYHGyk4qRq2Oi_7t8t7X0
-          NUVIO_SUPABASE_FALLBACK_URL=
-          TMDB_API_KEY=af624aa414c84ad32d55d5ac45feae76
-          NUVIO_ANDROID_DISTRIBUTION=full
-          PROPS
-          sed -i 's/^          //' local.properties
+          printf '%s\n' \
+            'NUVIO_SUPABASE_URL=https://nuviobackend.kissmissi.duckdns.org' \
+            'NUVIO_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzg5NzY2MDkyLCJleHAiOjE5NDc0NDYwOTJ9.XB5a12DpW9Uf11QARCv4AAfYHGyk4qRq2Oi_7t8t7X0' \
+            'NUVIO_SUPABASE_FALLBACK_URL=' \
+            'TMDB_API_KEY=af624aa414c84ad32d55d5ac45feae76' \
+            'NUVIO_ANDROID_DISTRIBUTION=full' \
+            > local.properties
 
       - name: Build debug APK
         run: |
@@ -46,7 +56,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: mobile-build-${{ github.run_number }}
-          name: NuvioMobile build ${{ github.run_number }}
+          name: NuvioMobile upstream build ${{ github.run_number }}
           prerelease: true
           files: androidApp/build/outputs/apk/full/*/*.apk
 
