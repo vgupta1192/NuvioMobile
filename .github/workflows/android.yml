@@ -18,9 +18,9 @@ jobs:
       - name: Check upstream release
         id: ver
         run: |
-          UP=$(curl -s https://api.github.com/repos/NuvioMedia/NuvioMobile/releases/latest | python3 -c "import json,sys;print(json.load(sys.stdin)['tag_name'])")
+          UP=$(curl -s -H "Authorization: Bearer ${{ github.token }}" https://api.github.com/repos/NuvioMedia/NuvioMobile/releases/latest | python3 -c "import json,sys;print(json.load(sys.stdin)['tag_name'])")
           echo "upstream tag: $UP"
-          BUILT=$(curl -s -o /dev/null -w "%{http_code}" "https://api.github.com/repos/vgupta1192/NuvioMobile/releases/tags/mobile-$UP")
+          BUILT=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/vgupta1192/NuvioMobile/releases/tags/mobile-$UP")
           if [ "$BUILT" = "200" ]; then echo "already built, skipping"; echo "should_build=false" >> "$GITHUB_OUTPUT"; else echo "should_build=true" >> "$GITHUB_OUTPUT"; fi
           echo "tag=$UP" >> "$GITHUB_OUTPUT"
 
