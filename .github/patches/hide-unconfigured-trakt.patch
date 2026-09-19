@@ -1,0 +1,50 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/TrackingProviderCards.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/TrackingProviderCards.kt
+index 5111418..9b56374 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/TrackingProviderCards.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/TrackingProviderCards.kt
+@@ -70,6 +70,7 @@ import com.nuvio.app.features.tracking.TrackingRefreshIntent
+ import com.nuvio.app.features.trakt.TraktAuthRepository
+ import com.nuvio.app.features.trakt.TraktAuthUiState
+ import com.nuvio.app.features.trakt.TraktBrandAsset
++import com.nuvio.app.features.trakt.TraktConfig
+ import com.nuvio.app.features.trakt.TraktConnectionMode
+ import com.nuvio.app.features.trakt.traktBrandPainter
+ import com.nuvio.app.features.watchprogress.WatchProgressSourceCoordinator
+@@ -180,12 +181,14 @@ internal fun TrackingProviderCards(
+                     .height(IntrinsicSize.Min),
+                 horizontalArrangement = Arrangement.spacedBy(16.dp),
+             ) {
+-                TraktProviderCard(
+-                    uiState = traktUiState,
+-                    modifier = Modifier
+-                        .weight(1f)
+-                        .fillMaxHeight(),
+-                )
++                if (TraktConfig.CLIENT_ID.isNotBlank()) {
++                    TraktProviderCard(
++                        uiState = traktUiState,
++                        modifier = Modifier
++                            .weight(1f)
++                            .fillMaxHeight(),
++                    )
++                }
+                 SimklProviderCard(
+                     uiState = simklUiState,
+                     isSyncing = syncState.isLoading,
+@@ -202,10 +205,12 @@ internal fun TrackingProviderCards(
+                 modifier = Modifier.fillMaxWidth(),
+                 verticalArrangement = Arrangement.spacedBy(if (isTablet) 16.dp else 12.dp),
+             ) {
+-                TraktProviderCard(
+-                    uiState = traktUiState,
+-                    modifier = Modifier.fillMaxWidth(),
+-                )
++                if (TraktConfig.CLIENT_ID.isNotBlank()) {
++                    TraktProviderCard(
++                        uiState = traktUiState,
++                        modifier = Modifier.fillMaxWidth(),
++                    )
++                }
+                 SimklProviderCard(
+                     uiState = simklUiState,
+                     isSyncing = syncState.isLoading,

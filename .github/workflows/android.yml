@@ -25,10 +25,10 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Apply in-app tracking credentials patch (from fork)
+      - name: Hide Trakt card (Simkl-only build)
         run: |
-          curl -sSL https://raw.githubusercontent.com/vgupta1192/NuvioMobile/cmp-rewrite/.github/patches/mobile-selfhost-credentials.patch -o /tmp/selfhost.patch
-          git apply --3way /tmp/selfhost.patch
+          curl -sSL https://raw.githubusercontent.com/vgupta1192/NuvioMobile/cmp-rewrite/.github/patches/hide-unconfigured-trakt.patch -o /tmp/trakt.patch
+          git apply --3way /tmp/trakt.patch
 
       - name: Create local.properties (self-hosted backend)
         run: |
@@ -36,6 +36,7 @@ jobs:
             'NUVIO_SUPABASE_URL=https://nuviobackend.kissmissi.duckdns.org' \
             'NUVIO_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzg5NzY2MDkyLCJleHAiOjE5NDc0NDYwOTJ9.XB5a12DpW9Uf11QARCv4AAfYHGyk4qRq2Oi_7t8t7X0' \
             'NUVIO_SUPABASE_FALLBACK_URL=' \
+            'SIMKL_CLIENT_ID=cf7f2a335cfcd9759fa01d752d9cf8f42fb4fa1a4e4ff08fe4cafb84ec836621' \
             'TMDB_API_KEY=af624aa414c84ad32d55d5ac45feae76' \
             'NUVIO_ANDROID_DISTRIBUTION=full' \
             > local.properties
