@@ -22,10 +22,17 @@ jobs:
         id: ver
         run: |
           UP=$(curl -s -H "Authorization: Bearer ${{ github.token }}" https://api.github.com/repos/NuvioMedia/NuvioMobile/releases/latest | python3 -c "import json,sys;print(json.load(sys.stdin)['tag_name'])")
-          echo "upstream tag: $UP"
+          VER="${UP%%-*}"
+          echo "upstream tag: $UP (version $VER)"
           BUILT=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/vgupta1192/NuvioMobile/releases/tags/mobile-$UP")
-          if [ "$BUILT" = "200" ]; then echo "already built, skipping"; echo "should_build=false" >> "$GITHUB_OUTPUT"; else echo "should_build=true" >> "$GITHUB_OUTPUT"; fi
+          SHOULD=true
+          if [ "$BUILT" = "200" ]; then
+            RENAMED=$(curl -s -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/vgupta1192/NuvioMobile/releases/tags/mobile-$UP" | jq --arg want "NuvioMobile-${VER}.apk" '[.assets[] | select(.name == $want)] | length')
+            if [ "${RENAMED:-0}" -ge 1 ]; then echo "already built with release naming, skipping"; SHOULD=false; else echo "release exists but assets need renaming, rebuilding"; fi
+          fi
+          echo "should_build=$SHOULD" >> "$GITHUB_OUTPUT"
           echo "tag=$UP" >> "$GITHUB_OUTPUT"
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
         if: steps.ver.outputs.should_build == 'true'
@@ -63,12 +70,19 @@ jobs:
           set -o pipefail
           ./gradlew :androidApp:assembleFullDebug --stacktrace 2>&1 | tee build-log.txt
 
+      - name: Rename artifacts
+        if: steps.ver.outputs.should_build == 'true'
+        run: |
+          mkdir -p release-files
+          cp androidApp/build/outputs/apk/full/*/*.apk "release-files/NuvioMobile-${{ steps.ver.outputs.ver }}.apk"
+          ls -l release-files
+
       - name: Upload artifacts
         if: steps.ver.outputs.should_build == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: NuvioMobile-apk
-          path: androidApp/build/outputs/apk/full/*/*.apk
+          path: release-files/*.apk
           if-no-files-found: error
 
       - name: Publish to release
@@ -78,7 +92,21 @@ jobs:
           tag_name: mobile-${{ steps.ver.outputs.tag }}
           name: NuvioMobile ${{ steps.ver.outputs.tag }}
           prerelease: true
-          files: androidApp/build/outputs/apk/full/*/*.apk
+          files: release-files/*.apk
+
+      - name: Remove legacy-named assets
+        if: steps.ver.outputs.should_build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: NuvioMobile-${{ steps.ver.outputs.ver }}.apk
+          TAG: mobile-${{ steps.ver.outputs.tag }}
+        run: |
+          gh api "repos/${{ github.repository }}/releases/tags/$TAG" \
+            | jq -r --arg keep "$KEEP" '.assets[] | select(.name != $keep) | .id' \
+            | while read -r id; do
+                echo "deleting legacy asset $id"
+                gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$id"
+              done
 
       - name: Notify Telegram
         if: steps.ver.outputs.should_build == 'true' && env.TG_BOT_TOKEN != '' && env.TG_CHAT_ID != ''
