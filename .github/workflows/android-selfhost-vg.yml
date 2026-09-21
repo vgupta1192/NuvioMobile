@@ -1,0 +1,131 @@
+name: "Build NuvioMobile (self-hosted backend: vgupta1192)"
+
+on:
+  workflow_dispatch:
+    # Manual trigger only. Unlike android.yml this variant isn't wired to the
+    # upstream-release watcher (~/bin/nuvio-sync-check.sh) — it points at a
+    # separate self-hosted Nuvio backend and shouldn't compete with that
+    # automation. Run it by hand from the Actions tab when you want a build
+    # against this backend.
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check upstream release
+        id: ver
+        run: |
+          UP=$(curl -s -H "Authorization: Bearer ${{ github.token }}" https://api.github.com/repos/NuvioMedia/NuvioMobile/releases/latest | python3 -c "import json,sys;print(json.load(sys.stdin)['tag_name'])")
+          VER="${UP%%-*}"
+          echo "upstream tag: $UP (version $VER)"
+          BUILT=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/vgupta1192/NuvioMobile/releases/tags/mobile-vg-$UP")
+          SHOULD=true
+          if [ "$BUILT" = "200" ]; then
+            RENAMED=$(curl -s -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/vgupta1192/NuvioMobile/releases/tags/mobile-vg-$UP" | jq --arg want "NuvioMobile-vg-${VER}.apk" '[.assets[] | select(.name == $want)] | length')
+            if [ "${RENAMED:-0}" -ge 1 ]; then echo "already built with release naming, skipping"; SHOULD=false; else echo "release exists but assets need renaming, rebuilding"; fi
+          fi
+          echo "should_build=$SHOULD" >> "$GITHUB_OUTPUT"
+          echo "tag=$UP" >> "$GITHUB_OUTPUT"
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: steps.ver.outputs.should_build == 'true'
+        with:
+          repository: NuvioMedia/NuvioMobile
+          ref: cmp-rewrite
+
+      - uses: actions/setup-java@v4
+        if: steps.ver.outputs.should_build == 'true'
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Hide Trakt card (Simkl-only build)
+        if: steps.ver.outputs.should_build == 'true'
+        run: |
+          curl -sSL https://raw.githubusercontent.com/vgupta1192/NuvioMobile/cmp-rewrite/.github/patches/hide-unconfigured-trakt.patch -o /tmp/trakt.patch
+          git apply --3way /tmp/trakt.patch
+
+      - name: Create local.properties (vgupta1192 self-hosted backend)
+        if: steps.ver.outputs.should_build == 'true'
+        run: |
+          printf '%s\n' \
+            'NUVIO_SUPABASE_URL=https://nuvio.vgupta1192.duckdns.org:8489' \
+            'NUVIO_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzg5OTkyOTc3LCJleHAiOjE5NDc2NzI5Nzd9.rBg0Dgt3uGeambhEaE7anV-wvSk6MOKc4uTS7iyaxOc' \
+            'NUVIO_SUPABASE_FALLBACK_URL=' \
+            'SIMKL_CLIENT_ID=cf7f2a335cfcd9759fa01d752d9cf8f42fb4fa1a4e4ff08fe4cafb84ec836621' \
+            'TMDB_API_KEY=af624aa414c84ad32d55d5ac45feae76' \
+            'NUVIO_ANDROID_DISTRIBUTION=full' \
+            > local.properties
+
+      - name: Build debug APK
+        if: steps.ver.outputs.should_build == 'true'
+        run: |
+          set -o pipefail
+          ./gradlew :androidApp:assembleFullDebug --stacktrace 2>&1 | tee build-log.txt
+
+      - name: Rename artifacts
+        if: steps.ver.outputs.should_build == 'true'
+        run: |
+          mkdir -p release-files
+          cp androidApp/build/outputs/apk/full/*/*.apk "release-files/NuvioMobile-vg-${{ steps.ver.outputs.ver }}.apk"
+          ls -l release-files
+
+      - name: Upload artifacts
+        if: steps.ver.outputs.should_build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: NuvioMobile-vg-apk
+          path: release-files/*.apk
+          if-no-files-found: error
+
+      - name: Publish to release
+        if: steps.ver.outputs.should_build == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: mobile-vg-${{ steps.ver.outputs.tag }}
+          name: NuvioMobile ${{ steps.ver.outputs.tag }} (vgupta1192 backend)
+          prerelease: true
+          files: release-files/*.apk
+
+      - name: Remove legacy-named assets
+        if: steps.ver.outputs.should_build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: NuvioMobile-vg-${{ steps.ver.outputs.ver }}.apk
+          TAG: mobile-vg-${{ steps.ver.outputs.tag }}
+        run: |
+          gh api "repos/${{ github.repository }}/releases/tags/$TAG" \
+            | jq -r --arg keep "$KEEP" '.assets[] | select(.name != $keep) | .id' \
+            | while read -r id; do
+                echo "deleting legacy asset $id"
+                gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$id"
+              done
+
+      - name: Notify Telegram
+        if: steps.ver.outputs.should_build == 'true' && env.TG_BOT_TOKEN != '' && env.TG_CHAT_ID != ''
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          REL_TAG: mobile-vg-${{ steps.ver.outputs.tag }}
+          VER: ${{ steps.ver.outputs.tag }}
+        run: |
+          MSG="📱 NuvioMobile ${VER} (vgupta1192 backend) is ready
+          Upstream release: ${VER}
+          Download: https://github.com/vgupta1192/NuvioMobile/releases/tag/${REL_TAG}
+          (uninstall old app first, then install the APK)"
+          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            --data-urlencode "text=${MSG}" > /dev/null
+
+      - name: Attach build log on failure
+        if: failure()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: mobile-vg-debug-logs
+          name: Mobile (vgupta1192 backend) CI debug logs
+          prerelease: true
+          files: build-log.txt
