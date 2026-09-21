@@ -12,7 +12,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - name: Send test message
+      - name: Send test message (release format with APK link)
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
@@ -21,6 +21,16 @@ jobs:
             echo "SECRETS MISSING: TG_BOT_TOKEN and/or TG_CHAT_ID not set in repo secrets"
             exit 1
           fi
+          UP=$(curl -s -H "Authorization: Bearer ${{ github.token }}" https://api.github.com/repos/NuvioMedia/NuvioMobile/releases/latest | python3 -c "import json,sys;print(json.load(sys.stdin)['tag_name'])")
+          REL_TAG="mobile-${UP}"
+          URL="https://github.com/vgupta1192/NuvioMobile/releases/tag/${REL_TAG}"
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/vgupta1192/NuvioMobile/releases/tags/${REL_TAG}")
+          echo "release ${REL_TAG} on fork: HTTP ${CODE}"
+          if [ "$CODE" != "200" ]; then echo "latest release missing on fork"; exit 1; fi
+          MSG="✅ [TEST] 📱 NuvioMobile ${UP} is ready
+          Upstream release: ${UP}
+          Download: ${URL}
+          (uninstall old app first, then install the APK)"
           curl -fsS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TG_CHAT_ID}" \
-            --data-urlencode "text=✅ Telegram test from NuvioMobile CI — release notifications are working."
+            --data-urlencode "text=${MSG}"
