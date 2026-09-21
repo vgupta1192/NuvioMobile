@@ -4,9 +4,12 @@ on:
   push:
     branches: [cmp-rewrite]
     paths: ['.github/**']
-  schedule:
-    - cron: '17 * * * *'
   workflow_dispatch:
+    # Builds are triggered by the local watcher on vgupta1192's box
+    # (~/bin/nuvio-sync-check.sh): GitHub's schedule event drops runs for
+    # hours, so the old hourly cron never fired reliably. The watcher pushes
+    # a sync-pulse commit when upstream has an unbuilt release, which lands
+    # here via the push trigger above.
 
 permissions:
   contents: write
