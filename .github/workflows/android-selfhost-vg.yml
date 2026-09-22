@@ -49,6 +49,18 @@ jobs:
           curl -sSL https://raw.githubusercontent.com/vgupta1192/NuvioMobile/cmp-rewrite/.github/patches/hide-unconfigured-trakt.patch -o /tmp/trakt.patch
           git apply --3way /tmp/trakt.patch
 
+      - name: Use a distinct application ID (avoid clashing with the existing-backend build)
+        if: steps.ver.outputs.should_build == 'true'
+        run: |
+          # The debug variant's applicationId is hardcoded to com.nuviodebug.com
+          # regardless of backend, so android.yml's build and this one would
+          # otherwise produce identical package IDs with different (ephemeral,
+          # per-run) debug signing keys — Android refuses to install one over
+          # the other. Give this backend variant its own package ID so both
+          # can be installed side by side.
+          sed -i 's/"com.nuviodebug.com"/"com.nuviodebug.vg"/' androidApp/build.gradle.kts
+          grep -F 'com.nuviodebug.vg' androidApp/build.gradle.kts
+
       - name: Create local.properties (vgupta1192 self-hosted backend)
         if: steps.ver.outputs.should_build == 'true'
         run: |
