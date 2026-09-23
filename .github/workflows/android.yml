@@ -30,7 +30,6 @@ jobs:
             RENAMED=$(curl -s -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/vgupta1192/NuvioMobile/releases/tags/mobile-$UP" | jq --arg want "NuvioMobile-${VER}.apk" '[.assets[] | select(.name == $want)] | length')
             if [ "${RENAMED:-0}" -ge 1 ]; then echo "already built with release naming, skipping"; SHOULD=false; else echo "release exists but assets need renaming, rebuilding"; fi
           fi
-          SHOULD=true  # TEMP: force rebuild to ship SubSync v2 (revert after)
           echo "should_build=$SHOULD" >> "$GITHUB_OUTPUT"
           echo "tag=$UP" >> "$GITHUB_OUTPUT"
           echo "ver=$VER" >> "$GITHUB_OUTPUT"
