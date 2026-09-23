@@ -72,30 +72,41 @@ index 75e68be..a7fea19 100644
 +    endInclusive: Long,
 +): RawRangeResponse?
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AddonSubtitleLoader.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AddonSubtitleLoader.kt
-index 7e8dd64..6fa60e7 100644
+index 7e8dd64..e1538c2 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AddonSubtitleLoader.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AddonSubtitleLoader.kt
-@@ -30,7 +30,12 @@ data class SubtitleAddonRequest(
+@@ -30,7 +30,18 @@ data class SubtitleAddonRequest(
      val addonName: String,
  )
  
 -internal fun addonSubtitleRequests(type: String, videoId: String): List<SubtitleAddonRequest> {
++// SubSync v2: only this addon may receive the playing stream URL (it re-times
++// subtitles against the stream audio server-side); stream URLs embed debrid
++// credentials and must never reach third-party addons
++private const val SUBSYNC_HOST = "subsync.kissmissi.duckdns.org"
++
 +internal fun addonSubtitleRequests(
 +    type: String,
 +    videoId: String,
 +    videoHash: String? = null,
 +    videoSize: Long? = null,
++    streamUrl: String? = null,
 +): List<SubtitleAddonRequest> {
      val requestType = canonicalSubtitleType(type)
      return AddonRepository.uiState.value.addons.enabledAddons().mapNotNull { addon ->
          val manifest = addon.manifest ?: return@mapNotNull null
-@@ -38,8 +43,18 @@ internal fun addonSubtitleRequests(type: String, videoId: String): List<Subtitle
+@@ -38,8 +49,23 @@ internal fun addonSubtitleRequests(type: String, videoId: String): List<Subtitle
                  (resource.name.equals("subtitles", true) || resource.name.equals("subtitle", true)) &&
                      resource.supportsSubtitleType(requestType, videoId)
              }) return@mapNotNull null
 +        val extraPathSegment = listOfNotNull(
 +            videoHash?.let { "videoHash=$it" },
 +            videoSize?.let { "videoSize=$it" },
++            streamUrl
++                ?.takeIf { manifest.transportUrl.contains(SUBSYNC_HOST) }
++                ?.let { "streamUrl=" + it
++                    .replace("%", "%25").replace("?", "%3F")
++                    .replace("&", "%26").replace("#", "%23") },
 +        ).joinToString("&").ifBlank { null }
          SubtitleAddonRequest(
 -            url = buildAddonResourceUrl(manifest.transportUrl, "subtitles", requestType, videoId),
@@ -177,10 +188,10 @@ index 0000000..a8410d9
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSubtitleActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSubtitleActions.kt
-index 43f2b06..5b08b68 100644
+index 43f2b06..56f2b2b 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSubtitleActions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSubtitleActions.kt
-@@ -12,7 +12,17 @@ internal fun PlayerScreenRuntime.fetchAddonSubtitlesForActiveItem() {
+@@ -12,7 +12,18 @@ internal fun PlayerScreenRuntime.fetchAddonSubtitlesForActiveItem() {
      }
      val type = activeAddonSubtitleType.takeIf { it.isNotBlank() } ?: return
      val videoId = activeVideoId?.takeIf { it.isNotBlank() } ?: return
@@ -188,22 +199,23 @@ index 43f2b06..5b08b68 100644
 +    val streamUrl = activeSourceUrl
 +    val streamHeaders = sanitizePlaybackHeaders(activeSourceHeaders)
 +    scope.launch {
-+        // fingerprint the playing stream so subtitle addons can hash-match (synced subs)
++        // fingerprint the stream (tier 1: hash lookup) and hand the URL to SubSync
++        // (tier 2: ffsubsync re-timing against the stream audio)
 +        val fingerprint = if (streamUrl.startsWith("http")) {
 +            OpenSubtitlesHasher.compute(streamUrl, streamHeaders)
 +        } else {
 +            null
 +        }
-+        SubtitleRepository.fetchAddonSubtitles(type, videoId, fingerprint?.hash, fingerprint?.fileSize)
++        SubtitleRepository.fetchAddonSubtitles(type, videoId, fingerprint?.hash, fingerprint?.fileSize, streamUrl)
 +    }
  }
  
  internal fun PlayerScreenRuntime.setSubtitleDelay(delayMs: Int) {
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleRepository.kt
-index 6b359c0..74c1cfd 100644
+index 6b359c0..5293f77 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleRepository.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleRepository.kt
-@@ -30,7 +30,12 @@ object SubtitleRepository {
+@@ -30,7 +30,13 @@ object SubtitleRepository {
  
      private var activeFetchJob: Job? = null
  
@@ -213,16 +225,17 @@ index 6b359c0..74c1cfd 100644
 +        videoId: String,
 +        videoHash: String? = null,
 +        videoSize: Long? = null,
++        streamUrl: String? = null,
 +    ) {
          activeFetchJob?.cancel()
          _loadingProgress.value = null
          activeFetchJob = scope.launch {
-@@ -38,7 +43,7 @@ object SubtitleRepository {
+@@ -38,7 +44,7 @@ object SubtitleRepository {
              _error.value = null
              _addonSubtitles.value = emptyList()
  
 -            val requests = addonSubtitleRequests(type, videoId)
-+            val requests = addonSubtitleRequests(type, videoId, videoHash, videoSize)
++            val requests = addonSubtitleRequests(type, videoId, videoHash, videoSize, streamUrl)
              if (requests.isEmpty()) {
                  _isLoading.value = false
                  return@launch
