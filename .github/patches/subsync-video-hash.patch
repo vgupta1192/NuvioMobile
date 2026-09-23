@@ -1,0 +1,244 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.android.kt
+index c57d0d1..96f5f1b 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.android.kt
+@@ -324,3 +324,41 @@ actual suspend fun httpRequestRaw(
+             cancelHandle?.dispose()
+         }
+     }
++
++
++actual suspend fun httpGetRangeRaw(
++    url: String,
++    headers: Map<String, String>,
++    start: Long,
++    endInclusive: Long,
++): RawRangeResponse? =
++    withContext(Dispatchers.IO) {
++        runCatching {
++            val builder = Request.Builder()
++                .url(url)
++                .header("Range", "bytes=$start-$endInclusive")
++            headers.forEach { (key, value) ->
++                if (!key.equals("Range", ignoreCase = true)) builder.header(key, value)
++            }
++            AddonHttpClientProvider.get().newCall(builder.build()).execute().use { response ->
++                if (response.code != 206) return@use null
++                val bytes = response.body?.byteStream()?.use { input ->
++                    val out = ByteArrayOutputStream(262_144)
++                    val buffer = ByteArray(32_768)
++                    while (out.size() < 262_144) {
++                        val n = input.read(buffer)
++                        if (n == -1) break
++                        out.write(buffer, 0, n)
++                    }
++                    out.toByteArray()
++                } ?: return@use null
++                RawRangeResponse(
++                    status = response.code,
++                    bytes = bytes,
++                    headers = response.headers.toMultimap()
++                        .mapValues { (_, values) -> values.joinToString(",") }
++                        .mapKeys { (name, _) -> name.lowercase() },
++                )
++            }
++        }.getOrNull()
++    }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.kt
+index 75e68be..a7fea19 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.kt
+@@ -41,3 +41,22 @@ expect suspend fun httpRequestRaw(
+     followRedirects: Boolean = true,
+     maxResponseBodyBytes: Int = DefaultRawHttpResponseMaxBytes,
+ ): RawHttpResponse
++
++
++/**
++ * Byte-exact ranged GET. Unlike [httpRequestRaw] the body is never decoded as text,
++ * so it is safe for binary payloads (video bytes). Returns null when the request
++ * fails or the server answers in a way that is not usable for range reads.
++ */
++data class RawRangeResponse(
++    val status: Int,
++    val bytes: ByteArray,
++    val headers: Map<String, String>,
++)
++
++expect suspend fun httpGetRangeRaw(
++    url: String,
++    headers: Map<String, String>,
++    start: Long,
++    endInclusive: Long,
++): RawRangeResponse?
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AddonSubtitleLoader.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AddonSubtitleLoader.kt
+index 7e8dd64..6fa60e7 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AddonSubtitleLoader.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AddonSubtitleLoader.kt
+@@ -30,7 +30,12 @@ data class SubtitleAddonRequest(
+     val addonName: String,
+ )
+ 
+-internal fun addonSubtitleRequests(type: String, videoId: String): List<SubtitleAddonRequest> {
++internal fun addonSubtitleRequests(
++    type: String,
++    videoId: String,
++    videoHash: String? = null,
++    videoSize: Long? = null,
++): List<SubtitleAddonRequest> {
+     val requestType = canonicalSubtitleType(type)
+     return AddonRepository.uiState.value.addons.enabledAddons().mapNotNull { addon ->
+         val manifest = addon.manifest ?: return@mapNotNull null
+@@ -38,8 +43,18 @@ internal fun addonSubtitleRequests(type: String, videoId: String): List<Subtitle
+                 (resource.name.equals("subtitles", true) || resource.name.equals("subtitle", true)) &&
+                     resource.supportsSubtitleType(requestType, videoId)
+             }) return@mapNotNull null
++        val extraPathSegment = listOfNotNull(
++            videoHash?.let { "videoHash=$it" },
++            videoSize?.let { "videoSize=$it" },
++        ).joinToString("&").ifBlank { null }
+         SubtitleAddonRequest(
+-            url = buildAddonResourceUrl(manifest.transportUrl, "subtitles", requestType, videoId),
++            url = buildAddonResourceUrl(
++                manifestUrl = manifest.transportUrl,
++                resource = "subtitles",
++                type = requestType,
++                id = videoId,
++                extraPathSegment = extraPathSegment,
++            ),
+             addonId = manifest.id,
+             addonName = addon.displayTitle,
+         )
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/OpenSubtitlesHasher.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/OpenSubtitlesHasher.kt
+new file mode 100644
+index 0000000..a8410d9
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/OpenSubtitlesHasher.kt
+@@ -0,0 +1,61 @@
++package com.nuvio.app.features.player
++
++import com.nuvio.app.features.addons.httpGetRangeRaw
++
++/**
++ * Computes the OpenSubtitles hash (file size + sum of first/last 64KB as little-endian
++ * uint32s) of the playing stream over HTTP range requests. Subtitle addons receive it
++ * as the videoHash/videoSize extras and can answer with hash-verified, frame-synced
++ * subtitles. https://trac.opensubtitles.org/projects/opensubtitles/wiki/HashSourceCodes
++ */
++internal object OpenSubtitlesHasher {
++    private const val CHUNK = 65536L
++
++    data class Result(val hash: String, val fileSize: Long)
++
++    // single-slot memo: the active stream is the only URL hashed in practice; a stale
++    // read just causes a redundant recompute
++    private var memoUrl: String? = null
++    private var memoResult: Result? = null
++
++    suspend fun compute(url: String, headers: Map<String, String>): Result? {
++        if (url == memoUrl) return memoResult
++        val result = runCatching { computeUncached(url, headers) }.getOrNull()
++        if (result != null) {
++            memoUrl = url
++            memoResult = result
++        }
++        return result
++    }
++
++    private suspend fun computeUncached(url: String, headers: Map<String, String>): Result? {
++        val probe = httpGetRangeRaw(url, headers, 0, 0) ?: return null
++        if (probe.status != 206) return null
++        val total = probe.headers["content-range"]
++            ?.substringAfterLast('/')
++            ?.toLongOrNull()
++            ?: return null
++        if (total < CHUNK * 2) return null
++
++        val first = httpGetRangeRaw(url, headers, 0, CHUNK - 1) ?: return null
++        val last = httpGetRangeRaw(url, headers, total - CHUNK, total - 1) ?: return null
++        if (first.bytes.size < CHUNK || last.bytes.size < CHUNK) return null
++
++        // wraps naturally, like the reference C implementation (unsigned 64-bit)
++        val hash = total + chunkSum(first.bytes) + chunkSum(last.bytes)
++        return Result(hash = hash.toULong().toString(16).padStart(16, '0'), fileSize = total)
++    }
++
++    private fun chunkSum(bytes: ByteArray): Long {
++        var sum = 0L
++        var i = 0
++        while (i + 4 <= bytes.size) {
++            sum += (bytes[i].toLong() and 0xFF) or
++                ((bytes[i + 1].toLong() and 0xFF) shl 8) or
++                ((bytes[i + 2].toLong() and 0xFF) shl 16) or
++                ((bytes[i + 3].toLong() and 0xFF) shl 32)
++            i += 4
++        }
++        return sum
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSubtitleActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSubtitleActions.kt
+index 43f2b06..5b08b68 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSubtitleActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSubtitleActions.kt
+@@ -12,7 +12,17 @@ internal fun PlayerScreenRuntime.fetchAddonSubtitlesForActiveItem() {
+     }
+     val type = activeAddonSubtitleType.takeIf { it.isNotBlank() } ?: return
+     val videoId = activeVideoId?.takeIf { it.isNotBlank() } ?: return
+-    SubtitleRepository.fetchAddonSubtitles(type, videoId)
++    val streamUrl = activeSourceUrl
++    val streamHeaders = sanitizePlaybackHeaders(activeSourceHeaders)
++    scope.launch {
++        // fingerprint the playing stream so subtitle addons can hash-match (synced subs)
++        val fingerprint = if (streamUrl.startsWith("http")) {
++            OpenSubtitlesHasher.compute(streamUrl, streamHeaders)
++        } else {
++            null
++        }
++        SubtitleRepository.fetchAddonSubtitles(type, videoId, fingerprint?.hash, fingerprint?.fileSize)
++    }
+ }
+ 
+ internal fun PlayerScreenRuntime.setSubtitleDelay(delayMs: Int) {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleRepository.kt
+index 6b359c0..74c1cfd 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleRepository.kt
+@@ -30,7 +30,12 @@ object SubtitleRepository {
+ 
+     private var activeFetchJob: Job? = null
+ 
+-    fun fetchAddonSubtitles(type: String, videoId: String) {
++    fun fetchAddonSubtitles(
++        type: String,
++        videoId: String,
++        videoHash: String? = null,
++        videoSize: Long? = null,
++    ) {
+         activeFetchJob?.cancel()
+         _loadingProgress.value = null
+         activeFetchJob = scope.launch {
+@@ -38,7 +43,7 @@ object SubtitleRepository {
+             _error.value = null
+             _addonSubtitles.value = emptyList()
+ 
+-            val requests = addonSubtitleRequests(type, videoId)
++            val requests = addonSubtitleRequests(type, videoId, videoHash, videoSize)
+             if (requests.isEmpty()) {
+                 _isLoading.value = false
+                 return@launch
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.ios.kt
+index ec291bd..bdaf4bc 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.ios.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.ios.kt
+@@ -191,3 +191,11 @@ actual suspend fun httpRequestRaw(
+                 },
+             )
+         }
++
++
++actual suspend fun httpGetRangeRaw(
++    url: String,
++    headers: Map<String, String>,
++    start: Long,
++    endInclusive: Long,
++): RawRangeResponse? = null

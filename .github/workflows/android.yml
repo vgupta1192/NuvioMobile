@@ -52,6 +52,12 @@ jobs:
           curl -sSL https://raw.githubusercontent.com/vgupta1192/NuvioMobile/cmp-rewrite/.github/patches/hide-unconfigured-trakt.patch -o /tmp/trakt.patch
           git apply --3way /tmp/trakt.patch
 
+      - name: Send stream hash to subtitle addons (SubSync)
+        if: steps.ver.outputs.should_build == 'true'
+        run: |
+          curl -sSL https://raw.githubusercontent.com/vgupta1192/NuvioMobile/cmp-rewrite/.github/patches/subsync-video-hash.patch -o /tmp/subsync.patch
+          git apply --3way /tmp/subsync.patch
+
       - name: Create local.properties (self-hosted backend)
         if: steps.ver.outputs.should_build == 'true'
         run: |
