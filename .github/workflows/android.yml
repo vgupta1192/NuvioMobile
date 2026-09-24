@@ -30,6 +30,7 @@ jobs:
             RENAMED=$(curl -s -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/vgupta1192/NuvioMobile/releases/tags/mobile-$UP" | jq --arg want "NuvioMobile-${VER}.apk" '[.assets[] | select(.name == $want)] | length')
             if [ "${RENAMED:-0}" -ge 1 ]; then echo "already built with release naming, skipping"; SHOULD=false; else echo "release exists but assets need renaming, rebuilding"; fi
           fi
+          SHOULD=true  # TEMP: force rebuild so the ss2-marked APK replaces the ambiguous v1/v2 asset (revert after)
           echo "should_build=$SHOULD" >> "$GITHUB_OUTPUT"
           echo "tag=$UP" >> "$GITHUB_OUTPUT"
           echo "ver=$VER" >> "$GITHUB_OUTPUT"
@@ -68,6 +69,7 @@ jobs:
             'SIMKL_CLIENT_ID=cf7f2a335cfcd9759fa01d752d9cf8f42fb4fa1a4e4ff08fe4cafb84ec836621' \
             'TMDB_API_KEY=af624aa414c84ad32d55d5ac45feae76' \
             'NUVIO_ANDROID_DISTRIBUTION=full' \
+            'nuvio.app.versionName=${{ steps.ver.outputs.ver }}-ss2' \
             > local.properties
 
       - name: Build debug APK
@@ -80,7 +82,7 @@ jobs:
         if: steps.ver.outputs.should_build == 'true'
         run: |
           mkdir -p release-files
-          cp androidApp/build/outputs/apk/full/*/*.apk "release-files/NuvioMobile-${{ steps.ver.outputs.ver }}.apk"
+          cp androidApp/build/outputs/apk/full/*/*.apk "release-files/NuvioMobile-${{ steps.ver.outputs.ver }}-ss2.apk"
           ls -l release-files
 
       - name: Upload artifacts
@@ -104,7 +106,7 @@ jobs:
         if: steps.ver.outputs.should_build == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          KEEP: NuvioMobile-${{ steps.ver.outputs.ver }}.apk
+          KEEP: NuvioMobile-${{ steps.ver.outputs.ver }}-ss2.apk
           TAG: mobile-${{ steps.ver.outputs.tag }}
         run: |
           gh api "repos/${{ github.repository }}/releases/tags/$TAG" \
