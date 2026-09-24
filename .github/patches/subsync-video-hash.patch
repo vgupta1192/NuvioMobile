@@ -106,7 +106,9 @@ index 7e8dd64..e1538c2 100644
 +                ?.takeIf { manifest.transportUrl.contains(SUBSYNC_HOST) }
 +                ?.let { "streamUrl=" + it
 +                    .replace("%", "%25").replace("?", "%3F")
-+                    .replace("&", "%26").replace("#", "%23") },
++                    .replace("&", "%26").replace("#", "%23")
++                    .replace("/", "%2F").replace(":", "%3A")
++                    .replace(" ", "%20") },
 +        ).joinToString("&").ifBlank { null }
          SubtitleAddonRequest(
 -            url = buildAddonResourceUrl(manifest.transportUrl, "subtitles", requestType, videoId),
