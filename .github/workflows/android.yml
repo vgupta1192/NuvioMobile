@@ -15,23 +15,6 @@ permissions:
   contents: write
 
 jobs:
-  cleanup-vg:
-    # TEMP (2026-09-24): remove obsolete vg-selfhost releases; step + vg workflow
-    # deleted after this run
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
-      - name: Delete obsolete vg releases
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api "repos/${{ github.repository }}/releases?per_page=100" \
-            | jq -r '.[] | select(.tag_name | startswith("mobile-vg-")) | "\(.id) \(.tag_name)"' \
-            | while read -r id tag; do
-                echo "deleting vg release $tag (id $id)"
-                gh api -X DELETE "repos/${{ github.repository }}/releases/$id" || echo "delete failed: $tag"
-              done
-
   build:
     runs-on: ubuntu-latest
     steps:
