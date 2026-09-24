@@ -76,7 +76,14 @@ jobs:
         if: steps.ver.outputs.should_build == 'true'
         run: |
           set -o pipefail
-          ./gradlew :androidApp:assembleFullDebug --stacktrace 2>&1 | tee build-log.txt
+          ok=0
+          for i in 1 2 3; do
+            echo "attempt $i"
+            ./gradlew :androidApp:assembleFullDebug --stacktrace 2>&1 | tee build-log.txt && ok=1 && break
+            echo "gradle failed, retrying in 60s (transient repo errors are common)"
+            sleep 60
+          done
+          [ "$ok" = 1 ] || { echo "gradle failed after 3 attempts (see build-log.txt above)"; exit 1; }
 
       - name: Rename artifacts
         if: steps.ver.outputs.should_build == 'true'
