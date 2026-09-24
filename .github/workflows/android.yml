@@ -15,7 +15,6 @@ permissions:
   contents: write
 
 jobs:
-jobs:
   cleanup-vg:
     # TEMP (2026-09-24): remove obsolete vg-selfhost releases; step + vg workflow
     # deleted after this run
