@@ -15,6 +15,24 @@ permissions:
   contents: write
 
 jobs:
+jobs:
+  cleanup-vg:
+    # TEMP (2026-09-24): remove obsolete vg-selfhost releases; step + vg workflow
+    # deleted after this run
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Delete obsolete vg releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/releases?per_page=100" \
+            | jq -r '.[] | select(.tag_name | startswith("mobile-vg-")) | "\(.id) \(.tag_name)"' \
+            | while read -r id tag; do
+                echo "deleting vg release $tag (id $id)"
+                gh api -X DELETE "repos/${{ github.repository }}/releases/$id" || echo "delete failed: $tag"
+              done
+
   build:
     runs-on: ubuntu-latest
     steps:
@@ -30,7 +48,6 @@ jobs:
             RENAMED=$(curl -s -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/vgupta1192/NuvioMobile/releases/tags/mobile-$UP" | jq --arg want "NuvioMobile-${VER}.apk" '[.assets[] | select(.name == $want)] | length')
             if [ "${RENAMED:-0}" -ge 1 ]; then echo "already built with release naming, skipping"; SHOULD=false; else echo "release exists but assets need renaming, rebuilding"; fi
           fi
-          SHOULD=true  # TEMP: force rebuild so the ss2-marked APK replaces the ambiguous v1/v2 asset (revert after)
           echo "should_build=$SHOULD" >> "$GITHUB_OUTPUT"
           echo "tag=$UP" >> "$GITHUB_OUTPUT"
           echo "ver=$VER" >> "$GITHUB_OUTPUT"
