@@ -1,5 +1,5 @@
 diff --git a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.android.kt b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.android.kt
-index 258c6205..c443204e 100644
+index 258c620..c443204 100644
 --- a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.android.kt
 +++ b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.android.kt
 @@ -2,8 +2,10 @@ package com.nuvio.app.features.updater
@@ -15,7 +15,7 @@ index 258c6205..c443204e 100644
      actual fun getSupportedAbis(): List<String> = AndroidAppUpdaterPlatform.getSupportedAbis()
  
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdater.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdater.kt
-index 2a870d17..1e37f9db 100644
+index 2a870d1..1e37f9d 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdater.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdater.kt
 @@ -112,7 +112,7 @@ class AppUpdaterController internal constructor(
@@ -28,7 +28,7 @@ index 2a870d17..1e37f9db 100644
                  val shouldShowDialog = remoteNewer && (force || !ignored)
  
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdaterRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdaterRepository.kt
-index f90e8fed..3e980f01 100644
+index f90e8fe..3e980f0 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdaterRepository.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdaterRepository.kt
 @@ -38,6 +38,24 @@ internal object AppUpdaterRepository {
@@ -58,10 +58,10 @@ index f90e8fed..3e980f01 100644
              url = "https://api.github.com/repos/NuvioMedia/NuvioMobile/${releasePath(channel)}",
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt
 new file mode 100644
-index 00000000..dd697a12
+index 0000000..450b153
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,50 @@
 +package com.nuvio.app.features.updater
 +
 +import com.nuvio.app.core.build.AppVersionConfig
@@ -91,7 +91,8 @@ index 00000000..dd697a12
 +        var best: AppUpdate? = null
 +        var bestBuild = -1
 +        for (release in releases) {
-+            if (release.draft) continue
++            // Live TV variant (mobile-livetv-*) is a separate app; never offer its builds here
++            if (release.draft || release.tagName.orEmpty().startsWith("mobile-livetv-")) continue
 +            for (asset in release.assets) {
 +                val build = assetPattern.find(asset.name)?.groupValues?.get(1)?.toIntOrNull() ?: continue
 +                if (build <= bestBuild) continue
