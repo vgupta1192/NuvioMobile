@@ -1,0 +1,113 @@
+diff --git a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.android.kt b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.android.kt
+index 258c6205..c443204e 100644
+--- a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.android.kt
++++ b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.android.kt
+@@ -2,8 +2,10 @@ package com.nuvio.app.features.updater
+ 
+ actual object AppUpdaterPlatform {
+     actual val isSupported: Boolean = true
++    // Self-host fork patch: the fork ships debug-type APKs as its normal build; treat them as
++    // release so the update check runs at start (upstream skips it for debug builds)
+     actual val isDebugBuild: Boolean
+-        get() = AndroidAppUpdaterPlatform.isDebugBuild()
++        get() = false
+ 
+     actual fun getSupportedAbis(): List<String> = AndroidAppUpdaterPlatform.getSupportedAbis()
+ 
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdater.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdater.kt
+index 2a870d17..1e37f9db 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdater.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdater.kt
+@@ -112,7 +112,7 @@ class AppUpdaterController internal constructor(
+             if (channel != preferences.channel.value) return@launch
+ 
+             result.onSuccess { update ->
+-                val remoteNewer = VersionUtils.isRemoteNewer(update.tag, AppVersionConfig.VERSION_NAME)
++                val remoteNewer = ForkBuild.isNewer(update.tag) // self-host fork patch
+                 val ignored = ignoredTag != null && ignoredTag == update.tag
+                 val shouldShowDialog = remoteNewer && (force || !ignored)
+ 
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdaterRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdaterRepository.kt
+index f90e8fed..3e980f01 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdaterRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdaterRepository.kt
+@@ -38,6 +38,24 @@ internal object AppUpdaterRepository {
+     }
+ 
+     suspend fun getLatestChannelUpdate(channel: UpdateChannel): Result<AppUpdate> = runCatching {
++        // Self-host fork patch: updates come from the fork's CI releases, newest build number wins
++        val forkResponse = httpRequestRaw(
++            method = "GET",
++            url = "https://api.github.com/repos/${ForkBuild.REPO}/releases?per_page=100",
++            headers = mapOf(
++                "Accept" to "application/vnd.github+json",
++                "User-Agent" to "NuvioMobile",
++            ),
++            body = "",
++        )
++        currentCoroutineContext().ensureActive()
++        if (forkResponse.status !in 200..299) {
++            error(getString(Res.string.updates_github_api_error, forkResponse.status))
++        }
++        return@runCatching ForkBuild.newest(json.decodeFromString<List<GitHubReleaseDto>>(forkResponse.body))
++            ?: throw NoChannelReleaseException()
++
++        @Suppress("UNREACHABLE_CODE")
+         val response = httpRequestRaw(
+             method = "GET",
+             url = "https://api.github.com/repos/NuvioMedia/NuvioMobile/${releasePath(channel)}",
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt
+new file mode 100644
+index 00000000..dd697a12
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt
+@@ -0,0 +1,49 @@
++package com.nuvio.app.features.updater
++
++import com.nuvio.app.core.build.AppVersionConfig
++
++/**
++ * Self-host fork patch: updates come from github.com/vgupta1192/NuvioMobile releases. CI builds
++ * every APK with versionName "<upstream version>-fork.<CI run number>" and names the asset
++ * NuvioMobile-<version>-b<run number>.apk, so "newer" = higher run number (fork rebuilds of the
++ * same upstream version keep the same version name otherwise).
++ */
++internal object ForkBuild {
++    const val REPO = "vgupta1192/NuvioMobile"
++    private const val TAG_PREFIX = "fork-build-"
++    private val assetPattern = Regex("-b(\\d+)\\.apk$", RegexOption.IGNORE_CASE)
++
++    val localBuild: Int
++        get() = AppVersionConfig.VERSION_NAME.substringAfter("-fork.", "").toIntOrNull() ?: 0
++
++    fun tag(build: Int): String = "$TAG_PREFIX$build"
++
++    fun isNewer(tag: String): Boolean {
++        val remote = tag.removePrefix(TAG_PREFIX).toIntOrNull() ?: return false
++        return remote > localBuild
++    }
++
++    fun newest(releases: List<GitHubReleaseDto>): AppUpdate? {
++        var best: AppUpdate? = null
++        var bestBuild = -1
++        for (release in releases) {
++            if (release.draft) continue
++            for (asset in release.assets) {
++                val build = assetPattern.find(asset.name)?.groupValues?.get(1)?.toIntOrNull() ?: continue
++                if (build <= bestBuild) continue
++                bestBuild = build
++                val name = release.name?.takeIf { it.isNotBlank() } ?: release.tagName.orEmpty()
++                best = AppUpdate(
++                    tag = tag(build),
++                    title = "$name (build $build)".trim(),
++                    notes = release.body.orEmpty(),
++                    releaseUrl = release.htmlUrl,
++                    assetName = asset.name,
++                    assetUrl = asset.browserDownloadUrl,
++                    assetSizeBytes = asset.size,
++                )
++            }
++        }
++        return best
++    }
++}

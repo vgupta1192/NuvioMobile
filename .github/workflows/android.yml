@@ -34,7 +34,7 @@ jobs:
           if echo "$HEAD_MSG" | grep -qi '\[force-build\]'; then FORCE=true; fi
           SHOULD=true
           if [ "$BUILT" = "200" ] && [ "$FORCE" != "true" ]; then
-            RENAMED=$(curl -s -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/vgupta1192/NuvioMobile/releases/tags/mobile-$UP" | jq --arg want "NuvioMobile-${VER}.apk" '[.assets[] | select(.name == $want)] | length')
+            RENAMED=$(curl -s -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/vgupta1192/NuvioMobile/releases/tags/mobile-$UP" | jq --arg want "NuvioMobile-${VER}-b" '[.assets[] | select(.name | startswith($want))] | length')
             if [ "${RENAMED:-0}" -ge 1 ]; then echo "already built with release naming, skipping"; SHOULD=false; else echo "release exists but assets need renaming, rebuilding"; fi
           fi
           echo "should_build=$SHOULD" >> "$GITHUB_OUTPUT"
@@ -59,6 +59,46 @@ jobs:
           curl -sSL https://raw.githubusercontent.com/vgupta1192/NuvioMobile/cmp-rewrite/.github/patches/hide-unconfigured-trakt.patch -o /tmp/trakt.patch
           git apply --3way /tmp/trakt.patch
 
+      - uses: actions/checkout@v4
+        if: steps.ver.outputs.should_build == 'true'
+        with:
+          path: fork-src
+          sparse-checkout: .github/patches
+
+      # Self-host fork patch: the in-app updater checks this fork's releases and compares the CI
+      # run number (versionName <ver>-fork.<run>, asset NuvioMobile-<ver>-b<run>.apk).
+      - name: Apply fork-updater patch
+        id: patch_updater
+        if: steps.ver.outputs.should_build == 'true'
+        run: |
+          P=fork-src/.github/patches/fork-updater.patch
+          # plain git apply is all-or-nothing, so a failure leaves the tree (and the Trakt patch) as is
+          if git apply "$P"; then
+            echo "applied=true" >> "$GITHUB_OUTPUT"
+            git diff --stat
+          else
+            echo "::warning::fork-updater.patch no longer applies to upstream; building without it"
+            echo "applied=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Same signing key for every build, so an update installs over the existing app. Gradle signs
+      # debug builds with ~/.android/debug.keystore (alias androiddebugkey, password android); without
+      # this secret each runner makes a random one and every update needs an uninstall first.
+      - name: Fixed signing key
+        id: signkey
+        if: steps.ver.outputs.should_build == 'true'
+        env:
+          KS_B64: ${{ secrets.MOBILE_DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            mkdir -p ~/.android
+            echo "$KS_B64" | base64 -d > ~/.android/debug.keystore
+            echo "fixed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::secret MOBILE_DEBUG_KEYSTORE_B64 not set; APK gets a random signing key"
+            echo "fixed=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create local.properties (self-hosted backend)
         if: steps.ver.outputs.should_build == 'true'
         run: |
@@ -79,7 +119,7 @@ jobs:
           ok=0
           for i in 1 2 3; do
             echo "attempt $i"
-            ./gradlew :androidApp:assembleFullDebug --stacktrace 2>&1 | tee build-log.txt && ok=1 && break
+            ./gradlew :androidApp:assembleFullDebug "-Pnuvio.app.versionName=${{ steps.ver.outputs.ver }}-fork.${{ github.run_number }}" --stacktrace 2>&1 | tee build-log.txt && ok=1 && break
             echo "gradle failed, retrying in 60s (transient repo errors are common)"
             sleep 60
           done
@@ -89,7 +129,7 @@ jobs:
         if: steps.ver.outputs.should_build == 'true'
         run: |
           mkdir -p release-files
-          cp androidApp/build/outputs/apk/full/*/*.apk "release-files/NuvioMobile-${{ steps.ver.outputs.ver }}.apk"
+          cp androidApp/build/outputs/apk/full/*/*.apk "release-files/NuvioMobile-${{ steps.ver.outputs.ver }}-b${{ github.run_number }}.apk"
           ls -l release-files
 
       - name: Upload artifacts
@@ -113,7 +153,7 @@ jobs:
         if: steps.ver.outputs.should_build == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          KEEP: NuvioMobile-${{ steps.ver.outputs.ver }}.apk
+          KEEP: NuvioMobile-${{ steps.ver.outputs.ver }}-b${{ github.run_number }}.apk
           TAG: mobile-${{ steps.ver.outputs.tag }}
         run: |
           gh api "repos/${{ github.repository }}/releases/tags/$TAG" \
@@ -130,11 +170,21 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           REL_TAG: mobile-${{ steps.ver.outputs.tag }}
           VER: ${{ steps.ver.outputs.tag }}
+          UPD_PATCHED: ${{ steps.patch_updater.outputs.applied }}
+          FIXED_KEY: ${{ steps.signkey.outputs.fixed }}
+          BUILD_NO: ${{ github.run_number }}
         run: |
+          if [ "$UPD_PATCHED" = "true" ] && [ "$FIXED_KEY" = "true" ]; then
+            HOW="Build ${BUILD_NO}: phones on a fork build show the update banner at app start (or Settings → check for updates) and install it in-app over the existing app"
+          elif [ "$FIXED_KEY" = "true" ]; then
+            HOW="⚠️ fork-updater patch did NOT apply — install the APK manually (it installs over the existing app)"
+          else
+            HOW="⚠️ random signing key (secret MOBILE_DEBUG_KEYSTORE_B64 missing) — uninstall old app first, then install the APK"
+          fi
           MSG="📱 NuvioMobile ${VER} is ready
           Upstream release: ${VER}
-          Download: https://github.com/vgupta1192/NuvioMobile/releases/tag/${REL_TAG}
-          (uninstall old app first, then install the APK)"
+          ${HOW}
+          Download: https://github.com/vgupta1192/NuvioMobile/releases/tag/${REL_TAG}"
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TG_CHAT_ID}" \
             --data-urlencode "text=${MSG}" > /dev/null
