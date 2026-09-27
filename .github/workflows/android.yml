@@ -96,8 +96,21 @@ jobs:
           KS_B64: ${{ secrets.MOBILE_DEBUG_KEYSTORE_B64 }}
         run: |
           if [ -n "$KS_B64" ]; then
-            mkdir -p ~/.android
-            echo "$KS_B64" | base64 -d > ~/.android/debug.keystore
+            # An explicit init script, not ~/.android/debug.keystore: AGP looks for the default debug
+            # key under ANDROID_USER_HOME when the runner sets it, so the file alone was ignored (b50).
+            mkdir -p "$RUNNER_TEMP/nuvio-signing"
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/nuvio-signing/fixed.keystore"
+            cat > "$RUNNER_TEMP/nuvio-signing/fixed-signing.gradle" <<GRADLE
+          allprojects { p ->
+            p.plugins.withId('com.android.application') {
+              p.android.signingConfigs.debug.storeFile = new File('$RUNNER_TEMP/nuvio-signing/fixed.keystore')
+              p.android.signingConfigs.debug.storePassword = 'android'
+              p.android.signingConfigs.debug.keyAlias = 'androiddebugkey'
+              p.android.signingConfigs.debug.keyPassword = 'android'
+            }
+          }
+          GRADLE
+            echo "init=--init-script=$RUNNER_TEMP/nuvio-signing/fixed-signing.gradle" >> "$GITHUB_OUTPUT"
             echo "fixed=true" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::secret MOBILE_DEBUG_KEYSTORE_B64 not set; APK gets a random signing key"
@@ -124,11 +137,26 @@ jobs:
           ok=0
           for i in 1 2 3; do
             echo "attempt $i"
-            ./gradlew :androidApp:assembleFullDebug "-Pnuvio.app.versionName=${{ steps.ver.outputs.ver }}-fork.${{ github.run_number }}" --stacktrace 2>&1 | tee build-log.txt && ok=1 && break
+            ./gradlew ${{ steps.signkey.outputs.init }} :androidApp:assembleFullDebug "-Pnuvio.app.versionName=${{ steps.ver.outputs.ver }}-fork.${{ github.run_number }}" --stacktrace 2>&1 | tee build-log.txt && ok=1 && break
             echo "gradle failed, retrying in 60s (transient repo errors are common)"
             sleep 60
           done
           [ "$ok" = 1 ] || { echo "gradle failed after 3 attempts (see build-log.txt above)"; exit 1; }
+
+      # Proof, not assumption: the APK must carry the fixed key's certificate (CN=NuvioMobile self-host)
+      - name: Verify signing certificate
+        id: signcheck
+        if: steps.ver.outputs.should_build == 'true'
+        run: |
+          APK=$(ls androidApp/build/outputs/apk/full/*/*.apk | head -1)
+          SIGNER=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner
+          "$SIGNER" verify --print-certs "$APK" | tee signer.txt
+          if grep -q "CN=NuvioMobile self-host" signer.txt; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::APK is not signed with the fixed key"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Rename artifacts
         if: steps.ver.outputs.should_build == 'true'
@@ -179,7 +207,7 @@ jobs:
           REL_TAG: mobile-${{ steps.ver.outputs.tag }}
           VER: ${{ steps.ver.outputs.tag }}
           UPD_PATCHED: ${{ steps.patch_updater.outputs.applied }}
-          FIXED_KEY: ${{ steps.signkey.outputs.fixed }}
+          FIXED_KEY: ${{ steps.signcheck.outputs.ok }}
           BUILD_NO: ${{ github.run_number }}
         run: |
           if [ "$UPD_PATCHED" = "true" ] && [ "$FIXED_KEY" = "true" ]; then
@@ -187,7 +215,7 @@ jobs:
           elif [ "$FIXED_KEY" = "true" ]; then
             HOW="⚠️ fork-updater patch did NOT apply — install the APK manually (it installs over the existing app)"
           else
-            HOW="⚠️ random signing key (secret MOBILE_DEBUG_KEYSTORE_B64 missing) — uninstall old app first, then install the APK"
+            HOW="⚠️ NOT signed with the fixed key (secret MOBILE_DEBUG_KEYSTORE_B64 missing or not applied) — uninstall old app first, then install the APK"
           fi
           MSG="📱 NuvioMobile ${VER} is ready
           Upstream release: ${VER}
