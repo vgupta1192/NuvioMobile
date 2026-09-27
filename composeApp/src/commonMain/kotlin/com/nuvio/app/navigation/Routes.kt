@@ -142,6 +142,10 @@ data class CatalogRoute(
     override val subtitle: String? = null,
 ) : AppRoute
 
+/** Live TV (fork feature): channels from installed addons with an XMLTV programme guide. */
+@Serializable
+data class LiveTvRoute(override val title: String = "Live TV") : AppRoute
+
 @Serializable
 data class PlayerRoute(
     val launchId: Long,
