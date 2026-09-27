@@ -407,6 +407,8 @@ object SearchRepository {
         }.flatMap { (addon, manifest) ->
             manifest.catalogs
                 .filter { catalog -> catalog.supportsSearch() }
+                // Live TV fork: TV catalogs live on the Live TV screen only
+                .filterNot { catalog -> com.nuvio.app.features.livetv.LiveTvCatalogFilter.isLiveTvCatalog(addon, catalog) }
                 .map { catalog ->
                     SearchCatalogRequest(
                         addon = addon,
@@ -426,6 +428,7 @@ object SearchRepository {
         }.flatMap { (addon, manifest) ->
             manifest.catalogs
                 .filter { catalog -> catalog.supportsDiscover() }
+                .filterNot { catalog -> com.nuvio.app.features.livetv.LiveTvCatalogFilter.isLiveTvCatalog(addon, catalog) }
                 .map { catalog ->
                     val genreExtra = catalog.genreExtra()
                     DiscoverCatalogOption(
