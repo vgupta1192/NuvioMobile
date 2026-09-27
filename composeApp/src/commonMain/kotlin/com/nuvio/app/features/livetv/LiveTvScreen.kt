@@ -61,7 +61,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.nuvio.app.core.ui.NuvioAsyncImage
+import coil3.compose.AsyncImage
 import com.nuvio.app.core.ui.NuvioInputField
 import com.nuvio.app.core.ui.NuvioScreenHeader
 import com.nuvio.app.core.ui.NuvioSectionLabel
@@ -535,7 +535,7 @@ private fun ChannelLogo(channel: LiveTvChannel, modifier: Modifier = Modifier) {
     ) {
         val logo = channel.displayLogo
         if (logo != null) {
-            NuvioAsyncImage(
+            AsyncImage(
                 model = logo,
                 contentDescription = channel.name,
                 contentScale = ContentScale.Fit,
