@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.LiveTv
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
@@ -79,7 +80,7 @@ internal fun MainTabsDestination(
         val navBarHazeState = rememberHazeState()
         val navBarStyleSetting by remember { ThemeSettingsRepository.navBarStyle }.collectAsStateWithLifecycle()
         val navBarGlowEnabled by ThemeSettingsRepository.navBarGlowEnabled.collectAsStateWithLifecycle()
-        val floatingNavigationItems = listOf(
+        val floatingNavigationItems = listOfNotNull(
             FloatingNavigationItem(
                 selected = selectedTab == AppScreenTab.Home,
                 onClick = { onTabSelected(AppScreenTab.Home) },
@@ -98,6 +99,17 @@ internal fun MainTabsDestination(
                 drawable = Res.drawable.sidebar_library,
                 label = stringResource(Res.string.compose_nav_library),
             ),
+            // Live TV fork feature: opens its own route (Android and desktop)
+            if (com.nuvio.app.features.livetv.LiveTvPlatform.navEntryEnabled) {
+                FloatingNavigationItem(
+                    selected = false,
+                    onClick = { com.nuvio.app.features.livetv.LiveTvLauncher.open() },
+                    icon = androidx.compose.material.icons.Icons.Rounded.LiveTv,
+                    label = "Live TV",
+                )
+            } else {
+                null
+            },
             FloatingNavigationItem(
                 selected = selectedTab == AppScreenTab.Settings,
                 onClick = { onTabSelected(AppScreenTab.Settings) },
@@ -142,6 +154,14 @@ internal fun MainTabsDestination(
                             icon = Res.drawable.sidebar_library,
                             contentDescription = stringResource(Res.string.compose_nav_library),
                         )
+                        if (com.nuvio.app.features.livetv.LiveTvPlatform.navEntryEnabled) {
+                            NavItem(
+                                selected = false,
+                                onClick = { com.nuvio.app.features.livetv.LiveTvLauncher.open() },
+                                icon = Icons.Rounded.LiveTv,
+                                contentDescription = "Live TV",
+                            )
+                        }
                         NavItem(
                             selected = selectedTab == AppScreenTab.Settings,
                             onClick = { onTabSelected(AppScreenTab.Settings) },
