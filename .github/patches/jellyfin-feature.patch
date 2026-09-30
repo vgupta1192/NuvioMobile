@@ -1426,10 +1426,10 @@ index 0000000..9eb5b58
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt
 new file mode 100644
-index 0000000..08d6a14
+index 0000000..ace56ce
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt
-@@ -0,0 +1,886 @@
+@@ -0,0 +1,915 @@
 +package com.nuvio.app.features.jellyfin
 +
 +import androidx.compose.foundation.background
@@ -1577,6 +1577,7 @@ index 0000000..08d6a14
 +                        state = state,
 +                        showHiddenLibraries = showHiddenLibraries,
 +                        onToggleHidden = { showHiddenLibraries = !showHiddenLibraries },
++                        onLibrarySelected = { showLibraries = false },
 +                        modifier = Modifier.fillMaxSize().padding(bottom = 16.dp),
 +                    )
 +
@@ -1592,6 +1593,8 @@ index 0000000..08d6a14
 +                            onValueChange = JellyfinRepository::setSearchQuery,
 +                            placeholder = "Search your Jellyfin server…",
 +                        )
++                        Spacer(modifier = Modifier.height(10.dp))
++                        JellyfinLibraryChips(state = state)
 +                        Spacer(modifier = Modifier.height(10.dp))
 +                        JellyfinItemGrid(
 +                            state = state,
@@ -1616,6 +1619,7 @@ index 0000000..08d6a14
 +                            onValueChange = JellyfinRepository::setSearchQuery,
 +                            placeholder = "Search your Jellyfin server…",
 +                        )
++                        JellyfinLibraryChips(state = state)
 +                        JellyfinItemGrid(
 +                            state = state,
 +                            modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -1628,6 +1632,27 @@ index 0000000..08d6a14
 +                    )
 +                }
 +            }
++        }
++    }
++}
++
++/** Horizontal library switcher — always visible in the browse view. */
++@Composable
++private fun JellyfinLibraryChips(state: JellyfinUiState) {
++    val visible = state.libraries.filter { it.id !in state.hiddenLibraryIds }
++    if (visible.isEmpty()) return
++    Row(
++        modifier = Modifier
++            .fillMaxWidth()
++            .horizontalScroll(rememberScrollState()),
++        horizontalArrangement = Arrangement.spacedBy(8.dp),
++    ) {
++        visible.forEach { library ->
++            JellyfinSortChip(
++                label = library.name,
++                isSelected = state.selectedLibraryId == library.id,
++                onClick = { JellyfinRepository.selectLibrary(library.id) },
++            )
 +        }
 +    }
 +}
@@ -1749,6 +1774,7 @@ index 0000000..08d6a14
 +    showHiddenLibraries: Boolean,
 +    onToggleHidden: () -> Unit,
 +    modifier: Modifier = Modifier,
++    onLibrarySelected: (() -> Unit)? = null,
 +) {
 +    val tokens = MaterialTheme.nuvio
 +    Column(
@@ -1772,7 +1798,10 @@ index 0000000..08d6a14
 +                name = library.name,
 +                isSelected = state.selectedLibraryId == library.id,
 +                onToggleVisibility = { JellyfinRepository.toggleLibraryHidden(library.id) },
-+                onClick = { JellyfinRepository.selectLibrary(library.id) },
++                onClick = {
++                    JellyfinRepository.selectLibrary(library.id)
++                    onLibrarySelected?.invoke()
++                },
 +            )
 +        }
 +        if (state.libraries.isEmpty() && state.isLoadingItems) {
