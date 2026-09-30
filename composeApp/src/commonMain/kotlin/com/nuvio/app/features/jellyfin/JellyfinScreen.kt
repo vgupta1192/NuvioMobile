@@ -145,6 +145,7 @@ fun JellyfinScreen(
                         state = state,
                         showHiddenLibraries = showHiddenLibraries,
                         onToggleHidden = { showHiddenLibraries = !showHiddenLibraries },
+                        onLibrarySelected = { showLibraries = false },
                         modifier = Modifier.fillMaxSize().padding(bottom = 16.dp),
                     )
 
@@ -160,6 +161,8 @@ fun JellyfinScreen(
                             onValueChange = JellyfinRepository::setSearchQuery,
                             placeholder = "Search your Jellyfin server…",
                         )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        JellyfinLibraryChips(state = state)
                         Spacer(modifier = Modifier.height(10.dp))
                         JellyfinItemGrid(
                             state = state,
@@ -184,6 +187,7 @@ fun JellyfinScreen(
                             onValueChange = JellyfinRepository::setSearchQuery,
                             placeholder = "Search your Jellyfin server…",
                         )
+                        JellyfinLibraryChips(state = state)
                         JellyfinItemGrid(
                             state = state,
                             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -196,6 +200,27 @@ fun JellyfinScreen(
                     )
                 }
             }
+        }
+    }
+}
+
+/** Horizontal library switcher — always visible in the browse view. */
+@Composable
+private fun JellyfinLibraryChips(state: JellyfinUiState) {
+    val visible = state.libraries.filter { it.id !in state.hiddenLibraryIds }
+    if (visible.isEmpty()) return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        visible.forEach { library ->
+            JellyfinSortChip(
+                label = library.name,
+                isSelected = state.selectedLibraryId == library.id,
+                onClick = { JellyfinRepository.selectLibrary(library.id) },
+            )
         }
     }
 }
@@ -317,6 +342,7 @@ private fun JellyfinSidebarContent(
     showHiddenLibraries: Boolean,
     onToggleHidden: () -> Unit,
     modifier: Modifier = Modifier,
+    onLibrarySelected: (() -> Unit)? = null,
 ) {
     val tokens = MaterialTheme.nuvio
     Column(
@@ -340,7 +366,10 @@ private fun JellyfinSidebarContent(
                 name = library.name,
                 isSelected = state.selectedLibraryId == library.id,
                 onToggleVisibility = { JellyfinRepository.toggleLibraryHidden(library.id) },
-                onClick = { JellyfinRepository.selectLibrary(library.id) },
+                onClick = {
+                    JellyfinRepository.selectLibrary(library.id)
+                    onLibrarySelected?.invoke()
+                },
             )
         }
         if (state.libraries.isEmpty() && state.isLoadingItems) {
