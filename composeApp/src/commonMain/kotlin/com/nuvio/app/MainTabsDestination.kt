@@ -107,6 +107,7 @@ internal fun MainTabsDestination(
                     onClick = { com.nuvio.app.features.livetv.LiveTvLauncher.open() },
                     icon = androidx.compose.material.icons.Icons.Rounded.LiveTv,
                     label = "Live TV",
+                    compact = true,
                 )
             } else {
                 null
@@ -118,6 +119,7 @@ internal fun MainTabsDestination(
                     onClick = { com.nuvio.app.features.jellyfin.JellyfinLauncher.open() },
                     icon = androidx.compose.material.icons.Icons.Rounded.CollectionsBookmark,
                     label = "Jellyfin",
+                    compact = true,
                 )
             } else {
                 null
