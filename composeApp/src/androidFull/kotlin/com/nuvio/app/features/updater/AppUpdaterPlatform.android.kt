@@ -2,8 +2,10 @@ package com.nuvio.app.features.updater
 
 actual object AppUpdaterPlatform {
     actual val isSupported: Boolean = true
+    // Self-host fork patch: the fork ships debug-type APKs as its normal build; treat them as
+    // release so the update check runs at start (upstream skips it for debug builds)
     actual val isDebugBuild: Boolean
-        get() = AndroidAppUpdaterPlatform.isDebugBuild()
+        get() = false
 
     actual fun getSupportedAbis(): List<String> = AndroidAppUpdaterPlatform.getSupportedAbis()
 
