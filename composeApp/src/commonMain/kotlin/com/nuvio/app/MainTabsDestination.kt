@@ -110,6 +110,17 @@ internal fun MainTabsDestination(
             } else {
                 null
             },
+            // Jellyfin fork feature: opens its own route (Android only)
+            if (com.nuvio.app.features.jellyfin.JellyfinPlatform.navEntryEnabled) {
+                FloatingNavigationItem(
+                    selected = false,
+                    onClick = { com.nuvio.app.features.jellyfin.JellyfinLauncher.open() },
+                    icon = androidx.compose.material.icons.Icons.Rounded.CollectionsBookmark,
+                    label = "Jellyfin",
+                )
+            } else {
+                null
+            },
             FloatingNavigationItem(
                 selected = selectedTab == AppScreenTab.Settings,
                 onClick = { onTabSelected(AppScreenTab.Settings) },
@@ -160,6 +171,14 @@ internal fun MainTabsDestination(
                                 onClick = { com.nuvio.app.features.livetv.LiveTvLauncher.open() },
                                 icon = Icons.Rounded.LiveTv,
                                 contentDescription = "Live TV",
+                            )
+                        }
+                        if (com.nuvio.app.features.jellyfin.JellyfinPlatform.navEntryEnabled) {
+                            NavItem(
+                                selected = false,
+                                onClick = { com.nuvio.app.features.jellyfin.JellyfinLauncher.open() },
+                                icon = androidx.compose.material.icons.Icons.Rounded.CollectionsBookmark,
+                                contentDescription = "Jellyfin",
                             )
                         }
                         NavItem(

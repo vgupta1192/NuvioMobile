@@ -1238,6 +1238,12 @@ object WatchProgressRepository {
         persist: Boolean,
         syncRemote: Boolean,
     ) {
+        // Jellyfin fork feature: the Jellyfin server tracks playback positions itself (resume comes
+        // from UserData on launch); keep jf: items out of local Continue Watching, which cannot
+        // open them (they have no addon detail page).
+        if (session.videoId.startsWith("jf:") || session.parentMetaId.startsWith("jf:")) {
+            return
+        }
         val targetProfileId = session.profileId
         val positionMs = snapshot.positionMs.coerceAtLeast(0L)
         val durationMs = snapshot.durationMs.coerceAtLeast(0L)

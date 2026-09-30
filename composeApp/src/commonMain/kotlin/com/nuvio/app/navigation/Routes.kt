@@ -40,6 +40,16 @@ data class DetailRoute(
     override val title: String? = null,
 ) : AppRoute
 
+/** Jellyfin fork feature: the user's Jellyfin server libraries (own screen + detail route). */
+@Serializable
+data class JellyfinRoute(override val title: String = "Jellyfin") : AppRoute
+
+@Serializable
+data class JellyfinDetailRoute(
+    val itemId: String,
+    override val title: String? = null,
+) : AppRoute
+
 @Serializable
 data class PersonDetailRoute(
     val personId: Int,
