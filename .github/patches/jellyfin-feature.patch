@@ -196,10 +196,18 @@ index d7f268d..32f9a4f 100644
                      DownloadsDestination(
                          route = route,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt
-index 9b12c4e..64efd94 100644
+index 9b12c4e..0ba088d 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt
-@@ -110,6 +110,17 @@ internal fun MainTabsDestination(
+@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
+ import androidx.compose.foundation.layout.statusBars
+ import androidx.compose.foundation.layout.widthIn
+ import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.rounded.CollectionsBookmark
+ import androidx.compose.material.icons.rounded.LiveTv
+ import androidx.compose.material.icons.filled.Home
+ import androidx.compose.material3.Scaffold
+@@ -110,6 +111,17 @@ internal fun MainTabsDestination(
              } else {
                  null
              },
@@ -217,7 +225,7 @@ index 9b12c4e..64efd94 100644
              FloatingNavigationItem(
                  selected = selectedTab == AppScreenTab.Settings,
                  onClick = { onTabSelected(AppScreenTab.Settings) },
-@@ -162,6 +173,14 @@ internal fun MainTabsDestination(
+@@ -162,6 +174,14 @@ internal fun MainTabsDestination(
                                  contentDescription = "Live TV",
                              )
                          }
