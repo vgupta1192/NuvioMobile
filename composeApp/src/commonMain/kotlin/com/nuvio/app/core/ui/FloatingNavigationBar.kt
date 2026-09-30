@@ -16,6 +16,10 @@ internal class FloatingNavigationItem(
     val icon: ImageVector? = null,
     val drawable: DrawableResource? = null,
     val content: (@Composable (onClick: () -> Unit) -> Unit)? = null,
+    // Icon-only tab: keeps the bar readable when fork features (Live TV, Jellyfin) push the
+    // destination count past what fits labeled on a phone. `label` still serves as the
+    // accessibility content description.
+    val compact: Boolean = false,
 )
 
 internal expect val floatingNavigationGlowSupported: Boolean

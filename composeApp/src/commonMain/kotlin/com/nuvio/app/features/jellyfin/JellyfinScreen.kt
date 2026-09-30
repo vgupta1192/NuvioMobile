@@ -162,7 +162,7 @@ fun JellyfinScreen(
                             placeholder = "Search your Jellyfin server…",
                         )
                         Spacer(modifier = Modifier.height(10.dp))
-                        JellyfinLibraryChips(state = state)
+                        JellyfinLibraryChips(state = state, onManage = { showLibraries = true })
                         Spacer(modifier = Modifier.height(10.dp))
                         JellyfinItemGrid(
                             state = state,
@@ -187,7 +187,7 @@ fun JellyfinScreen(
                             onValueChange = JellyfinRepository::setSearchQuery,
                             placeholder = "Search your Jellyfin server…",
                         )
-                        JellyfinLibraryChips(state = state)
+                        JellyfinLibraryChips(state = state, onManage = { showLibraries = true })
                         JellyfinItemGrid(
                             state = state,
                             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -206,7 +206,7 @@ fun JellyfinScreen(
 
 /** Horizontal library switcher — always visible in the browse view. */
 @Composable
-private fun JellyfinLibraryChips(state: JellyfinUiState) {
+private fun JellyfinLibraryChips(state: JellyfinUiState, onManage: (() -> Unit)? = null) {
     val visible = state.libraries.filter { it.id !in state.hiddenLibraryIds }
     if (visible.isEmpty()) return
     Row(
@@ -221,6 +221,30 @@ private fun JellyfinLibraryChips(state: JellyfinUiState) {
                 isSelected = state.selectedLibraryId == library.id,
                 onClick = { JellyfinRepository.selectLibrary(library.id) },
             )
+        }
+        if (onManage != null) {
+            val tokens = MaterialTheme.nuvio
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(tokens.colors.surfaceElevated)
+                    .clickable(onClick = onManage)
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Visibility,
+                    contentDescription = null,
+                    tint = tokens.colors.textMuted,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    text = "Manage",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = tokens.colors.textMuted,
+                )
+            }
         }
     }
 }
@@ -358,6 +382,11 @@ private fun JellyfinSidebarContent(
         )
         Spacer(modifier = Modifier.height(8.dp))
         NuvioSectionLabel(text = "Libraries")
+        Text(
+            text = "Visibility is saved per Nuvio profile",
+            style = MaterialTheme.typography.bodySmall,
+            color = tokens.colors.textMuted,
+        )
         Spacer(modifier = Modifier.height(4.dp))
         val visibleLibraries = state.libraries.filter { it.id !in state.hiddenLibraryIds }
         val hiddenLibraries = state.libraries.filter { it.id in state.hiddenLibraryIds }
