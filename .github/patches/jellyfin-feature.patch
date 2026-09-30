@@ -10,6 +10,69 @@ index 0142158..9e3fac2 100644
          HomeCatalogSettingsStorage.initialize(applicationContext)
          PlayerSettingsStorage.initialize(applicationContext)
          PlayerTrackPreferenceStorage.initialize(applicationContext)
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/core/ui/jelly/JellyTabs.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/core/ui/jelly/JellyTabs.kt
+index ff3ee35..d96ca4f 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/core/ui/jelly/JellyTabs.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/core/ui/jelly/JellyTabs.kt
+@@ -67,7 +67,7 @@ internal fun JellyTabRow(
+     ) {
+         items.forEach { item ->
+             Box(
+-                Modifier.weight(1f).fillMaxHeight().graphicsLayer {
++                Modifier.weight(if (item.compact) 0.76f else 1f).fillMaxHeight().graphicsLayer {
+                     val scale = if (active) motion.frame.contentScale else 1f
+                     scaleX = scale
+                     scaleY = scale
+@@ -81,20 +81,26 @@ internal fun JellyTabRow(
+                             item.drawable != null -> Icon(painterResource(item.drawable), null, iconModifier, tint = iconTint)
+                         }
+                     }
+-                    Box(Modifier.height(labelHeight * labelFraction).fillMaxWidth().clipToBounds().alpha(labelFraction)) {
+-                        Text(
+-                            text = item.label,
+-                            color = color,
+-                            style = TextStyle(
+-                                fontSize = if (compactSize) 12.sp else 13.sp,
+-                                lineHeight = if (compactSize) 14.sp else 16.sp,
+-                                fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+-                                textAlign = TextAlign.Center,
+-                            ),
+-                            maxLines = 1,
+-                            overflow = TextOverflow.Ellipsis,
+-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+-                        )
++                    // Compact tabs keep a silent spacer so their icon stays on the same baseline
++                    // as the labeled tabs while the label area collapses on scroll.
++                    if (item.compact) {
++                        Spacer(Modifier.height(labelHeight * labelFraction))
++                    } else {
++                        Box(Modifier.height(labelHeight * labelFraction).fillMaxWidth().clipToBounds().alpha(labelFraction)) {
++                            Text(
++                                text = item.label,
++                                color = color,
++                                style = TextStyle(
++                                    fontSize = if (compactSize) 12.sp else 13.sp,
++                                    lineHeight = if (compactSize) 14.sp else 16.sp,
++                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
++                                    textAlign = TextAlign.Center,
++                                ),
++                                maxLines = 1,
++                                overflow = TextOverflow.Ellipsis,
++                                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
++                            )
++                        }
+                     }
+                 }
+             }
+@@ -119,7 +125,7 @@ internal fun JellyTabTargets(
+                 item.onClick()
+             }
+             Box(
+-                modifier = Modifier.weight(1f).fillMaxHeight()
++                modifier = Modifier.weight(if (item.compact) 0.76f else 1f).fillMaxHeight()
+                     .selectable(
+                         selected = item.selected,
+                         role = Role.Tab,
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.android.kt
 new file mode 100644
 index 0000000..921324b
@@ -196,7 +259,7 @@ index f47c59f..ef0999a 100644
                      DownloadsDestination(
                          route = route,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt
-index 1032903..65df726 100644
+index 1032903..f402fa0 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt
 @@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
@@ -216,7 +279,7 @@ index 1032903..65df726 100644
              FloatingNavigationItem(
                  selected = selectedTab == AppScreenTab.Home,
                  onClick = { onTabSelected(AppScreenTab.Home) },
-@@ -98,6 +99,17 @@ internal fun MainTabsDestination(
+@@ -98,6 +99,18 @@ internal fun MainTabsDestination(
                  drawable = Res.drawable.sidebar_library,
                  label = stringResource(Res.string.compose_nav_library),
              ),
@@ -227,6 +290,7 @@ index 1032903..65df726 100644
 +                    onClick = { com.nuvio.app.features.jellyfin.JellyfinLauncher.open() },
 +                    icon = androidx.compose.material.icons.Icons.Rounded.CollectionsBookmark,
 +                    label = "Jellyfin",
++                    compact = true,
 +                )
 +            } else {
 +                null
@@ -234,7 +298,7 @@ index 1032903..65df726 100644
              FloatingNavigationItem(
                  selected = selectedTab == AppScreenTab.Settings,
                  onClick = { onTabSelected(AppScreenTab.Settings) },
-@@ -142,6 +154,14 @@ internal fun MainTabsDestination(
+@@ -142,6 +155,14 @@ internal fun MainTabsDestination(
                              icon = Res.drawable.sidebar_library,
                              contentDescription = stringResource(Res.string.compose_nav_library),
                          )
@@ -249,6 +313,21 @@ index 1032903..65df726 100644
                          NavItem(
                              selected = selectedTab == AppScreenTab.Settings,
                              onClick = { onTabSelected(AppScreenTab.Settings) },
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/FloatingNavigationBar.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/FloatingNavigationBar.kt
+index 5ebafde..1867d4b 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/FloatingNavigationBar.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/FloatingNavigationBar.kt
+@@ -16,6 +16,10 @@ internal class FloatingNavigationItem(
+     val icon: ImageVector? = null,
+     val drawable: DrawableResource? = null,
+     val content: (@Composable (onClick: () -> Unit) -> Unit)? = null,
++    // Icon-only tab: keeps the bar readable when fork features (Live TV, Jellyfin) push the
++    // destination count past what fits labeled on a phone. `label` still serves as the
++    // accessibility content description.
++    val compact: Boolean = false,
+ )
+ 
+ internal expect val floatingNavigationGlowSupported: Boolean
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt
 new file mode 100644
 index 0000000..5e8fd44
@@ -1435,10 +1514,10 @@ index 0000000..9eb5b58
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt
 new file mode 100644
-index 0000000..ace56ce
+index 0000000..bfaf55c
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt
-@@ -0,0 +1,915 @@
+@@ -0,0 +1,944 @@
 +package com.nuvio.app.features.jellyfin
 +
 +import androidx.compose.foundation.background
@@ -1603,7 +1682,7 @@ index 0000000..ace56ce
 +                            placeholder = "Search your Jellyfin server…",
 +                        )
 +                        Spacer(modifier = Modifier.height(10.dp))
-+                        JellyfinLibraryChips(state = state)
++                        JellyfinLibraryChips(state = state, onManage = { showLibraries = true })
 +                        Spacer(modifier = Modifier.height(10.dp))
 +                        JellyfinItemGrid(
 +                            state = state,
@@ -1628,7 +1707,7 @@ index 0000000..ace56ce
 +                            onValueChange = JellyfinRepository::setSearchQuery,
 +                            placeholder = "Search your Jellyfin server…",
 +                        )
-+                        JellyfinLibraryChips(state = state)
++                        JellyfinLibraryChips(state = state, onManage = { showLibraries = true })
 +                        JellyfinItemGrid(
 +                            state = state,
 +                            modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -1647,7 +1726,7 @@ index 0000000..ace56ce
 +
 +/** Horizontal library switcher — always visible in the browse view. */
 +@Composable
-+private fun JellyfinLibraryChips(state: JellyfinUiState) {
++private fun JellyfinLibraryChips(state: JellyfinUiState, onManage: (() -> Unit)? = null) {
 +    val visible = state.libraries.filter { it.id !in state.hiddenLibraryIds }
 +    if (visible.isEmpty()) return
 +    Row(
@@ -1662,6 +1741,30 @@ index 0000000..ace56ce
 +                isSelected = state.selectedLibraryId == library.id,
 +                onClick = { JellyfinRepository.selectLibrary(library.id) },
 +            )
++        }
++        if (onManage != null) {
++            val tokens = MaterialTheme.nuvio
++            Row(
++                modifier = Modifier
++                    .clip(RoundedCornerShape(999.dp))
++                    .background(tokens.colors.surfaceElevated)
++                    .clickable(onClick = onManage)
++                    .padding(horizontal = 14.dp, vertical = 6.dp),
++                verticalAlignment = Alignment.CenterVertically,
++                horizontalArrangement = Arrangement.spacedBy(6.dp),
++            ) {
++                Icon(
++                    imageVector = Icons.Rounded.Visibility,
++                    contentDescription = null,
++                    tint = tokens.colors.textMuted,
++                    modifier = Modifier.size(16.dp),
++                )
++                Text(
++                    text = "Manage",
++                    style = MaterialTheme.typography.labelMedium,
++                    color = tokens.colors.textMuted,
++                )
++            }
 +        }
 +    }
 +}
@@ -1799,6 +1902,11 @@ index 0000000..ace56ce
 +        )
 +        Spacer(modifier = Modifier.height(8.dp))
 +        NuvioSectionLabel(text = "Libraries")
++        Text(
++            text = "Visibility is saved per Nuvio profile",
++            style = MaterialTheme.typography.bodySmall,
++            color = tokens.colors.textMuted,
++        )
 +        Spacer(modifier = Modifier.height(4.dp))
 +        val visibleLibraries = state.libraries.filter { it.id !in state.hiddenLibraryIds }
 +        val hiddenLibraries = state.libraries.filter { it.id in state.hiddenLibraryIds }
