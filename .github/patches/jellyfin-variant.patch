@@ -1,5 +1,5 @@
 diff --git a/androidApp/build.gradle.kts b/androidApp/build.gradle.kts
-index e126f59..a00d9a1 100644
+index e126f59..3d0e2b2 100644
 --- a/androidApp/build.gradle.kts
 +++ b/androidApp/build.gradle.kts
 @@ -145,7 +145,7 @@ android {
@@ -7,17 +7,17 @@ index e126f59..a00d9a1 100644
  androidComponents {
      onVariants(selector().withBuildType("debug")) { variant ->
 -        variant.applicationId.set("com.nuviodebug.com")
-+        variant.applicationId.set("com.nuviodebug.com.livetv") // Live TV fork variant: installs alongside the main app
++        variant.applicationId.set("com.nuviodebug.com.jellyfin") // Jellyfin fork variant: installs alongside the main app
      }
  }
  
 diff --git a/androidApp/src/debug/res/values/strings.xml b/androidApp/src/debug/res/values/strings.xml
-index 0e9eb7a..8bc40b6 100644
+index 0e9eb7a..afbfc00 100644
 --- a/androidApp/src/debug/res/values/strings.xml
 +++ b/androidApp/src/debug/res/values/strings.xml
 @@ -1,4 +1,4 @@
  <?xml version="1.0" encoding="utf-8"?>
  <resources>
 -    <string name="app_name">Nuvio Debug</string>
-+    <string name="app_name">Nuvio Live TV</string>
++    <string name="app_name">Nuvio Jellyfin</string>
  </resources>
