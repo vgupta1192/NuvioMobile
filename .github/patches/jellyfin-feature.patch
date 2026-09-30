@@ -196,10 +196,18 @@ index f47c59f..ef0999a 100644
                      DownloadsDestination(
                          route = route,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt
-index 1032903..16eb175 100644
+index 1032903..65df726 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt
-@@ -79,7 +79,7 @@ internal fun MainTabsDestination(
+@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
+ import androidx.compose.foundation.layout.statusBars
+ import androidx.compose.foundation.layout.widthIn
+ import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.rounded.CollectionsBookmark
+ import androidx.compose.material.icons.filled.Home
+ import androidx.compose.material3.Scaffold
+ import androidx.compose.runtime.Composable
+@@ -79,7 +80,7 @@ internal fun MainTabsDestination(
          val navBarHazeState = rememberHazeState()
          val navBarStyleSetting by remember { ThemeSettingsRepository.navBarStyle }.collectAsStateWithLifecycle()
          val navBarGlowEnabled by ThemeSettingsRepository.navBarGlowEnabled.collectAsStateWithLifecycle()
@@ -208,7 +216,7 @@ index 1032903..16eb175 100644
              FloatingNavigationItem(
                  selected = selectedTab == AppScreenTab.Home,
                  onClick = { onTabSelected(AppScreenTab.Home) },
-@@ -98,6 +98,17 @@ internal fun MainTabsDestination(
+@@ -98,6 +99,17 @@ internal fun MainTabsDestination(
                  drawable = Res.drawable.sidebar_library,
                  label = stringResource(Res.string.compose_nav_library),
              ),
@@ -226,7 +234,7 @@ index 1032903..16eb175 100644
              FloatingNavigationItem(
                  selected = selectedTab == AppScreenTab.Settings,
                  onClick = { onTabSelected(AppScreenTab.Settings) },
-@@ -142,6 +153,14 @@ internal fun MainTabsDestination(
+@@ -142,6 +154,14 @@ internal fun MainTabsDestination(
                              icon = Res.drawable.sidebar_library,
                              contentDescription = stringResource(Res.string.compose_nav_library),
                          )
