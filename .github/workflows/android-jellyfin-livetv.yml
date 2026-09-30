@@ -194,7 +194,7 @@ jobs:
         if: steps.ver.outputs.should_build == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: mobile-jellyfin-livetv-${ steps.ver.outputs.tag }
+          tag_name: mobile-jellyfin-livetv-${{ steps.ver.outputs.tag }}
           name: NuvioMobile Jellyfin+LiveTV ${{ steps.ver.outputs.tag }}
           prerelease: true
           files: release-files/*.apk
@@ -204,7 +204,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           KEEP: NuvioMobileJellyfinTV-${{ steps.ver.outputs.ver }}-b${{ github.run_number }}.apk
-          TAG: mobile-jellyfin-livetv-${ steps.ver.outputs.tag }
+          TAG: mobile-jellyfin-livetv-${{ steps.ver.outputs.tag }}
         run: |
           gh api "repos/${{ github.repository }}/releases/tags/$TAG" \
             | jq -r --arg keep "$KEEP" --argjson run "${{ github.run_number }}" '.assets[]
@@ -221,7 +221,7 @@ jobs:
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          REL_TAG: mobile-jellyfin-livetv-${ steps.ver.outputs.tag }
+          REL_TAG: mobile-jellyfin-livetv-${{ steps.ver.outputs.tag }}
           VER: ${{ steps.ver.outputs.tag }}
           UPD_PATCHED: ${{ steps.patch_updater.outputs.applied }}
           FIXED_KEY: ${{ steps.signcheck.outputs.ok }}
