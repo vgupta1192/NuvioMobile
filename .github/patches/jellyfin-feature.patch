@@ -1,0 +1,2467 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
+index d3e712e..7f07012 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
+@@ -98,6 +98,7 @@ open class MainActivity : AppCompatActivity() {
+         WatchedStorage.initialize(applicationContext)
+         MetaScreenSettingsStorage.initialize(applicationContext)
+         com.nuvio.app.features.shuffle.EpisodeShuffleStorage.initialize(applicationContext)
++        com.nuvio.app.features.jellyfin.JellyfinPlatform.initialize(applicationContext)
+         HomeCatalogSettingsStorage.initialize(applicationContext)
+         PlayerSettingsStorage.initialize(applicationContext)
+         PlayerTrackPreferenceStorage.initialize(applicationContext)
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.android.kt
+new file mode 100644
+index 0000000..921324b
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.android.kt
+@@ -0,0 +1,60 @@
++package com.nuvio.app.features.jellyfin
++
++import android.content.Context
++import android.content.SharedPreferences
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.withContext
++import okhttp3.MediaType.Companion.toMediaType
++import okhttp3.OkHttpClient
++import okhttp3.Request
++import okhttp3.RequestBody.Companion.toRequestBody
++import java.util.concurrent.TimeUnit
++
++internal actual object JellyfinPlatform {
++    actual val navEntryEnabled: Boolean = true
++
++    private var preferences: SharedPreferences? = null
++
++    fun initialize(context: Context) {
++        preferences = context.getSharedPreferences("nuvio_jellyfin", Context.MODE_PRIVATE)
++    }
++
++    private val client by lazy {
++        OkHttpClient.Builder()
++            .connectTimeout(15, TimeUnit.SECONDS)
++            .readTimeout(60, TimeUnit.SECONDS)
++            .followRedirects(true)
++            .build()
++    }
++
++    actual suspend fun httpCall(
++        method: String,
++        url: String,
++        headers: Map<String, String>,
++        body: String?,
++    ): JellyfinHttpResponse? = withContext(Dispatchers.IO) {
++        runCatching {
++            val builder = Request.Builder().url(url)
++            headers.forEach { (name, value) -> builder.header(name, value) }
++            when (method.uppercase()) {
++                "POST" -> builder.post((body.orEmpty()).toRequestBody("application/json".toMediaType()))
++                "GET" -> builder.get()
++                else -> builder.method(method.uppercase(), null)
++            }
++            client.newCall(builder.build()).execute().use { response ->
++                JellyfinHttpResponse(
++                    status = response.code,
++                    body = response.body?.string().orEmpty(),
++                )
++            }
++        }.getOrNull()
++    }
++
++    actual fun loadString(key: String): String? = preferences?.getString(key, null)
++
++    actual fun saveString(key: String, value: String?) {
++        preferences?.edit()?.apply {
++            if (value == null) remove(key) else putString(key, value)
++        }?.apply()
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt
+index a048b31..87f16e6 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt
+@@ -27,6 +27,8 @@ internal val navigationSavedStateConfiguration = SavedStateConfiguration {
+         polymorphic(NavKey::class) {
+             subclass(TabsRoute::class, TabsRoute.serializer())
+             subclass(DetailRoute::class, DetailRoute.serializer())
++            subclass(JellyfinRoute::class, JellyfinRoute.serializer())
++            subclass(JellyfinDetailRoute::class, JellyfinDetailRoute.serializer())
+             subclass(PersonDetailRoute::class, PersonDetailRoute.serializer())
+             subclass(EntityBrowseRoute::class, EntityBrowseRoute.serializer())
+             subclass(SettingsPageRoute::class, SettingsPageRoute.serializer())
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+index d7f268d..32f9a4f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+@@ -115,6 +115,12 @@ import com.nuvio.app.features.home.HomeCatalogSettingsRepository
+ import com.nuvio.app.features.home.HomeRepository
+ import com.nuvio.app.features.home.buildAddonCatalogRefreshSignature
+ import com.nuvio.app.features.home.components.shouldBlurContinueWatchingArtwork
++import com.nuvio.app.features.jellyfin.JELLYFIN_META_ID_PREFIX
++import com.nuvio.app.features.jellyfin.JellyfinItem
++import com.nuvio.app.features.jellyfin.JellyfinLauncher
++import com.nuvio.app.features.jellyfin.JellyfinRepository
++import com.nuvio.app.features.jellyfin.JellyfinDetailScreen
++import com.nuvio.app.features.jellyfin.JellyfinScreen
+ import com.nuvio.app.features.library.LibraryItem
+ import com.nuvio.app.features.library.LibraryRepository
+ import com.nuvio.app.features.library.LibrarySection
+@@ -887,6 +893,45 @@ internal fun MainAppContent(
+             navController.navigate(PlayerRoute(launchId = launchId, title = playerLaunch.title))
+         }
+ 
++        // Jellyfin fork feature: nav entry opens the Jellyfin route
++        LaunchedEffect(navController) {
++            if (!ownsAppRuntime) return@LaunchedEffect
++            JellyfinLauncher.openRequests.collectLatest {
++                if (navBackStack.lastOrNull() !is JellyfinRoute) navController.navigate(JellyfinRoute())
++            }
++        }
++
++        fun openJellyfinItem(item: JellyfinItem) {
++            val session = JellyfinRepository.uiState.value.session ?: return
++            val sourceUrl = JellyfinRepository.streamUrlFor(item) ?: return
++            val isEpisode = item.isEpisode
++            val playerLaunch = PlayerLaunch(
++                profileId = activePlaybackProfileId,
++                title = if (isEpisode) item.seriesName ?: item.name else item.name,
++                sourceUrl = sourceUrl,
++                poster = JellyfinRepository.posterUrlFor(item, maxWidth = 720),
++                background = JellyfinRepository.backdropUrlFor(item),
++                seasonNumber = item.parentIndexNumber,
++                episodeNumber = item.indexNumber,
++                episodeTitle = if (isEpisode) item.name else null,
++                episodeThumbnail = if (isEpisode) JellyfinRepository.posterUrlFor(item, maxWidth = 400) else null,
++                streamTitle = "Jellyfin · " + session.serverName,
++                providerName = "Jellyfin",
++                contentType = item.stremioType,
++                videoId = JELLYFIN_META_ID_PREFIX + item.id,
++                parentMetaId = JELLYFIN_META_ID_PREFIX + (item.seriesId ?: item.id),
++                parentMetaType = if (isEpisode) "series" else item.stremioType,
++                initialPositionMs = item.resumePositionMs,
++                initialProgressFraction = item.playedPercentage?.let { (it / 100.0).toFloat() },
++            )
++            if (playerSettingsUiState.externalPlayerEnabled) {
++                coroutineScope.launch { openExternalPlayback(playerLaunch) }
++                return
++            }
++            val launchId = PlayerLaunchStore.put(playerLaunch)
++            navController.navigate(PlayerRoute(launchId = launchId, title = playerLaunch.title))
++        }
++
+         fun openExternalStreamUrl(url: String): Boolean {
+             val opened = runCatching {
+                 uriHandler.openUri(url)
+@@ -1332,12 +1377,23 @@ internal fun MainAppContent(
+                             AppTabActions(
+                                 onCatalogClick = onCatalogClick,
+                                 onPosterClick = { meta ->
+-                                    navController.navigate(
+-                                        DetailRoute(type = meta.type, id = meta.id, title = meta.name),
+-                                    )
++                                    if (meta.id.startsWith(JELLYFIN_META_ID_PREFIX)) {
++                                        navController.navigate(
++                                            JellyfinDetailRoute(
++                                                itemId = meta.id.removePrefix(JELLYFIN_META_ID_PREFIX),
++                                                title = meta.name,
++                                            ),
++                                        )
++                                    } else {
++                                        navController.navigate(
++                                            DetailRoute(type = meta.type, id = meta.id, title = meta.name),
++                                        )
++                                    }
+                                 },
+                                 onPosterLongClick = { meta ->
+-                                    openPosterActions(PosterActionTarget(preview = meta))
++                                    if (!meta.id.startsWith(JELLYFIN_META_ID_PREFIX)) {
++                                        openPosterActions(PosterActionTarget(preview = meta))
++                                    }
+                                 },
+                                 onLibraryPosterClick = { item ->
+                                     navController.navigate(
+@@ -1580,6 +1636,14 @@ internal fun MainAppContent(
+                     val onBack = rememberGuardedPopBackStack(navController, route)
+                     LiveTvScreen(onBack = onBack, onPlay = ::openLiveTvChannel)
+                 }
++                entry<JellyfinRoute> { route ->
++                    val onBack = rememberGuardedPopBackStack(navController, route)
++                    JellyfinScreen(onBack = onBack, onPlay = ::openJellyfinItem)
++                }
++                entry<JellyfinDetailRoute> { route ->
++                    val onBack = rememberGuardedPopBackStack(navController, route)
++                    JellyfinDetailScreen(route = route, onBack = onBack, onPlay = ::openJellyfinItem)
++                }
+                 entry<DownloadsRoute> { route ->
+                     DownloadsDestination(
+                         route = route,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt
+index 9b12c4e..64efd94 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt
+@@ -110,6 +110,17 @@ internal fun MainTabsDestination(
+             } else {
+                 null
+             },
++            // Jellyfin fork feature: opens its own route (Android only)
++            if (com.nuvio.app.features.jellyfin.JellyfinPlatform.navEntryEnabled) {
++                FloatingNavigationItem(
++                    selected = false,
++                    onClick = { com.nuvio.app.features.jellyfin.JellyfinLauncher.open() },
++                    icon = androidx.compose.material.icons.Icons.Rounded.CollectionsBookmark,
++                    label = "Jellyfin",
++                )
++            } else {
++                null
++            },
+             FloatingNavigationItem(
+                 selected = selectedTab == AppScreenTab.Settings,
+                 onClick = { onTabSelected(AppScreenTab.Settings) },
+@@ -162,6 +173,14 @@ internal fun MainTabsDestination(
+                                 contentDescription = "Live TV",
+                             )
+                         }
++                        if (com.nuvio.app.features.jellyfin.JellyfinPlatform.navEntryEnabled) {
++                            NavItem(
++                                selected = false,
++                                onClick = { com.nuvio.app.features.jellyfin.JellyfinLauncher.open() },
++                                icon = androidx.compose.material.icons.Icons.Rounded.CollectionsBookmark,
++                                contentDescription = "Jellyfin",
++                            )
++                        }
+                         NavItem(
+                             selected = selectedTab == AppScreenTab.Settings,
+                             onClick = { onTabSelected(AppScreenTab.Settings) },
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt
+new file mode 100644
+index 0000000..5e8fd44
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt
+@@ -0,0 +1,294 @@
++package com.nuvio.app.features.jellyfin
++
++import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.JsonArray
++import kotlinx.serialization.json.JsonObject
++import kotlinx.serialization.json.buildJsonObject
++import kotlinx.serialization.json.contentOrNull
++import kotlinx.serialization.json.doubleOrNull
++import kotlinx.serialization.json.intOrNull
++import kotlinx.serialization.json.jsonObject
++import kotlinx.serialization.json.jsonPrimitive
++import kotlinx.serialization.json.longOrNull
++import kotlinx.serialization.json.put
++
++/**
++ * Minimal Jellyfin REST client over [JellyfinPlatform]. Jellyfin 12 killed the legacy X-Emby-*
++ * headers, so every call uses `Authorization: MediaBrowser …` (token appended once signed in) and
++ * media/image URLs carry the token as the `api_key` query parameter so plain URL consumers
++ * (poster loading, the player) need no headers.
++ */
++internal object JellyfinClient {
++    private const val PAGE_SIZE = 60
++    private const val CLIENT_NAME = "Nuvio Jellyfin"
++    private const val DEVICE_NAME = "Nuvio Desktop"
++    private const val APP_VERSION = "0.1"
++    private const val DEVICE_ID_KEY = "device_id"
++
++    private val json = Json { ignoreUnknownKeys = true }
++
++    fun normalizeServerUrl(raw: String): String? {
++        var url = raw.trim()
++        if (url.isBlank()) return null
++        if (!url.startsWith("http://") && !url.startsWith("https://")) url = "https://$url"
++        url = url.trimEnd('/')
++        val host = url.removePrefix("https://").removePrefix("http://")
++        return url.takeIf { host.isNotBlank() }
++    }
++
++    private fun deviceId(): String {
++        JellyfinPlatform.loadString(DEVICE_ID_KEY)?.let { existing ->
++            if (existing.isNotBlank()) return existing
++        }
++        val generated = "nuvio-" + buildString {
++            repeat(8) { append(kotlin.random.Random.nextInt(16).toString(16)) }
++        }
++        JellyfinPlatform.saveString(DEVICE_ID_KEY, generated)
++        return generated
++    }
++
++    private fun authHeaders(token: String?, contentType: String? = null): Map<String, String> {
++        val authorization = buildString {
++            append("MediaBrowser Client=\"").append(CLIENT_NAME)
++                .append("\", Device=\"").append(DEVICE_NAME)
++                .append("\", DeviceId=\"").append(deviceId())
++                .append("\", Version=\"").append(APP_VERSION).append("\"")
++            if (!token.isNullOrBlank()) append(", Token=\"").append(token).append("\"")
++        }
++        return buildMap {
++            put("Authorization", authorization)
++            if (contentType != null) put("Content-Type", contentType)
++        }
++    }
++
++    suspend fun authenticate(serverUrl: String, username: String, password: String): JellyfinSession {
++        val base = normalizeServerUrl(serverUrl) ?: error("Enter a valid Jellyfin server address")
++        if (username.isBlank()) error("Enter your Jellyfin username")
++        val response = JellyfinPlatform.httpCall(
++            method = "POST",
++            url = "$base/Users/AuthenticateByName",
++            headers = authHeaders(token = null, contentType = "application/json"),
++            body = buildJsonObject {
++                put("Username", username)
++                put("Pw", password)
++            }.toString(),
++        ) ?: error("Could not reach the Jellyfin server")
++        if (response.status == 401) error("Wrong username or password")
++        if (response.status !in 200..299) error("Jellyfin server error ${response.status}")
++        val root = runCatching { response.body.parseJson(json) }.getOrNull()
++            ?: error("Unexpected response from the Jellyfin server")
++        val token = root.string("AccessToken") ?: error("Jellyfin did not return an access token")
++        val user = root["User"] as? JsonObject
++        val userId = user?.string("Id") ?: error("Jellyfin did not return a user id")
++        val userName = user.string("Name") ?: username
++        return JellyfinSession(
++            serverUrl = base,
++            serverName = fetchServerName(base),
++            userId = userId,
++            userName = userName,
++            accessToken = token,
++        )
++    }
++
++    private suspend fun fetchServerName(base: String): String = runCatching {
++        val response = JellyfinPlatform.httpCall(
++            method = "GET",
++            url = "$base/System/Info/Public",
++            headers = emptyMap(),
++            body = null,
++        )
++        response
++            ?.takeIf { it.status in 200..299 }
++            ?.let { it.body.parseJson(json).string("ServerName") }
++    }.getOrNull() ?: "Jellyfin"
++
++    private suspend fun call(session: JellyfinSession, path: String, query: Map<String, String?> = emptyMap()): JsonObject {
++        val url = buildString {
++            append(session.serverUrl).append(path)
++            val params = query.filterValues { !it.isNullOrBlank() }
++            if (params.isNotEmpty()) {
++                append('?')
++                params.entries.forEachIndexed { index, (name, value) ->
++                    if (index > 0) append('&')
++                    append(name).append('=').append(encodeQueryValue(value.orEmpty()))
++                }
++            }
++        }
++        val response = JellyfinPlatform.httpCall(
++            method = "GET",
++            url = url,
++            headers = authHeaders(session.accessToken),
++            body = null,
++        ) ?: error("Could not reach the Jellyfin server")
++        if (response.status == 401) error("Jellyfin session expired — sign in again")
++        if (response.status !in 200..299) error("Jellyfin server error ${response.status}")
++        return runCatching { response.body.parseJson(json) }.getOrNull()
++            ?: error("Unexpected response from the Jellyfin server")
++    }
++
++    suspend fun getLibraries(session: JellyfinSession): List<JellyfinLibrary> {
++        val root = call(session, "/Users/${session.userId}/Views")
++        return root.array("Items").orEmpty().mapNotNull { element ->
++            val obj = element as? JsonObject ?: return@mapNotNull null
++            val id = obj.string("Id") ?: return@mapNotNull null
++            val name = obj.string("Name") ?: return@mapNotNull null
++            JellyfinLibrary(
++                id = id,
++                name = name,
++                collectionType = obj.string("CollectionType"),
++            )
++        }
++    }
++
++    suspend fun getItem(session: JellyfinSession, itemId: String): JellyfinItem? {
++        val root = call(session, "/Users/${session.userId}/Items/$itemId")
++        return parseItem(root)
++    }
++
++    suspend fun getItems(
++        session: JellyfinSession,
++        parentId: String? = null,
++        startIndex: Int = 0,
++        limit: Int = PAGE_SIZE,
++        sortBy: String = "SortName",
++        sortAscending: Boolean = true,
++        searchTerm: String? = null,
++        includeItemTypes: String? = null,
++        recursive: Boolean = false,
++    ): JellyfinItemPage {
++        val root = call(
++            session,
++            "/Users/${session.userId}/Items",
++            buildMap {
++                put("SortBy", sortBy)
++                put("SortOrder", if (sortAscending) "Ascending" else "Descending")
++                put("StartIndex", startIndex.toString())
++                put("Limit", limit.toString())
++                put(
++                    "Fields",
++                    "Overview,Genres,ProductionYear,CommunityRating,OfficialRating,RunTimeTicks," +
++                        "Container,UserData,SeriesId,SeriesName",
++                )
++                put("Recursive", recursive.toString())
++                put("ImageTypeLimit", "1")
++                put("EnableImageTypes", "Primary,Backdrop,Thumb")
++                if (parentId != null) put("ParentId", parentId)
++                if (searchTerm != null) put("SearchTerm", searchTerm)
++                if (includeItemTypes != null) put("IncludeItemTypes", includeItemTypes)
++            },
++        )
++        val items = root.array("Items").orEmpty().mapNotNull { element ->
++            (element as? JsonObject)?.let(::parseItem)
++        }
++        return JellyfinItemPage(
++            items = items,
++            totalRecordCount = root.int("TotalRecordCount") ?: items.size,
++        )
++    }
++
++    suspend fun getSeasons(session: JellyfinSession, seriesId: String): List<JellyfinItem> {
++        val root = call(
++            session,
++            "/Shows/$seriesId/Seasons",
++            mapOf("userId" to session.userId),
++        )
++        return root.array("Items").orEmpty().mapNotNull { element ->
++            (element as? JsonObject)?.let(::parseItem)
++        }
++    }
++
++    suspend fun getEpisodes(session: JellyfinSession, seriesId: String, seasonId: String): List<JellyfinItem> {
++        val root = call(
++            session,
++            "/Shows/$seriesId/Episodes",
++            mapOf(
++                "userId" to session.userId,
++                "seasonId" to seasonId,
++                "Fields" to "Overview,CommunityRating,RunTimeTicks,Container,UserData,SeriesId,SeriesName",
++                "ImageTypeLimit" to "1",
++                "EnableImageTypes" to "Primary,Thumb",
++            ),
++        )
++        return root.array("Items").orEmpty().mapNotNull { element ->
++            (element as? JsonObject)?.let(::parseItem)
++        }
++    }
++
++    fun primaryImageUrl(session: JellyfinSession, item: JellyfinItem, maxWidth: Int = 480): String? {
++        if (item.imageTag.isNullOrBlank()) return null
++        return "${session.serverUrl}/Items/${item.id}/Images/Primary" +
++            "?maxWidth=$maxWidth&quality=88&api_key=${encodeQueryValue(session.accessToken)}"
++    }
++
++    fun backdropImageUrl(session: JellyfinSession, item: JellyfinItem, maxWidth: Int = 1280): String? {
++        if (item.backdropTag.isNullOrBlank()) return null
++        return "${session.serverUrl}/Items/${item.id}/Images/Backdrop/0" +
++            "?maxWidth=$maxWidth&quality=80&api_key=${encodeQueryValue(session.accessToken)}"
++    }
++
++    /** Direct-play URL for the item's original file (no transcode). */
++    fun streamUrl(session: JellyfinSession, item: JellyfinItem): String =
++        "${session.serverUrl}/Videos/${item.id}/stream" +
++            "?Static=true&api_key=${encodeQueryValue(session.accessToken)}"
++
++    private fun parseItem(obj: JsonObject): JellyfinItem? {
++        val id = obj.string("Id") ?: return null
++        val name = obj.string("Name") ?: return null
++        val userData = obj["UserData"] as? JsonObject
++        return JellyfinItem(
++            id = id,
++            name = name,
++            type = obj.string("Type") ?: "",
++            overview = obj.string("Overview")?.takeIf { it.isNotBlank() },
++            productionYear = obj.int("ProductionYear"),
++            communityRating = obj.double("CommunityRating"),
++            officialRating = obj.string("OfficialRating"),
++            runTimeTicks = obj.long("RunTimeTicks"),
++            indexNumber = obj.int("IndexNumber"),
++            parentIndexNumber = obj.int("ParentIndexNumber"),
++            seriesId = obj.string("SeriesId"),
++            seriesName = obj.string("SeriesName"),
++            imageTag = (obj["ImageTags"] as? JsonObject)?.string("Primary"),
++            backdropTag = (obj["BackdropImageTags"] as? JsonArray)
++                ?.firstOrNull()
++                ?.jsonPrimitive
++                ?.contentOrNull,
++            container = obj.string("Container"),
++            playbackPositionTicks = userData?.long("PlaybackPositionTicks"),
++            playedPercentage = userData?.double("PlayedPercentage"),
++        )
++    }
++
++    private fun String.parseJson(json: Json): JsonObject =
++        json.parseToJsonElement(this).jsonObject
++
++    private fun JsonObject.string(key: String): String? =
++        this[key]?.jsonPrimitive?.contentOrNull
++
++    private fun JsonObject.int(key: String): Int? =
++        this[key]?.jsonPrimitive?.intOrNull
++
++    private fun JsonObject.long(key: String): Long? =
++        this[key]?.jsonPrimitive?.longOrNull
++
++    private fun JsonObject.double(key: String): Double? =
++        this[key]?.jsonPrimitive?.doubleOrNull
++
++    private fun JsonObject.array(key: String): JsonArray? =
++        this[key] as? JsonArray
++
++    /** RFC 3986 query-value encoding without java.net (common code). */
++    private fun encodeQueryValue(value: String): String = buildString {
++        for (byte in value.encodeToByteArray()) {
++            val code = byte.toInt() and 0xFF
++            when {
++                code in 48..57 || code in 65..90 || code in 97..122 -> append(code.toChar())
++                code == '-'.code || code == '_'.code || code == '.'.code || code == '~'.code -> append(code.toChar())
++                else -> {
++                    append('%')
++                    append(code.toString(16).padStart(2, '0'))
++                }
++            }
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
+new file mode 100644
+index 0000000..7d1d739
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
+@@ -0,0 +1,78 @@
++package com.nuvio.app.features.jellyfin
++
++import androidx.compose.foundation.background
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
++import androidx.compose.material3.CircularProgressIndicator
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.unit.dp
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.core.ui.NuvioScreenHeader
++import com.nuvio.app.core.ui.nuvio
++import com.nuvio.app.navigation.JellyfinDetailRoute
++
++/** Opens a Jellyfin item by id — the entry point for Jellyfin results in the global Search. */
++@Composable
++fun JellyfinDetailScreen(
++    route: JellyfinDetailRoute,
++    onBack: () -> Unit,
++    onPlay: (JellyfinItem) -> Unit,
++) {
++    val state by JellyfinRepository.uiState.collectAsStateWithLifecycle()
++    val tokens = MaterialTheme.nuvio
++
++    LaunchedEffect(route.itemId) {
++        JellyfinRepository.initialize()
++        JellyfinRepository.selectItemById(route.itemId)
++    }
++
++    Column(
++        modifier = Modifier
++            .fillMaxSize()
++            .background(tokens.colors.background),
++    ) {
++        NuvioScreenHeader(
++            title = state.selectedDetail?.name ?: route.title ?: "Jellyfin",
++            onBack = onBack,
++        )
++        Box(
++            modifier = Modifier
++                .fillMaxSize()
++                .padding(horizontal = 24.dp, vertical = 8.dp),
++        ) {
++            when {
++                state.selectedDetail == null && state.isLoadingDetail -> Box(
++                    modifier = Modifier.fillMaxSize(),
++                    contentAlignment = Alignment.Center,
++                ) { CircularProgressIndicator() }
++
++                state.selectedDetail == null && state.detailError != null -> Column(
++                    modifier = Modifier.fillMaxSize(),
++                    horizontalAlignment = Alignment.CenterHorizontally,
++                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
++                ) {
++                    Text(
++                        text = state.detailError.orEmpty(),
++                        style = MaterialTheme.typography.bodyMedium,
++                        color = MaterialTheme.colorScheme.error,
++                    )
++                }
++
++                else -> JellyfinDetailPanel(
++                    state = state,
++                    onPlay = onPlay,
++                    modifier = Modifier.fillMaxWidth(),
++                )
++            }
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinLauncher.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinLauncher.kt
+new file mode 100644
+index 0000000..e1f02ae
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinLauncher.kt
+@@ -0,0 +1,15 @@
++package com.nuvio.app.features.jellyfin
++
++import kotlinx.coroutines.flow.MutableSharedFlow
++import kotlinx.coroutines.flow.SharedFlow
++import kotlinx.coroutines.flow.asSharedFlow
++
++/** Lets the sidebar entry open the Jellyfin route without threading a callback through the shell. */
++object JellyfinLauncher {
++    private val _openRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
++    val openRequests: SharedFlow<Unit> = _openRequests.asSharedFlow()
++
++    fun open() {
++        _openRequests.tryEmit(Unit)
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinModels.kt
+new file mode 100644
+index 0000000..05f1c52
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinModels.kt
+@@ -0,0 +1,127 @@
++package com.nuvio.app.features.jellyfin
++
++import com.nuvio.app.features.home.MetaPreview
++import com.nuvio.app.features.home.PosterShape
++
++/**
++ * Jellyfin fork feature (ported like the Live TV feature): the app talks directly to the user's
++ * Jellyfin server, shows its libraries in a dedicated screen, merges Jellyfin results into the
++ * global Search, and plays files as direct-stream sources.
++ */
++
++/** Prefix that marks a MetaPreview id as a Jellyfin item (search results route to the Jellyfin detail screen). */
++const val JELLYFIN_META_ID_PREFIX = "jf:"
++
++data class JellyfinSession(
++    val serverUrl: String,
++    val serverName: String,
++    val userId: String,
++    val userName: String,
++    val accessToken: String,
++) {
++    /** Part of the search request key so account/server changes invalidate cached search state. */
++    val sessionKey: String get() = "$serverUrl|$userId"
++}
++
++data class JellyfinLibrary(
++    val id: String,
++    val name: String,
++    val collectionType: String?,
++)
++
++data class JellyfinItem(
++    val id: String,
++    val name: String,
++    val type: String,
++    val overview: String? = null,
++    val productionYear: Int? = null,
++    val communityRating: Double? = null,
++    val officialRating: String? = null,
++    val runTimeTicks: Long? = null,
++    val indexNumber: Int? = null,
++    val parentIndexNumber: Int? = null,
++    val seriesId: String? = null,
++    val seriesName: String? = null,
++    val imageTag: String? = null,
++    val backdropTag: String? = null,
++    val container: String? = null,
++    val playbackPositionTicks: Long? = null,
++    val playedPercentage: Double? = null,
++) {
++    val isSeries: Boolean get() = type.equals("Series", ignoreCase = true)
++    val isFolder: Boolean
++        get() = type.equals("Folder", ignoreCase = true) ||
++            type.equals("AggregateFolder", ignoreCase = true) ||
++            type.equals("PlaylistFolder", ignoreCase = true)
++    val isEpisode: Boolean get() = type.equals("Episode", ignoreCase = true)
++    val isMovie: Boolean get() = type.equals("Movie", ignoreCase = true)
++
++    val runTimeMinutes: Int?
++        get() = runTimeTicks?.let { ticks -> (ticks / RUNTIME_TICKS_PER_MINUTE).toInt() }
++
++    val resumePositionMs: Long
++        get() = playbackPositionTicks?.div(TICKS_PER_MILLISECOND)?.takeIf { it > 0L } ?: 0L
++
++    /** True when this item type has a playable video stream (folders / box sets do not). */
++    val isPlayable: Boolean
++        get() = type.equals("Movie", ignoreCase = true) ||
++            type.equals("Episode", ignoreCase = true) ||
++            type.equals("Video", ignoreCase = true) ||
++            type.equals("MusicVideo", ignoreCase = true)
++
++    /** Stremio-style content type used for MetaPreview mapping and watch-progress keys. */
++    val stremioType: String
++        get() = when {
++            isSeries -> "series"
++            isEpisode -> "episode"
++            else -> "movie"
++        }
++}
++
++data class JellyfinItemPage(
++    val items: List<JellyfinItem>,
++    val totalRecordCount: Int,
++)
++
++data class JellyfinHttpResponse(
++    val status: Int,
++    val body: String,
++)
++
++data class JellyfinUiState(
++    val session: JellyfinSession? = null,
++    val isLoadingSession: Boolean = false,
++    val sessionError: String? = null,
++    val libraries: List<JellyfinLibrary> = emptyList(),
++    val hiddenLibraryIds: Set<String> = emptySet(),
++    val selectedLibraryId: String? = null,
++    val items: List<JellyfinItem> = emptyList(),
++    val totalItemCount: Int = 0,
++    val isLoadingItems: Boolean = false,
++    val itemsError: String? = null,
++    val searchQuery: String = "",
++    val sortLatestFirst: Boolean = false,
++    val selectedItemId: String? = null,
++    val selectedDetail: JellyfinItem? = null,
++    val seasons: List<JellyfinItem> = emptyList(),
++    val selectedSeasonId: String? = null,
++    val episodes: List<JellyfinItem> = emptyList(),
++    val isLoadingDetail: Boolean = false,
++    val detailError: String? = null,
++) {
++    val canLoadMore: Boolean get() = items.size < totalItemCount
++}
++
++internal const val TICKS_PER_MILLISECOND = 10_000L
++private const val RUNTIME_TICKS_PER_MINUTE = 600_000_000L
++
++internal fun JellyfinItem.toMetaPreview(posterUrl: String?, backdropUrl: String?): MetaPreview = MetaPreview(
++    id = JELLYFIN_META_ID_PREFIX + id,
++    type = stremioType,
++    name = name,
++    poster = posterUrl,
++    banner = backdropUrl,
++    description = overview,
++    releaseInfo = productionYear?.toString(),
++    posterShape = PosterShape.Poster,
++)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.kt
+new file mode 100644
+index 0000000..9e7f1f2
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.kt
+@@ -0,0 +1,16 @@
++package com.nuvio.app.features.jellyfin
++
++internal expect object JellyfinPlatform {
++    /** Whether the "Jellyfin" navigation entry exists on this platform (Android only for now). */
++    val navEntryEnabled: Boolean
++
++    /**
++     * Runs an HTTP call off the caller's thread. Returns null only when the platform has no HTTP
++     * stack (non-Android targets before they get a real implementation).
++     */
++    suspend fun httpCall(method: String, url: String, headers: Map<String, String>, body: String?): JellyfinHttpResponse?
++
++    fun loadString(key: String): String?
++
++    fun saveString(key: String, value: String?)
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinRepository.kt
+new file mode 100644
+index 0000000..9eb5b58
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinRepository.kt
+@@ -0,0 +1,618 @@
++package com.nuvio.app.features.jellyfin
++
++import com.nuvio.app.features.catalog.CatalogTarget
++import com.nuvio.app.features.home.HomeCatalogSection
++import com.nuvio.app.features.profiles.ProfileRepository
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.Job
++import kotlinx.coroutines.SupervisorJob
++import kotlinx.coroutines.async
++import kotlinx.coroutines.awaitAll
++import kotlinx.coroutines.coroutineScope
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import kotlinx.coroutines.flow.distinctUntilChanged
++import kotlinx.coroutines.flow.map
++import kotlinx.coroutines.flow.update
++import kotlinx.coroutines.launch
++
++object JellyfinRepository {
++    private val VIDEO_LIBRARY_TYPES = setOf("movies", "tvshows", "mixed")
++    private const val KEY_SERVER = "server_url"
++    private const val KEY_SERVER_NAME = "server_name"
++    private const val KEY_USER_ID = "user_id"
++    private const val KEY_USER_NAME = "user_name"
++    private const val KEY_TOKEN = "access_token"
++
++    private const val HIDDEN_LIBRARIES_KEY_PREFIX = "hidden_libraries_p"
++
++    private const val SEARCH_SECTION_LIMIT = 24
++    private const val SEARCH_DEBOUNCE_MS = 350L
++    private const val PAGE_SIZE = 60
++    private const val MAX_MERGED_SEARCH_ITEMS = 200
++
++    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
++    private val _uiState = MutableStateFlow(JellyfinUiState())
++    val uiState: StateFlow<JellyfinUiState> = _uiState.asStateFlow()
++
++    private var initialized = false
++    private var librariesJob: Job? = null
++    private var itemsJob: Job? = null
++    private var detailJob: Job? = null
++    private var lastAppliedProfileId: Int? = null
++
++    /** True when a signed-in session exists; loads the persisted session on first call. */
++    val hasSession: Boolean
++        get() {
++            initialize()
++            return _uiState.value.session != null
++        }
++
++    /** Stable key for search request caching; null when signed out. */
++    val sessionKey: String?
++        get() = _uiState.value.session?.sessionKey
++
++    fun initialize() {
++        if (initialized) return
++        initialized = true
++        loadPersistedSession()
++        scope.launch {
++            ProfileRepository.state
++                .map { it.activeProfile?.profileIndex ?: 1 }
++                .distinctUntilChanged()
++                .collect { profileId -> applyProfile(profileId) }
++        }
++    }
++
++    /** Hidden libraries are per Nuvio profile; switching profiles swaps the visible set. */
++    private fun applyProfile(profileId: Int) {
++        if (lastAppliedProfileId == null) {
++            lastAppliedProfileId = profileId
++            _uiState.update { it.copy(hiddenLibraryIds = loadHiddenLibraryIds(profileId)) }
++            return
++        }
++        if (lastAppliedProfileId == profileId) return
++        lastAppliedProfileId = profileId
++        _uiState.update { it.copy(hiddenLibraryIds = loadHiddenLibraryIds(profileId)) }
++        refresh()
++        if (_uiState.value.session != null) loadItems(reset = true)
++    }
++
++    private fun loadPersistedSession() {
++        val server = JellyfinPlatform.loadString(KEY_SERVER)?.takeIf { it.isNotBlank() } ?: return
++        val userId = JellyfinPlatform.loadString(KEY_USER_ID)?.takeIf { it.isNotBlank() } ?: return
++        val token = JellyfinPlatform.loadString(KEY_TOKEN)?.takeIf { it.isNotBlank() } ?: return
++        val session = JellyfinSession(
++            serverUrl = server,
++            serverName = JellyfinPlatform.loadString(KEY_SERVER_NAME)?.takeIf { it.isNotBlank() } ?: "Jellyfin",
++            userId = userId,
++            userName = JellyfinPlatform.loadString(KEY_USER_NAME).orEmpty().ifBlank { "user" },
++            accessToken = token,
++        )
++        _uiState.update {
++            it.copy(
++                session = session,
++                hiddenLibraryIds = loadHiddenLibraryIds(currentProfileId()),
++            )
++        }
++        refresh()
++    }
++
++    fun signIn(serverUrl: String, username: String, password: String) {
++        _uiState.update { it.copy(isLoadingSession = true, sessionError = null) }
++        scope.launch {
++            val result = try {
++                Result.success(JellyfinClient.authenticate(serverUrl, username, password))
++            } catch (error: CancellationException) {
++                throw error
++            } catch (error: Throwable) {
++                Result.failure<JellyfinSession>(error)
++            }
++            result.fold(
++                onSuccess = { session ->
++                    JellyfinPlatform.saveString(KEY_SERVER, session.serverUrl)
++                    JellyfinPlatform.saveString(KEY_SERVER_NAME, session.serverName)
++                    JellyfinPlatform.saveString(KEY_USER_ID, session.userId)
++                    JellyfinPlatform.saveString(KEY_USER_NAME, session.userName)
++                    JellyfinPlatform.saveString(KEY_TOKEN, session.accessToken)
++                    _uiState.update {
++                        JellyfinUiState(
++                            session = session,
++                            isLoadingSession = false,
++                            hiddenLibraryIds = loadHiddenLibraryIds(currentProfileId()),
++                        )
++                    }
++                    refresh()
++                },
++                onFailure = { error ->
++                    _uiState.update {
++                        it.copy(isLoadingSession = false, sessionError = error.message ?: "Sign-in failed")
++                    }
++                },
++            )
++        }
++    }
++
++    fun signOut() {
++        librariesJob?.cancel()
++        itemsJob?.cancel()
++        detailJob?.cancel()
++        listOf(KEY_SERVER, KEY_SERVER_NAME, KEY_USER_ID, KEY_USER_NAME, KEY_TOKEN).forEach { key ->
++            JellyfinPlatform.saveString(key, null)
++        }
++        _uiState.value = JellyfinUiState()
++    }
++
++    fun refresh() {
++        val session = _uiState.value.session ?: return
++        librariesJob?.cancel()
++        librariesJob = scope.launch {
++            val libraries = try {
++                JellyfinClient.getLibraries(session)
++            } catch (error: CancellationException) {
++                throw error
++            } catch (_: Throwable) {
++                emptyList()
++            }
++            var selectionChanged = false
++            _uiState.update { state ->
++                val visible = libraries.filter { it.id !in state.hiddenLibraryIds }
++                val selected = visible.firstOrNull { it.id == state.selectedLibraryId }
++                    ?: visible.firstOrNull { lib -> lib.collectionType != null && lib.collectionType in VIDEO_LIBRARY_TYPES }
++                    ?: visible.firstOrNull()
++                selectionChanged = selected?.id != state.selectedLibraryId
++                state.copy(
++                    libraries = libraries,
++                    selectedLibraryId = selected?.id,
++                )
++            }
++            if (selectionChanged || _uiState.value.items.isEmpty()) loadItems(reset = true)
++        }
++    }
++
++    fun selectLibrary(libraryId: String) {
++        val current = _uiState.value
++        if (current.selectedLibraryId == libraryId) return
++        _uiState.update { it.copy(selectedLibraryId = libraryId, searchQuery = "", items = emptyList(), totalItemCount = 0, itemsError = null) }
++        loadItems(reset = true)
++    }
++
++    fun setSearchQuery(query: String) {
++        _uiState.update { it.copy(searchQuery = query) }
++        loadItems(reset = true, debounce = true)
++    }
++
++    fun setSortLatestFirst(latest: Boolean) {
++        val current = _uiState.value
++        if (current.sortLatestFirst == latest) return
++        _uiState.update { it.copy(sortLatestFirst = latest) }
++        loadItems(reset = true)
++    }
++
++    fun loadMore() {
++        val state = _uiState.value
++        val session = state.session ?: return
++        if (state.isLoadingItems || !state.canLoadMore) return
++        loadItems(reset = false, sessionOverride = session)
++    }
++
++    fun retryItems() {
++        loadItems(reset = true)
++    }
++
++    private fun loadItems(reset: Boolean, debounce: Boolean = false, sessionOverride: JellyfinSession? = null) {
++        val session = sessionOverride ?: _uiState.value.session ?: return
++        itemsJob?.cancel()
++        itemsJob = scope.launch {
++            if (debounce) delay(SEARCH_DEBOUNCE_MS)
++            val state = _uiState.value
++            if (state.session?.sessionKey != session.sessionKey) return@launch
++            val searchTerm = state.searchQuery.trim().takeIf { it.isNotBlank() }
++            _uiState.update {
++                it.copy(
++                    isLoadingItems = true,
++                    itemsError = null,
++                    items = if (reset) emptyList() else it.items,
++                    totalItemCount = if (reset) 0 else it.totalItemCount,
++                )
++            }
++            val result = try {
++                val page = if (searchTerm == null) {
++                    // Video libraries browse recursively by item type: titles inside nested
++                    // folders (e.g. a "complete saga" folder holding several movies) show up as
++                    // separate playable items instead of one unplayable folder entry.
++                    val library = state.libraries.firstOrNull { it.id == state.selectedLibraryId }
++                    val browseTypes = browseItemTypes(library?.collectionType)
++                    JellyfinClient.getItems(
++                        session = session,
++                        parentId = state.selectedLibraryId,
++                        startIndex = if (reset) 0 else state.items.size,
++                        sortBy = if (state.sortLatestFirst) "DateCreated" else "SortName",
++                        sortAscending = !state.sortLatestFirst,
++                        includeItemTypes = browseTypes,
++                        recursive = browseTypes != null,
++                    )
++                } else {
++                    // Search only the visible libraries: hidden ones must not leak results.
++                    searchVisibleLibraries(session, state, searchTerm)
++                }
++                Result.success(page)
++            } catch (error: CancellationException) {
++                throw error
++            } catch (error: Throwable) {
++                Result.failure<JellyfinItemPage>(error)
++            }
++            result.fold(
++                onSuccess = { page ->
++                    _uiState.update { current ->
++                        if (current.session?.sessionKey != session.sessionKey) return@update current
++                        val merged = if (reset) page.items else current.items + page.items
++                        val deduped = merged.distinctBy { it.id }
++                        current.copy(
++                            items = deduped,
++                            totalItemCount = maxOf(page.totalRecordCount, deduped.size),
++                            isLoadingItems = false,
++                            itemsError = null,
++                        )
++                    }
++                },
++                onFailure = { error ->
++                    _uiState.update { current ->
++                        if (current.session?.sessionKey != session.sessionKey) return@update current
++                        current.copy(
++                            isLoadingItems = false,
++                            itemsError = error.message ?: "Could not load items",
++                        )
++                    }
++                },
++            )
++        }
++    }
++
++    /** Selects an item for the detail panel; loads seasons and the first season's episodes for series. */
++    fun selectItem(item: JellyfinItem) {
++        detailJob?.cancel()
++        val loadsChildren = item.isSeries || item.isFolder
++        _uiState.update {
++            it.copy(
++                selectedItemId = item.id,
++                selectedDetail = item,
++                seasons = if (item.isSeries) it.seasons else emptyList(),
++                episodes = if (loadsChildren) it.episodes else emptyList(),
++                selectedSeasonId = null,
++                isLoadingDetail = loadsChildren,
++                detailError = null,
++            )
++        }
++        when {
++            item.isSeries -> loadSeriesDetail(item.id)
++            item.isFolder -> loadFolderChildren(item.id)
++        }
++    }
++
++    fun selectItemById(itemId: String) {
++        val session = _uiState.value.session ?: return
++        val cached = _uiState.value.items.firstOrNull { it.id == itemId }
++        if (cached != null) {
++            selectItem(cached)
++            return
++        }
++        detailJob?.cancel()
++        _uiState.update { it.copy(selectedItemId = itemId, selectedDetail = null, seasons = emptyList(), episodes = emptyList(), selectedSeasonId = null, isLoadingDetail = true, detailError = null) }
++        detailJob = scope.launch {
++            val result = try {
++                Result.success(JellyfinClient.getItem(session, itemId))
++            } catch (error: CancellationException) {
++                throw error
++            } catch (error: Throwable) {
++                Result.failure<JellyfinItem?>(error)
++            }
++            val loaded = result.getOrNull()
++            _uiState.update { state ->
++                if (state.selectedItemId != itemId) return@update state
++                when {
++                    loaded != null -> state.copy(
++                        selectedDetail = loaded,
++                        isLoadingDetail = loaded.isSeries || loaded.isFolder,
++                        detailError = null,
++                    )
++                    result.isFailure -> state.copy(isLoadingDetail = false, detailError = result.exceptionOrNull()?.message ?: "Could not load item")
++                    else -> state.copy(isLoadingDetail = false, detailError = "Item not found")
++                }
++            }
++            when {
++                loaded?.isSeries == true -> loadSeriesDetail(loaded.id)
++                loaded?.isFolder == true -> loadFolderChildren(loaded.id)
++            }
++        }
++    }
++
++    private fun loadSeriesDetail(seriesId: String) {
++        val session = _uiState.value.session ?: return
++        detailJob = scope.launch {
++            val seasonsResult = try {
++                Result.success(JellyfinClient.getSeasons(session, seriesId))
++            } catch (error: CancellationException) {
++                throw error
++            } catch (error: Throwable) {
++                Result.failure<List<JellyfinItem>>(error)
++            }
++            val seasons = seasonsResult.getOrNull().orEmpty()
++            _uiState.update { state ->
++                if (state.selectedItemId != seriesId) return@update state
++                if (seasonsResult.isFailure && seasons.isEmpty()) {
++                    state.copy(isLoadingDetail = false, detailError = seasonsResult.exceptionOrNull()?.message ?: "Could not load seasons")
++                } else {
++                    state.copy(seasons = seasons, selectedSeasonId = seasons.firstOrNull()?.id, isLoadingDetail = false, detailError = null)
++                }
++            }
++            val seasonId = _uiState.value.seasons.firstOrNull()?.id
++            if (seasonId != null) {
++                loadEpisodes(seriesId, seasonId)
++            }
++        }
++    }
++
++    fun selectSeason(seasonId: String) {
++        val state = _uiState.value
++        val seriesId = state.selectedDetail?.id ?: return
++        if (state.selectedSeasonId == seasonId) return
++        _uiState.update { it.copy(selectedSeasonId = seasonId, episodes = emptyList()) }
++        loadEpisodes(seriesId, seasonId)
++    }
++
++    private fun loadEpisodes(seriesId: String, seasonId: String) {
++        val session = _uiState.value.session ?: return
++        detailJob = scope.launch {
++            // loading flag: reuse isLoadingDetail for the episodes list
++            _uiState.update { it.copy(isLoadingDetail = true) }
++            val result = try {
++                Result.success(JellyfinClient.getEpisodes(session, seriesId, seasonId))
++            } catch (error: CancellationException) {
++                throw error
++            } catch (error: Throwable) {
++                Result.failure<List<JellyfinItem>>(error)
++            }
++            val episodes = result.getOrNull().orEmpty()
++            _uiState.update { state ->
++                if (state.selectedDetail?.id != seriesId || state.selectedSeasonId != seasonId) return@update state
++                state.copy(
++                    episodes = episodes,
++                    isLoadingDetail = false,
++                    detailError = if (result.isFailure && episodes.isEmpty()) {
++                        result.exceptionOrNull()?.message ?: "Could not load episodes"
++                    } else {
++                        null
++                    },
++                )
++            }
++        }
++    }
++
++    // ---- playback / image URL helpers (used by MainAppContent when building PlayerLaunch) ----
++
++    fun streamUrlFor(item: JellyfinItem): String? =
++        _uiState.value.session?.let { session -> JellyfinClient.streamUrl(session, item) }
++
++    fun posterUrlFor(item: JellyfinItem, maxWidth: Int = 480): String? =
++        _uiState.value.session?.let { session -> JellyfinClient.primaryImageUrl(session, item, maxWidth) }
++
++    fun backdropUrlFor(item: JellyfinItem): String? =
++        _uiState.value.session?.let { session -> JellyfinClient.backdropImageUrl(session, item) }
++
++    /** Phone layout: back from the detail pane returns to the browse list. */
++    fun clearSelection() {
++        detailJob?.cancel()
++        _uiState.update {
++            it.copy(
++                selectedItemId = null,
++                selectedDetail = null,
++                seasons = emptyList(),
++                episodes = emptyList(),
++                selectedSeasonId = null,
++                isLoadingDetail = false,
++                detailError = null,
++            )
++        }
++    }
++
++    /** Lists the playable files inside a nested folder (movies/adult "saga" folders, like episodes for shows). */
++    private fun loadFolderChildren(folderId: String) {
++        val session = _uiState.value.session ?: return
++        detailJob = scope.launch {
++            _uiState.update { it.copy(isLoadingDetail = true) }
++            val result = try {
++                Result.success(
++                    JellyfinClient.getItems(
++                        session = session,
++                        parentId = folderId,
++                        startIndex = 0,
++                        limit = 500,
++                        sortBy = "SortName",
++                        sortAscending = true,
++                        includeItemTypes = "Movie,Video,Episode",
++                        recursive = true,
++                    ),
++                )
++            } catch (error: CancellationException) {
++                throw error
++            } catch (error: Throwable) {
++                Result.failure<JellyfinItemPage>(error)
++            }
++            val children = result.getOrNull()?.items.orEmpty()
++            _uiState.update { state ->
++                if (state.selectedDetail?.id != folderId) return@update state
++                state.copy(
++                    episodes = children,
++                    isLoadingDetail = false,
++                    detailError = if (result.isFailure && children.isEmpty()) {
++                        result.exceptionOrNull()?.message ?: "Could not load the folder contents"
++                    } else {
++                        null
++                    },
++                )
++            }
++        }
++    }
++
++    // ---- library visibility (hide/show in the Jellyfin screen) ----
++
++    fun toggleLibraryHidden(libraryId: String) {
++        val current = _uiState.value
++        val updated = if (libraryId in current.hiddenLibraryIds) {
++            current.hiddenLibraryIds - libraryId
++        } else {
++            current.hiddenLibraryIds + libraryId
++        }
++        JellyfinPlatform.saveString(hiddenLibrariesKey(currentProfileId()), updated.joinToString("\n"))
++        _uiState.update { it.copy(hiddenLibraryIds = updated) }
++        // Hiding the library being browsed falls back to the first visible one.
++        if (current.selectedLibraryId == libraryId && libraryId in updated) {
++            val nextLibrary = current.libraries.firstOrNull { it.id !in updated }
++            _uiState.update {
++                it.copy(
++                    selectedLibraryId = nextLibrary?.id,
++                    searchQuery = "",
++                    items = emptyList(),
++                    totalItemCount = 0,
++                    itemsError = null,
++                )
++            }
++            loadItems(reset = true)
++        }
++    }
++
++    /**
++     * Item types used when browsing a library, per collection type: movies (incl. adult movies
++     * libraries) flatten to Movie, tv shows to Series, mixed to both. Unknown library types keep
++     * the legacy non-recursive direct-children listing.
++     */
++    private fun browseItemTypes(collectionType: String?): String? = when (collectionType?.lowercase()) {
++        "movies" -> "Movie,Folder"
++        "tvshows" -> "Series,Folder"
++        "mixed" -> "Movie,Series,Folder"
++        else -> null
++    }
++
++    private fun loadHiddenLibraryIds(profileId: Int): Set<String> =
++        JellyfinPlatform.loadString(hiddenLibrariesKey(profileId))
++            ?.split('\n')
++            ?.filter { it.isNotBlank() }
++            ?.toSet()
++            .orEmpty()
++
++    private fun hiddenLibrariesKey(profileId: Int): String = "$HIDDEN_LIBRARIES_KEY_PREFIX$profileId"
++
++    private fun currentProfileId(): Int = runCatching { ProfileRepository.activeProfileId }.getOrDefault(1)
++
++    /** Server-side search across every VISIBLE library (parallel), merged and de-duplicated. */
++    private suspend fun searchVisibleLibraries(
++        session: JellyfinSession,
++        state: JellyfinUiState,
++        searchTerm: String,
++    ): JellyfinItemPage {
++        val visibleIds = state.libraries
++            .filter { it.id !in state.hiddenLibraryIds }
++            .map { it.id }
++        if (visibleIds.isEmpty()) return JellyfinItemPage(emptyList(), 0)
++        val perLibrary = PAGE_SIZE
++        val pages = coroutineScope {
++            visibleIds.map { libraryId ->
++                async {
++                    runCatching {
++                        JellyfinClient.getItems(
++                            session = session,
++                            parentId = libraryId,
++                            startIndex = 0,
++                            limit = perLibrary,
++                            sortBy = "SortName",
++                            searchTerm = searchTerm,
++                            includeItemTypes = "Movie,Series,Episode",
++                            recursive = true,
++                        )
++                    }.getOrNull()
++                }
++            }.awaitAll()
++        }
++        val merged = pages
++            .filterNotNull()
++            .flatMap { it.items }
++            .distinctBy { it.id }
++            .sortedBy { it.name.lowercase() }
++        return JellyfinItemPage(merged.take(MAX_MERGED_SEARCH_ITEMS), merged.size.coerceAtMost(MAX_MERGED_SEARCH_ITEMS))
++    }
++
++    // ---- global Search integration ----
++
++    /**
++     * Runs a server-side search for the app's Search screen. Returns null when there are no
++     * matches so the caller can leave the section out (instead of treating it as an error).
++     */
++    suspend fun searchPreviews(query: String): List<com.nuvio.app.features.home.MetaPreview>? {
++        val session = _uiState.value.session ?: return null
++        if (query.isBlank()) return null
++        val state = _uiState.value
++        val visibleIds = state.libraries.filter { it.id !in state.hiddenLibraryIds }.map { it.id }
++        if (visibleIds.isEmpty()) return null
++        val pages = try {
++            coroutineScope {
++                visibleIds.map { libraryId ->
++                    async {
++                        runCatching {
++                            JellyfinClient.getItems(
++                                session = session,
++                                parentId = libraryId,
++                                startIndex = 0,
++                                limit = SEARCH_SECTION_LIMIT,
++                                sortBy = "SortName",
++                                searchTerm = query.trim(),
++                                includeItemTypes = "Movie,Series,Episode",
++                                recursive = true,
++                            )
++                        }.getOrNull()
++                    }
++                }.awaitAll()
++            }
++        } catch (error: CancellationException) {
++            throw error
++        } catch (_: Throwable) {
++            return null
++        }
++        val page = JellyfinItemPage(
++            items = pages.filterNotNull().flatMap { it.items }.distinctBy { it.id },
++            totalRecordCount = 0,
++        )
++        val previews = page.items.map { item ->
++            item.toMetaPreview(
++                posterUrl = JellyfinClient.primaryImageUrl(session, item),
++                backdropUrl = JellyfinClient.backdropImageUrl(session, item),
++            )
++        }
++        return previews.takeIf { it.isNotEmpty() }
++    }
++
++    suspend fun searchSection(query: String): HomeCatalogSection? {
++        val session = _uiState.value.session ?: return null
++        val previews = searchPreviews(query) ?: return null
++        return HomeCatalogSection(
++            key = "jellyfin:search:${query.lowercase()}",
++            title = "Jellyfin · ${session.serverName}",
++            subtitle = session.userName,
++            addonName = session.serverName,
++            target = CatalogTarget.Addon(
++                manifestUrl = session.serverUrl,
++                contentType = "movie",
++                catalogId = "jellyfin",
++                supportsPagination = false,
++            ),
++            items = previews,
++            availableItemCount = previews.size,
++            hasMore = false,
++        )
++    }
++
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt
+new file mode 100644
+index 0000000..08d6a14
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt
+@@ -0,0 +1,886 @@
++package com.nuvio.app.features.jellyfin
++
++import androidx.compose.foundation.background
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.horizontalScroll
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.BoxWithConstraints
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.aspectRatio
++import androidx.compose.foundation.layout.fillMaxHeight
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.foundation.lazy.grid.GridCells
++import androidx.compose.foundation.lazy.grid.GridItemSpan
++import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
++import androidx.compose.foundation.lazy.grid.items
++import androidx.compose.foundation.lazy.items as listItems
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.foundation.verticalScroll
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.rounded.Logout
++import androidx.compose.material.icons.rounded.PlayArrow
++import androidx.compose.material.icons.rounded.Refresh
++import androidx.compose.material.icons.rounded.Tune
++import androidx.compose.material.icons.rounded.Visibility
++import androidx.compose.material.icons.rounded.VisibilityOff
++import androidx.compose.material3.Button
++import androidx.compose.material3.ButtonDefaults
++import androidx.compose.material3.CircularProgressIndicator
++import androidx.compose.material3.Icon
++import androidx.compose.material3.IconButton
++import androidx.compose.material3.LinearProgressIndicator
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.OutlinedTextField
++import androidx.compose.material3.OutlinedTextFieldDefaults
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.saveable.rememberSaveable
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.alpha
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.layout.ContentScale
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.input.PasswordVisualTransformation
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.dp
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import coil3.compose.AsyncImage
++import com.nuvio.app.core.ui.NuvioInputField
++import com.nuvio.app.core.ui.NuvioScreenHeader
++import com.nuvio.app.core.ui.NuvioSectionLabel
++import com.nuvio.app.core.ui.PlatformBackHandler
++import com.nuvio.app.core.ui.nuvio
++import kotlin.math.roundToInt
++
++@Composable
++fun JellyfinScreen(
++    onBack: () -> Unit,
++    onPlay: (JellyfinItem) -> Unit,
++) {
++    LaunchedEffect(Unit) { JellyfinRepository.initialize() }
++    val state by JellyfinRepository.uiState.collectAsStateWithLifecycle()
++    val tokens = MaterialTheme.nuvio
++    val session = state.session
++
++    if (session == null) {
++        JellyfinSignInContent(state = state, onBack = onBack)
++        return
++    }
++
++    // Phones get one pane at a time (browse / libraries / detail); tablets keep the 3-column layout.
++    BoxWithConstraints(modifier = Modifier.fillMaxSize().background(tokens.colors.background)) {
++        val compact = maxWidth < 840.dp
++        var showLibraries by rememberSaveable { mutableStateOf(false) }
++        var showHiddenLibraries by rememberSaveable { mutableStateOf(false) }
++        val selected = state.selectedDetail
++        val compactDetailOpen = compact && selected != null
++        PlatformBackHandler(enabled = compact && (showLibraries || compactDetailOpen)) {
++            if (showLibraries) showLibraries = false else JellyfinRepository.clearSelection()
++        }
++
++        Column(
++            modifier = Modifier
++                .fillMaxSize()
++                .padding(horizontal = 16.dp),
++        ) {
++            NuvioScreenHeader(
++                title = when {
++                    compactDetailOpen -> selected?.name ?: "Jellyfin"
++                    compact && showLibraries -> "Libraries"
++                    else -> "Jellyfin · ${session.serverName}"
++                },
++                onBack = {
++                    when {
++                        compact && showLibraries -> showLibraries = false
++                        compactDetailOpen -> JellyfinRepository.clearSelection()
++                        else -> onBack()
++                    }
++                },
++                actions = {
++                    if (compact && !compactDetailOpen && !showLibraries) {
++                        IconButton(onClick = { showLibraries = true }) {
++                            Icon(
++                                imageVector = Icons.Rounded.Tune,
++                                contentDescription = "Libraries",
++                                tint = tokens.colors.textPrimary,
++                            )
++                        }
++                    }
++                    IconButton(onClick = { JellyfinRepository.refresh() }) {
++                        Icon(
++                            imageVector = Icons.Rounded.Refresh,
++                            contentDescription = "Refresh",
++                            tint = tokens.colors.textPrimary,
++                        )
++                    }
++                    IconButton(onClick = { JellyfinRepository.signOut() }) {
++                        Icon(
++                            imageVector = Icons.Rounded.Logout,
++                            contentDescription = "Sign out",
++                            tint = tokens.colors.textPrimary,
++                        )
++                    }
++                },
++            )
++            if (compact) {
++                when {
++                    showLibraries -> JellyfinSidebarContent(
++                        state = state,
++                        showHiddenLibraries = showHiddenLibraries,
++                        onToggleHidden = { showHiddenLibraries = !showHiddenLibraries },
++                        modifier = Modifier.fillMaxSize().padding(bottom = 16.dp),
++                    )
++
++                    compactDetailOpen -> JellyfinDetailPanel(
++                        state = state,
++                        onPlay = onPlay,
++                        modifier = Modifier.fillMaxSize().padding(bottom = 16.dp),
++                    )
++
++                    else -> Column(modifier = Modifier.fillMaxSize().padding(bottom = 8.dp)) {
++                        NuvioInputField(
++                            value = state.searchQuery,
++                            onValueChange = JellyfinRepository::setSearchQuery,
++                            placeholder = "Search your Jellyfin server…",
++                        )
++                        Spacer(modifier = Modifier.height(10.dp))
++                        JellyfinItemGrid(
++                            state = state,
++                            modifier = Modifier.weight(1f).fillMaxWidth(),
++                        )
++                    }
++                }
++            } else {
++                Row(
++                    modifier = Modifier.fillMaxSize().padding(bottom = 16.dp),
++                    horizontalArrangement = Arrangement.spacedBy(16.dp),
++                ) {
++                    JellyfinSidebarContent(
++                        state = state,
++                        showHiddenLibraries = showHiddenLibraries,
++                        onToggleHidden = { showHiddenLibraries = !showHiddenLibraries },
++                        modifier = Modifier.width(232.dp).fillMaxHeight(),
++                    )
++                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
++                        NuvioInputField(
++                            value = state.searchQuery,
++                            onValueChange = JellyfinRepository::setSearchQuery,
++                            placeholder = "Search your Jellyfin server…",
++                        )
++                        JellyfinItemGrid(
++                            state = state,
++                            modifier = Modifier.weight(1f).fillMaxWidth(),
++                        )
++                    }
++                    JellyfinDetailPanel(
++                        state = state,
++                        onPlay = onPlay,
++                        modifier = Modifier.width(336.dp).fillMaxHeight(),
++                    )
++                }
++            }
++        }
++    }
++}
++
++@Composable
++private fun JellyfinItemGrid(
++    state: JellyfinUiState,
++    modifier: Modifier = Modifier,
++) {
++    val tokens = MaterialTheme.nuvio
++    Box(modifier = modifier) {
++        when {
++            state.isLoadingItems && state.items.isEmpty() -> Box(
++                modifier = Modifier.fillMaxSize(),
++                contentAlignment = Alignment.Center,
++            ) { CircularProgressIndicator() }
++
++            state.itemsError != null && state.items.isEmpty() -> Column(
++                modifier = Modifier.fillMaxSize(),
++                horizontalAlignment = Alignment.CenterHorizontally,
++                verticalArrangement = Arrangement.Center,
++            ) {
++                Text(
++                    text = state.itemsError.orEmpty(),
++                    style = MaterialTheme.typography.bodyMedium,
++                    color = MaterialTheme.colorScheme.error,
++                )
++                Spacer(modifier = Modifier.height(12.dp))
++                Button(onClick = { JellyfinRepository.retryItems() }) {
++                    Text(text = "Retry")
++                }
++            }
++
++            state.items.isEmpty() -> Box(
++                modifier = Modifier.fillMaxSize(),
++                contentAlignment = Alignment.Center,
++            ) {
++                Text(
++                    text = "Nothing here yet",
++                    style = MaterialTheme.typography.bodyMedium,
++                    color = tokens.colors.textMuted,
++                )
++            }
++
++            else -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
++                Row(
++                    horizontalArrangement = Arrangement.spacedBy(8.dp),
++                    verticalAlignment = Alignment.CenterVertically,
++                ) {
++                    JellyfinSortChip(
++                        label = "A–Z",
++                        isSelected = !state.sortLatestFirst,
++                        onClick = { JellyfinRepository.setSortLatestFirst(false) },
++                    )
++                    JellyfinSortChip(
++                        label = "Latest",
++                        isSelected = state.sortLatestFirst,
++                        onClick = { JellyfinRepository.setSortLatestFirst(true) },
++                    )
++                    Spacer(modifier = Modifier.weight(1f))
++                    Text(
++                        text = if (state.totalItemCount > 0) {
++                            "${state.items.size} of ${state.totalItemCount}"
++                        } else {
++                            ""
++                        },
++                        style = MaterialTheme.typography.labelSmall,
++                        color = tokens.colors.textMuted,
++                    )
++                }
++                LazyVerticalGrid(
++                    columns = GridCells.Adaptive(minSize = 110.dp),
++                    modifier = Modifier.fillMaxSize(),
++                    horizontalArrangement = Arrangement.spacedBy(10.dp),
++                    verticalArrangement = Arrangement.spacedBy(12.dp),
++                ) {
++                    items(items = state.items, key = { it.id }) { item ->
++                        JellyfinPosterCell(
++                            item = item,
++                            posterUrl = JellyfinRepository.posterUrlFor(item),
++                            isSelected = state.selectedItemId == item.id,
++                            onClick = { JellyfinRepository.selectItem(item) },
++                        )
++                    }
++                    if (state.canLoadMore) {
++                        item(key = "jellyfin_load_more", span = { GridItemSpan(maxLineSpan) }) {
++                            Box(
++                                modifier = Modifier
++                                    .fillMaxWidth()
++                                    .padding(vertical = 8.dp),
++                                contentAlignment = Alignment.Center,
++                            ) {
++                                Button(
++                                    enabled = !state.isLoadingItems,
++                                    onClick = { JellyfinRepository.loadMore() },
++                                ) {
++                                    if (state.isLoadingItems) {
++                                        CircularProgressIndicator(
++                                            modifier = Modifier.size(16.dp),
++                                            strokeWidth = 2.dp,
++                                            color = Color.White,
++                                        )
++                                    } else {
++                                        Text(text = "Load more")
++                                    }
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++        }
++    }
++}
++
++@Composable
++private fun JellyfinSidebarContent(
++    state: JellyfinUiState,
++    showHiddenLibraries: Boolean,
++    onToggleHidden: () -> Unit,
++    modifier: Modifier = Modifier,
++) {
++    val tokens = MaterialTheme.nuvio
++    Column(
++        modifier = modifier.verticalScroll(rememberScrollState()),
++        verticalArrangement = Arrangement.spacedBy(4.dp),
++    ) {
++        Text(
++            text = "Signed in as ${state.session?.userName ?: ""}",
++            style = MaterialTheme.typography.labelMedium,
++            color = tokens.colors.textMuted,
++            maxLines = 1,
++            overflow = TextOverflow.Ellipsis,
++        )
++        Spacer(modifier = Modifier.height(8.dp))
++        NuvioSectionLabel(text = "Libraries")
++        Spacer(modifier = Modifier.height(4.dp))
++        val visibleLibraries = state.libraries.filter { it.id !in state.hiddenLibraryIds }
++        val hiddenLibraries = state.libraries.filter { it.id in state.hiddenLibraryIds }
++        visibleLibraries.forEach { library ->
++            JellyfinLibraryRow(
++                name = library.name,
++                isSelected = state.selectedLibraryId == library.id,
++                onToggleVisibility = { JellyfinRepository.toggleLibraryHidden(library.id) },
++                onClick = { JellyfinRepository.selectLibrary(library.id) },
++            )
++        }
++        if (state.libraries.isEmpty() && state.isLoadingItems) {
++            Text(
++                text = "Loading libraries…",
++                style = MaterialTheme.typography.bodySmall,
++                color = tokens.colors.textMuted,
++            )
++        }
++        if (hiddenLibraries.isNotEmpty()) {
++            Spacer(modifier = Modifier.height(6.dp))
++            Row(
++                modifier = Modifier
++                    .fillMaxWidth()
++                    .clip(RoundedCornerShape(10.dp))
++                    .clickable(onClick = onToggleHidden)
++                    .padding(horizontal = 10.dp, vertical = 6.dp),
++                verticalAlignment = Alignment.CenterVertically,
++            ) {
++                Text(
++                    text = (if (showHiddenLibraries) "▾ " else "▸ ") + "Hidden (${hiddenLibraries.size})",
++                    style = MaterialTheme.typography.labelMedium,
++                    color = tokens.colors.textMuted,
++                )
++            }
++            if (showHiddenLibraries) {
++                hiddenLibraries.forEach { library ->
++                    JellyfinLibraryRow(
++                        name = library.name,
++                        isSelected = false,
++                        isDimmed = true,
++                        onToggleVisibility = { JellyfinRepository.toggleLibraryHidden(library.id) },
++                    )
++                }
++            }
++        }
++    }
++}
++
++@Composable
++private fun JellyfinSignInContent(
++    state: JellyfinUiState,
++    onBack: () -> Unit,
++) {
++    val tokens = MaterialTheme.nuvio
++    var serverUrl by remember { mutableStateOf("") }
++    var username by remember { mutableStateOf("") }
++    var password by remember { mutableStateOf("") }
++
++    Column(
++        modifier = Modifier
++            .fillMaxSize()
++            .background(tokens.colors.background)
++            .padding(horizontal = 24.dp),
++        horizontalAlignment = Alignment.CenterHorizontally,
++        verticalArrangement = Arrangement.Center,
++    ) {
++        Box(
++            modifier = Modifier
++                .fillMaxWidth()
++                .clip(RoundedCornerShape(16.dp))
++                .background(tokens.colors.surfaceCard)
++                .padding(24.dp),
++        ) {
++            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
++                Text(
++                    text = "Connect your Jellyfin server",
++                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
++                    color = tokens.colors.textPrimary,
++                )
++                Text(
++                    text = "Sign in with your Jellyfin username and password. Your libraries show up here and Jellyfin results are included in Search.",
++                    style = MaterialTheme.typography.bodySmall,
++                    color = tokens.colors.textMuted,
++                )
++                NuvioInputField(
++                    value = serverUrl,
++                    onValueChange = { serverUrl = it },
++                    placeholder = "Server address (https://…)",
++                )
++                NuvioInputField(
++                    value = username,
++                    onValueChange = { username = it },
++                    placeholder = "Username",
++                )
++                OutlinedTextField(
++                    value = password,
++                    onValueChange = { password = it },
++                    modifier = Modifier.fillMaxWidth(),
++                    singleLine = true,
++                    shape = RoundedCornerShape(12.dp),
++                    placeholder = {
++                        Text(
++                            text = "Password",
++                            color = tokens.colors.textMuted,
++                            style = MaterialTheme.typography.bodyLarge,
++                        )
++                    },
++                    visualTransformation = PasswordVisualTransformation(),
++                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = tokens.colors.textPrimary),
++                    colors = OutlinedTextFieldDefaults.colors(
++                        focusedBorderColor = tokens.colors.borderFocus,
++                        unfocusedBorderColor = tokens.colors.borderDefault,
++                        focusedContainerColor = tokens.colors.surfaceElevated,
++                        unfocusedContainerColor = tokens.colors.surfaceElevated,
++                        cursorColor = tokens.colors.accent,
++                    ),
++                )
++                Button(
++                    enabled = !state.isLoadingSession && serverUrl.isNotBlank() && username.isNotBlank(),
++                    onClick = { JellyfinRepository.signIn(serverUrl, username, password) },
++                    modifier = Modifier.fillMaxWidth(),
++                    colors = ButtonDefaults.buttonColors(containerColor = tokens.colors.accent),
++                ) {
++                    if (state.isLoadingSession) {
++                        CircularProgressIndicator(
++                            modifier = Modifier.size(16.dp),
++                            strokeWidth = 2.dp,
++                            color = Color.White,
++                        )
++                    } else {
++                        Text(text = "Sign in")
++                    }
++                }
++                if (state.sessionError != null) {
++                    Text(
++                        text = state.sessionError.orEmpty(),
++                        style = MaterialTheme.typography.bodySmall,
++                        color = MaterialTheme.colorScheme.error,
++                    )
++                }
++            }
++        }
++    }
++}
++
++@Composable
++private fun JellyfinLibraryRow(
++    name: String,
++    isSelected: Boolean,
++    isDimmed: Boolean = false,
++    onToggleVisibility: (() -> Unit)? = null,
++    onClick: (() -> Unit)? = null,
++) {
++    val tokens = MaterialTheme.nuvio
++    Row(
++        modifier = Modifier
++            .fillMaxWidth()
++            .clip(RoundedCornerShape(10.dp))
++            .background(if (isSelected) tokens.colors.surfaceElevated else Color.Transparent)
++            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
++            .padding(start = 10.dp, top = 2.dp, end = 2.dp, bottom = 2.dp)
++            .alpha(if (isDimmed) 0.55f else 1f),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        Text(
++            text = name,
++            style = MaterialTheme.typography.bodyMedium.copy(
++                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
++            ),
++            color = if (isSelected) tokens.colors.textPrimary else tokens.colors.textMuted,
++            maxLines = 1,
++            overflow = TextOverflow.Ellipsis,
++            modifier = Modifier.weight(1f),
++        )
++        if (onToggleVisibility != null) {
++            IconButton(
++                onClick = onToggleVisibility,
++                modifier = Modifier.size(30.dp),
++            ) {
++                Icon(
++                    imageVector = if (isDimmed) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
++                    contentDescription = if (isDimmed) "Show library" else "Hide library",
++                    tint = tokens.colors.textMuted,
++                    modifier = Modifier.size(16.dp),
++                )
++            }
++        }
++    }
++}
++
++@Composable
++private fun JellyfinSortChip(
++    label: String,
++    isSelected: Boolean,
++    onClick: () -> Unit,
++) {
++    val tokens = MaterialTheme.nuvio
++    Box(
++        modifier = Modifier
++            .clip(RoundedCornerShape(999.dp))
++            .background(if (isSelected) tokens.colors.accent else tokens.colors.surfaceElevated)
++            .clickable(onClick = onClick)
++            .padding(horizontal = 14.dp, vertical = 6.dp),
++    ) {
++        Text(
++            text = label,
++            style = MaterialTheme.typography.labelMedium,
++            color = if (isSelected) Color.White else tokens.colors.textMuted,
++        )
++    }
++}
++
++@Composable
++private fun JellyfinPosterCell(
++    item: JellyfinItem,
++    posterUrl: String?,
++    isSelected: Boolean,
++    onClick: () -> Unit,
++) {
++    val tokens = MaterialTheme.nuvio
++    Column(
++        modifier = Modifier
++            .fillMaxWidth()
++            .clip(RoundedCornerShape(4.dp))
++            .clickable(onClick = onClick)
++            .padding(2.dp),
++    ) {
++        Box(
++            modifier = Modifier
++                .fillMaxWidth()
++                .aspectRatio(2f / 3f)
++                .clip(RoundedCornerShape(10.dp))
++                .background(tokens.colors.surfaceElevated),
++        ) {
++            if (posterUrl != null) {
++                AsyncImage(
++                    model = posterUrl,
++                    contentDescription = item.name,
++                    contentScale = ContentScale.Crop,
++                    modifier = Modifier.fillMaxSize(),
++                )
++            } else {
++                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
++                    Text(
++                        text = item.name.take(2).uppercase(),
++                        style = MaterialTheme.typography.titleMedium,
++                        color = tokens.colors.textMuted,
++                    )
++                }
++            }
++            if (isSelected) {
++                Box(
++                    modifier = Modifier
++                        .fillMaxSize()
++                        .clip(RoundedCornerShape(10.dp))
++                        .background(tokens.colors.accent.copy(alpha = 0.25f)),
++                )
++            }
++            val progress = item.playedPercentage
++            if (progress != null && progress > 1.0 && progress < 95.0) {
++                LinearProgressIndicator(
++                    progress = { (progress / 100.0).toFloat() },
++                    modifier = Modifier
++                        .fillMaxWidth()
++                        .height(3.dp)
++                        .align(Alignment.BottomCenter),
++                )
++            }
++        }
++        Spacer(modifier = Modifier.height(6.dp))
++        Text(
++            text = item.name,
++            style = MaterialTheme.typography.bodySmall,
++            color = tokens.colors.textPrimary,
++            maxLines = 2,
++            overflow = TextOverflow.Ellipsis,
++        )
++        if (item.productionYear != null) {
++            Text(
++                text = item.productionYear.toString(),
++                style = MaterialTheme.typography.labelSmall,
++                color = tokens.colors.textMuted,
++            )
++        }
++    }
++}
++
++/** Shared detail panel: used by the Jellyfin screen's detail pane and the standalone detail route. */
++@Composable
++internal fun JellyfinDetailPanel(
++    state: JellyfinUiState,
++    onPlay: (JellyfinItem) -> Unit,
++    modifier: Modifier = Modifier,
++) {
++    val tokens = MaterialTheme.nuvio
++    val item = state.selectedDetail
++    if (item == null) {
++        Box(
++            modifier = modifier
++                .clip(RoundedCornerShape(16.dp))
++                .background(tokens.colors.surfaceCard)
++                .padding(16.dp),
++            contentAlignment = Alignment.Center,
++        ) {
++            Text(
++                text = "Select an item to see its details",
++                style = MaterialTheme.typography.bodyMedium,
++                color = tokens.colors.textMuted,
++            )
++        }
++        return
++    }
++    LazyColumn(
++        modifier = modifier
++            .clip(RoundedCornerShape(16.dp))
++            .background(tokens.colors.surfaceCard)
++            .padding(16.dp),
++        verticalArrangement = Arrangement.spacedBy(10.dp),
++    ) {
++        item(key = "jellyfin_detail_header") {
++            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
++                Box(
++                    modifier = Modifier
++                        .width(128.dp)
++                        .aspectRatio(2f / 3f)
++                        .clip(RoundedCornerShape(10.dp))
++                        .background(tokens.colors.surfaceElevated),
++                ) {
++                    val posterUrl = JellyfinRepository.posterUrlFor(item, maxWidth = 400)
++                    if (posterUrl != null) {
++                        AsyncImage(
++                            model = posterUrl,
++                            contentDescription = item.name,
++                            contentScale = ContentScale.Crop,
++                            modifier = Modifier.fillMaxSize(),
++                        )
++                    }
++                }
++                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
++                    Text(
++                        text = item.name,
++                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
++                        color = tokens.colors.textPrimary,
++                        maxLines = 3,
++                        overflow = TextOverflow.Ellipsis,
++                    )
++                    if (item.isEpisode && !item.seriesName.isNullOrBlank()) {
++                        Text(
++                            text = item.seriesName.orEmpty(),
++                            style = MaterialTheme.typography.bodySmall,
++                            color = tokens.colors.textMuted,
++                            maxLines = 1,
++                            overflow = TextOverflow.Ellipsis,
++                        )
++                    }
++                    val metaLine = buildList {
++                        item.productionYear?.let { add(it.toString()) }
++                        item.communityRating?.let { rating ->
++                            add("★ ${(rating * 10).roundToInt() / 10.0}")
++                        }
++                        item.runTimeMinutes?.let { minutes -> add("${minutes}m") }
++                        item.officialRating?.takeIf { it.isNotBlank() }?.let { add(it) }
++                    }.joinToString("  ·  ")
++                    if (metaLine.isNotBlank()) {
++                        Text(
++                            text = metaLine,
++                            style = MaterialTheme.typography.labelMedium,
++                            color = tokens.colors.textMuted,
++                        )
++                    }
++                    Spacer(modifier = Modifier.height(2.dp))
++                    JellyfinPlayButton(item = item, state = state, onPlay = onPlay)
++                    if (item.resumePositionMs > 0) {
++                        Text(
++                            text = "Resumes at ${formatPosition(item.resumePositionMs)}",
++                            style = MaterialTheme.typography.labelSmall,
++                            color = tokens.colors.textMuted,
++                        )
++                    }
++                }
++            }
++        }
++        if (!item.overview.isNullOrBlank()) {
++            item(key = "jellyfin_detail_overview") {
++                Text(
++                    text = item.overview.orEmpty(),
++                    style = MaterialTheme.typography.bodySmall,
++                    color = tokens.colors.textPrimary,
++                )
++            }
++        }
++        if (item.isSeries) {
++            item(key = "jellyfin_detail_seasons") {
++                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
++                    NuvioSectionLabel(text = "Seasons")
++                    Row(
++                        horizontalArrangement = Arrangement.spacedBy(6.dp),
++                        modifier = Modifier.horizontalScroll(rememberScrollState()),
++                    ) {
++                        state.seasons.forEach { season ->
++                            JellyfinSortChip(
++                                label = season.name ?: "Season ${season.indexNumber ?: ""}",
++                                isSelected = state.selectedSeasonId == season.id,
++                                onClick = { JellyfinRepository.selectSeason(season.id) },
++                            )
++                        }
++                    }
++                }
++            }
++        }
++        if (item.isSeries || item.isFolder) {
++            item(key = "jellyfin_detail_episodes_label") {
++                NuvioSectionLabel(text = if (item.isSeries) "Episodes" else "Files in this folder")
++            }
++            if (state.isLoadingDetail && state.episodes.isEmpty()) {
++                item(key = "jellyfin_detail_episodes_loading") {
++                    Box(
++                        modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
++                        contentAlignment = Alignment.Center,
++                    ) {
++                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
++                    }
++                }
++            }
++            listItems(items = state.episodes, key = { it.id }) { episode ->
++                JellyfinEpisodeRow(episode = episode, onPlay = onPlay)
++            }
++        }
++    }
++}
++
++@Composable
++private fun JellyfinPlayButton(
++    item: JellyfinItem,
++    state: JellyfinUiState,
++    onPlay: (JellyfinItem) -> Unit,
++) {
++    val tokens = MaterialTheme.nuvio
++    val playable: JellyfinItem? = when {
++        item.isSeries || item.isFolder ->
++            state.episodes.firstOrNull { it.resumePositionMs > 0 } ?: state.episodes.firstOrNull()
++        item.isPlayable -> item
++        else -> null // box sets etc. have no stream of their own
++    }
++    Button(
++        enabled = playable != null,
++        onClick = { playable?.let(onPlay) },
++        colors = ButtonDefaults.buttonColors(containerColor = tokens.colors.accent),
++    ) {
++        Icon(
++            imageVector = Icons.Rounded.PlayArrow,
++            contentDescription = null,
++            modifier = Modifier.size(18.dp),
++        )
++        Spacer(modifier = Modifier.width(4.dp))
++        Text(
++            text = when {
++                playable == null && item.isSeries -> "No episodes"
++                playable == null && item.isFolder -> "No files"
++                playable == null -> "Not playable"
++                playable.resumePositionMs > 0 -> {
++                    if (playable.isEpisode) "Resume ${episodeLabel(playable)}" else "Resume"
++                }
++                playable.isEpisode -> "Play ${episodeLabel(playable)}"
++                else -> "Play"
++            },
++        )
++    }
++}
++
++private fun episodeLabel(episode: JellyfinItem): String {
++    val season = episode.parentIndexNumber
++    val number = episode.indexNumber
++    return when {
++        season != null && number != null -> "S$season·E$number"
++        number != null -> "E$number"
++        else -> ""
++    }.takeIf { it.isNotBlank() } ?: ""
++}
++
++@Composable
++private fun JellyfinEpisodeRow(
++    episode: JellyfinItem,
++    onPlay: (JellyfinItem) -> Unit,
++) {
++    val tokens = MaterialTheme.nuvio
++    Row(
++        modifier = Modifier
++            .fillMaxWidth()
++            .clip(RoundedCornerShape(10.dp))
++            .background(tokens.colors.surfaceElevated)
++            .clickable { onPlay(episode) }
++            .padding(horizontal = 10.dp, vertical = 8.dp),
++        horizontalArrangement = Arrangement.spacedBy(10.dp),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        Text(
++            text = when {
++                episode.isEpisode -> episodeLabel(episode).ifBlank { "E${episode.indexNumber ?: ""}" }
++                episode.productionYear != null -> episode.productionYear.toString()
++                else -> "•"
++            },
++            style = MaterialTheme.typography.labelMedium,
++            color = tokens.colors.textMuted,
++            modifier = Modifier.width(52.dp),
++            maxLines = 1,
++        )
++        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
++            Text(
++                text = episode.name,
++                style = MaterialTheme.typography.bodySmall,
++                color = tokens.colors.textPrimary,
++                maxLines = 2,
++                overflow = TextOverflow.Ellipsis,
++            )
++            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
++                episode.runTimeMinutes?.let { minutes ->
++                    Text(
++                        text = "${minutes}m",
++                        style = MaterialTheme.typography.labelSmall,
++                        color = tokens.colors.textMuted,
++                    )
++                }
++                if (episode.resumePositionMs > 0) {
++                    Text(
++                        text = "resume at ${formatPosition(episode.resumePositionMs)}",
++                        style = MaterialTheme.typography.labelSmall,
++                        color = tokens.colors.accent,
++                    )
++                }
++            }
++            val progress = episode.playedPercentage
++            if (progress != null && progress > 1.0 && progress < 95.0) {
++                LinearProgressIndicator(
++                    progress = { (progress / 100.0).toFloat() },
++                    modifier = Modifier.fillMaxWidth().height(2.dp),
++                )
++            }
++        }
++    }
++}
++
++internal fun formatPosition(positionMs: Long): String {
++    val totalSeconds = positionMs / 1000
++    val hours = totalSeconds / 3600
++    val minutes = (totalSeconds % 3600) / 60
++    return if (hours > 0) {
++        "${hours}h ${minutes.toString().padStart(2, '0')}m"
++    } else {
++        "${minutes}m"
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/search/SearchRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/search/SearchRepository.kt
+index 027eed9..ab82908 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/search/SearchRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/search/SearchRepository.kt
+@@ -18,6 +18,7 @@ import com.nuvio.app.features.catalog.nextCatalogPaginationState
+ import com.nuvio.app.features.catalog.supportsPagination
+ import com.nuvio.app.features.home.HomeCatalogSettingsRepository
+ import com.nuvio.app.features.home.HomeCatalogSection
++import com.nuvio.app.features.jellyfin.JellyfinRepository
+ import com.nuvio.app.features.home.MetaPreview
+ import com.nuvio.app.features.home.filterReleasedItems
+ import com.nuvio.app.core.poster.withCustomPosterUrls
+@@ -86,7 +87,10 @@ object SearchRepository {
+         val hasPendingAddonManifests = enabledAddons.hasPendingEnabledManifests()
+         val addonManifestErrorMessage = enabledAddons.firstEnabledManifestError()
+         val activeAddons = enabledAddons.filter { it.manifest != null }
+-        if (activeAddons.isEmpty()) {
++        // Jellyfin fork feature: the user's Jellyfin server is a search source of its own, so a
++        // signed-in Jellyfin session keeps search alive even with no addons installed.
++        val jellyfinSearch = JellyfinRepository.hasSession
++        if (activeAddons.isEmpty() && !jellyfinSearch) {
+             activeJob?.cancel()
+             lastRequestKey = null
+             _uiState.value = SearchUiState(
+@@ -105,7 +109,7 @@ object SearchRepository {
+             addons = activeAddons,
+             query = normalizedQuery,
+         )
+-        if (requests.isEmpty()) {
++        if (requests.isEmpty() && !jellyfinSearch) {
+             activeJob?.cancel()
+             lastRequestKey = null
+             _uiState.value = SearchUiState(
+@@ -127,6 +131,8 @@ object SearchRepository {
+                     "${request.addon.manifestUrl}:${request.type}:${request.catalogId}"
+                 },
+             )
++            append('|')
++            append(JellyfinRepository.sessionKey.orEmpty())
+         }
+         if (canReuseRequestState(forceRefresh, requestKey, lastRequestKey)) return
+         lastRequestKey = requestKey
+@@ -136,6 +142,7 @@ object SearchRepository {
+ 
+         activeJob = scope.launch {
+             val resultChannel = Channel<IndexedSearchResult>(Channel.UNLIMITED)
++            val jellyfinIndex = if (jellyfinSearch) requests.size else -1
+             val jobs = requests.mapIndexed { index, request ->
+                 launch {
+                     runCatching { request.toSection(forceRefresh = forceRefresh) }
+@@ -160,11 +167,40 @@ object SearchRepository {
+                         )
+                 }
+             }
++            val jellyfinJob = if (jellyfinSearch) {
++                launch {
++                    runCatching { JellyfinRepository.searchSection(normalizedQuery) }
++                        .fold(
++                            onSuccess = { section ->
++                                if (section != null) {
++                                    resultChannel.trySend(
++                                        IndexedSearchResult(
++                                            index = jellyfinIndex,
++                                            section = section,
++                                        ),
++                                    )
++                                }
++                            },
++                            onFailure = { error ->
++                                if (error is CancellationException) throw error
++                                resultChannel.trySend(
++                                    IndexedSearchResult(
++                                        index = jellyfinIndex,
++                                        error = error,
++                                    ),
++                                )
++                            },
++                        )
++                }
++            } else {
++                null
++            }
+             val closeChannelJob = launch {
+                 jobs.joinAll()
++                jellyfinJob?.join()
+                 resultChannel.close()
+             }
+-            val results = arrayOfNulls<IndexedSearchResult>(requests.size)
++            val results = arrayOfNulls<IndexedSearchResult>(requests.size + if (jellyfinSearch) 1 else 0)
+ 
+             try {
+                 for (result in resultChannel) {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt
+index b88346f..b2296dd 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt
+@@ -1238,6 +1238,12 @@ object WatchProgressRepository {
+         persist: Boolean,
+         syncRemote: Boolean,
+     ) {
++        // Jellyfin fork feature: the Jellyfin server tracks playback positions itself (resume comes
++        // from UserData on launch); keep jf: items out of local Continue Watching, which cannot
++        // open them (they have no addon detail page).
++        if (session.videoId.startsWith("jf:") || session.parentMetaId.startsWith("jf:")) {
++            return
++        }
+         val targetProfileId = session.profileId
+         val positionMs = snapshot.positionMs.coerceAtLeast(0L)
+         val durationMs = snapshot.durationMs.coerceAtLeast(0L)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/navigation/Routes.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/navigation/Routes.kt
+index cdd9665..25bfe24 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/navigation/Routes.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/navigation/Routes.kt
+@@ -40,6 +40,16 @@ data class DetailRoute(
+     override val title: String? = null,
+ ) : AppRoute
+ 
++/** Jellyfin fork feature: the user's Jellyfin server libraries (own screen + detail route). */
++@Serializable
++data class JellyfinRoute(override val title: String = "Jellyfin") : AppRoute
++
++@Serializable
++data class JellyfinDetailRoute(
++    val itemId: String,
++    override val title: String? = null,
++) : AppRoute
++
+ @Serializable
+ data class PersonDetailRoute(
+     val personId: Int,
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
+new file mode 100644
+index 0000000..0a9fc37
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
+@@ -0,0 +1,21 @@
++package com.nuvio.app.features.jellyfin
++
++// Jellyfin is an Android-first fork feature; this target only needs the declarations to compile.
++internal actual object JellyfinPlatform {
++    actual val navEntryEnabled: Boolean = false
++
++    actual suspend fun httpCall(
++        method: String,
++        url: String,
++        headers: Map<String, String>,
++        body: String?,
++    ): JellyfinHttpResponse? = null
++
++    private val values = mutableMapOf<String, String>()
++
++    actual fun loadString(key: String): String? = values[key]
++
++    actual fun saveString(key: String, value: String?) {
++        if (value == null) values.remove(key) else values[key] = value
++    }
++}
