@@ -108,6 +108,12 @@ import com.nuvio.app.features.home.HomeCatalogSettingsRepository
 import com.nuvio.app.features.home.HomeRepository
 import com.nuvio.app.features.home.buildAddonCatalogRefreshSignature
 import com.nuvio.app.features.home.components.shouldBlurContinueWatchingArtwork
+import com.nuvio.app.features.jellyfin.JELLYFIN_META_ID_PREFIX
+import com.nuvio.app.features.jellyfin.JellyfinItem
+import com.nuvio.app.features.jellyfin.JellyfinLauncher
+import com.nuvio.app.features.jellyfin.JellyfinRepository
+import com.nuvio.app.features.jellyfin.JellyfinDetailScreen
+import com.nuvio.app.features.jellyfin.JellyfinScreen
 import com.nuvio.app.features.library.LibraryItem
 import com.nuvio.app.features.library.LibraryRepository
 import com.nuvio.app.features.library.LibrarySection
@@ -846,6 +852,45 @@ internal fun MainAppContent(
             navController.navigate(PlayerRoute(launchId = launchId, title = playerLaunch.title))
         }
 
+        // Jellyfin fork feature: nav entry opens the Jellyfin route
+        LaunchedEffect(navController) {
+            if (!ownsAppRuntime) return@LaunchedEffect
+            JellyfinLauncher.openRequests.collectLatest {
+                if (navBackStack.lastOrNull() !is JellyfinRoute) navController.navigate(JellyfinRoute())
+            }
+        }
+
+        fun openJellyfinItem(item: JellyfinItem) {
+            val session = JellyfinRepository.uiState.value.session ?: return
+            val sourceUrl = JellyfinRepository.streamUrlFor(item) ?: return
+            val isEpisode = item.isEpisode
+            val playerLaunch = PlayerLaunch(
+                profileId = activePlaybackProfileId,
+                title = if (isEpisode) item.seriesName ?: item.name else item.name,
+                sourceUrl = sourceUrl,
+                poster = JellyfinRepository.posterUrlFor(item, maxWidth = 720),
+                background = JellyfinRepository.backdropUrlFor(item),
+                seasonNumber = item.parentIndexNumber,
+                episodeNumber = item.indexNumber,
+                episodeTitle = if (isEpisode) item.name else null,
+                episodeThumbnail = if (isEpisode) JellyfinRepository.posterUrlFor(item, maxWidth = 400) else null,
+                streamTitle = "Jellyfin · " + session.serverName,
+                providerName = "Jellyfin",
+                contentType = item.stremioType,
+                videoId = JELLYFIN_META_ID_PREFIX + item.id,
+                parentMetaId = JELLYFIN_META_ID_PREFIX + (item.seriesId ?: item.id),
+                parentMetaType = if (isEpisode) "series" else item.stremioType,
+                initialPositionMs = item.resumePositionMs,
+                initialProgressFraction = item.playedPercentage?.let { (it / 100.0).toFloat() },
+            )
+            if (playerSettingsUiState.externalPlayerEnabled) {
+                coroutineScope.launch { openExternalPlayback(playerLaunch) }
+                return
+            }
+            val launchId = PlayerLaunchStore.put(playerLaunch)
+            navController.navigate(PlayerRoute(launchId = launchId, title = playerLaunch.title))
+        }
+
         fun openExternalStreamUrl(url: String): Boolean {
             val opened = runCatching {
                 uriHandler.openUri(url)
@@ -1291,12 +1336,23 @@ internal fun MainAppContent(
                             AppTabActions(
                                 onCatalogClick = onCatalogClick,
                                 onPosterClick = { meta ->
-                                    navController.navigate(
-                                        DetailRoute(type = meta.type, id = meta.id, title = meta.name),
-                                    )
+                                    if (meta.id.startsWith(JELLYFIN_META_ID_PREFIX)) {
+                                        navController.navigate(
+                                            JellyfinDetailRoute(
+                                                itemId = meta.id.removePrefix(JELLYFIN_META_ID_PREFIX),
+                                                title = meta.name,
+                                            ),
+                                        )
+                                    } else {
+                                        navController.navigate(
+                                            DetailRoute(type = meta.type, id = meta.id, title = meta.name),
+                                        )
+                                    }
                                 },
                                 onPosterLongClick = { meta ->
-                                    openPosterActions(PosterActionTarget(preview = meta))
+                                    if (!meta.id.startsWith(JELLYFIN_META_ID_PREFIX)) {
+                                        openPosterActions(PosterActionTarget(preview = meta))
+                                    }
                                 },
                                 onLibraryPosterClick = { item ->
                                     navController.navigate(
@@ -1534,6 +1590,14 @@ internal fun MainAppContent(
                             AppFeaturePolicy.inAppUpdaterEnabled && AppUpdaterPlatform.isDebugBuild
                         ) appUpdaterController::showDebugTestUpdate else null,
                     )
+                }
+                entry<JellyfinRoute> { route ->
+                    val onBack = rememberGuardedPopBackStack(navController, route)
+                    JellyfinScreen(onBack = onBack, onPlay = ::openJellyfinItem)
+                }
+                entry<JellyfinDetailRoute> { route ->
+                    val onBack = rememberGuardedPopBackStack(navController, route)
+                    JellyfinDetailScreen(route = route, onBack = onBack, onPlay = ::openJellyfinItem)
                 }
                 entry<DownloadsRoute> { route ->
                     DownloadsDestination(

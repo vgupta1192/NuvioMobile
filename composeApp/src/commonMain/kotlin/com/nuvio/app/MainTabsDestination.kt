@@ -79,7 +79,7 @@ internal fun MainTabsDestination(
         val navBarHazeState = rememberHazeState()
         val navBarStyleSetting by remember { ThemeSettingsRepository.navBarStyle }.collectAsStateWithLifecycle()
         val navBarGlowEnabled by ThemeSettingsRepository.navBarGlowEnabled.collectAsStateWithLifecycle()
-        val floatingNavigationItems = listOf(
+        val floatingNavigationItems = listOfNotNull(
             FloatingNavigationItem(
                 selected = selectedTab == AppScreenTab.Home,
                 onClick = { onTabSelected(AppScreenTab.Home) },
@@ -98,6 +98,17 @@ internal fun MainTabsDestination(
                 drawable = Res.drawable.sidebar_library,
                 label = stringResource(Res.string.compose_nav_library),
             ),
+            // Jellyfin fork feature: opens its own route (Android only)
+            if (com.nuvio.app.features.jellyfin.JellyfinPlatform.navEntryEnabled) {
+                FloatingNavigationItem(
+                    selected = false,
+                    onClick = { com.nuvio.app.features.jellyfin.JellyfinLauncher.open() },
+                    icon = androidx.compose.material.icons.Icons.Rounded.CollectionsBookmark,
+                    label = "Jellyfin",
+                )
+            } else {
+                null
+            },
             FloatingNavigationItem(
                 selected = selectedTab == AppScreenTab.Settings,
                 onClick = { onTabSelected(AppScreenTab.Settings) },
@@ -142,6 +153,14 @@ internal fun MainTabsDestination(
                             icon = Res.drawable.sidebar_library,
                             contentDescription = stringResource(Res.string.compose_nav_library),
                         )
+                        if (com.nuvio.app.features.jellyfin.JellyfinPlatform.navEntryEnabled) {
+                            NavItem(
+                                selected = false,
+                                onClick = { com.nuvio.app.features.jellyfin.JellyfinLauncher.open() },
+                                icon = androidx.compose.material.icons.Icons.Rounded.CollectionsBookmark,
+                                contentDescription = "Jellyfin",
+                            )
+                        }
                         NavItem(
                             selected = selectedTab == AppScreenTab.Settings,
                             onClick = { onTabSelected(AppScreenTab.Settings) },
