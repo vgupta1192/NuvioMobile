@@ -27,8 +27,14 @@ internal object ForkBuild {
         var best: AppUpdate? = null
         var bestBuild = -1
         for (release in releases) {
-            // Live TV variant (mobile-livetv-*) is a separate app; never offer its builds here
-            if (release.draft || release.tagName.orEmpty().startsWith("mobile-livetv-")) continue
+            // Jellyfin variant: only its own mobile-jellyfin-* releases — never the main app's,
+            // Live TV's, or the Jellyfin+LiveTV combo app's (mobile-jellyfin-livetv-*) builds.
+            val forkTag = release.tagName.orEmpty()
+            if (
+                release.draft ||
+                !forkTag.startsWith("mobile-jellyfin-") ||
+                forkTag.startsWith("mobile-jellyfin-livetv-")
+            ) continue
             for (asset in release.assets) {
                 val build = assetPattern.find(asset.name)?.groupValues?.get(1)?.toIntOrNull() ?: continue
                 if (build <= bestBuild) continue
