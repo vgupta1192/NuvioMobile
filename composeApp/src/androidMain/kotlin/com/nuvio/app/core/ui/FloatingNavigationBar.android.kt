@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -184,7 +185,11 @@ internal actual fun FloatingNavigationBar(
                                 JellyTabRow(items, labelFraction, motion, active = true, compactSize = compactSize, modifier = Modifier.matchParentSize())
                             }
                         }
-                        JellyTabTargets(items, labelFraction, motion, compactSize, Modifier.matchParentSize())
+                        // Content tabs (profile avatar, the Extra menu) read the bar's label
+                        // collapse so their visuals track the labeled tabs.
+                        CompositionLocalProvider(LocalFloatingNavLabelFraction provides labelFraction) {
+                            JellyTabTargets(items, labelFraction, motion, compactSize, Modifier.matchParentSize())
+                        }
                     }
                 }
             }
