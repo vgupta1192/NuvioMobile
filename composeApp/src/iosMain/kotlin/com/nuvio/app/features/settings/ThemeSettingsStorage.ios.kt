@@ -17,6 +17,7 @@ actual object ThemeSettingsStorage {
     private const val liquidGlassNativeTabBarEnabledKey = "liquid_glass_native_tab_bar_enabled"
     private const val selectedAppLanguageKey = "selected_app_language"
     private const val navBarStyleKey = "nav_bar_style"
+    private const val navBarPositionKey = "nav_bar_position"
     private const val navBarGlowEnabledKey = "nav_bar_glow_enabled"
     private val profileScopedSyncKeys = listOf(
         selectedThemeKey,
@@ -25,6 +26,7 @@ actual object ThemeSettingsStorage {
         navBarGlowEnabledKey,
         liquidGlassNativeTabBarEnabledKey,
         navBarStyleKey,
+        navBarPositionKey,
     )
 
     actual fun loadSelectedTheme(): String? =
@@ -122,6 +124,13 @@ actual object ThemeSettingsStorage {
         NSUserDefaults.standardUserDefaults.setObject(styleKey, forKey = ProfileScopedKey.of(navBarStyleKey))
     }
 
+    actual fun loadNavBarPosition(): String? =
+        NSUserDefaults.standardUserDefaults.stringForKey(ProfileScopedKey.of(navBarPositionKey))
+
+    actual fun saveNavBarPosition(positionKey: String) {
+        NSUserDefaults.standardUserDefaults.setObject(positionKey, forKey = ProfileScopedKey.of(navBarPositionKey))
+    }
+
     actual fun exportToSyncPayload(): JsonObject = buildJsonObject {
         loadSelectedTheme()?.let { put(selectedThemeKey, encodeSyncString(it)) }
         loadCustomThemeColors()?.let { put(customThemeColorsKey, encodeSyncString(it)) }
@@ -129,6 +138,7 @@ actual object ThemeSettingsStorage {
         loadAmoledEnabled()?.let { put(amoledEnabledKey, encodeSyncBoolean(it)) }
         loadLiquidGlassNativeTabBarEnabled()?.let { put(liquidGlassNativeTabBarEnabledKey, encodeSyncBoolean(it)) }
         loadNavBarStyle()?.let { put(navBarStyleKey, encodeSyncString(it)) }
+        loadNavBarPosition()?.let { put(navBarPositionKey, encodeSyncString(it)) }
     }
 
     actual fun replaceFromSyncPayload(payload: JsonObject) {
@@ -142,6 +152,7 @@ actual object ThemeSettingsStorage {
         payload.decodeSyncBoolean(amoledEnabledKey)?.let(::saveAmoledEnabled)
         payload.decodeSyncBoolean(liquidGlassNativeTabBarEnabledKey)?.let(::saveLiquidGlassNativeTabBarEnabled)
         payload.decodeSyncString(navBarStyleKey)?.let(::saveNavBarStyle)
+        payload.decodeSyncString(navBarPositionKey)?.let(::saveNavBarPosition)
         applySelectedAppLanguage(loadSelectedAppLanguage() ?: AppLanguage.DEVICE.code)
     }
 }

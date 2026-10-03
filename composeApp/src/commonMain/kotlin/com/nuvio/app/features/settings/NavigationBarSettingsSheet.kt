@@ -13,7 +13,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
@@ -43,6 +45,7 @@ internal fun NavigationBarSettingsSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
+    val navBarPosition by ThemeSettingsRepository.navBarPosition.collectAsStateWithLifecycle()
     val dismiss: () -> Unit = {
         scope.launch { dismissNuvioBottomSheet(sheetState, onDismiss) }
     }
@@ -74,6 +77,38 @@ internal fun NavigationBarSettingsSheet(
                                 }
                             },
                         )
+                    }
+                }
+            }
+            item {
+                // Fork: the floating panel can sit at the top or the bottom of the phone
+                // screen. The classic bar is a solid bottom bar by design, so the section
+                // only applies to the pill styles.
+                AnimatedVisibility(selectedStyle != NavBarStyle.CLASSIC) {
+                    Column {
+                        NuvioBottomSheetDivider()
+                        Text(
+                            text = "Position",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                        )
+                        NavBarPosition.entries.forEach { position ->
+                            NuvioBottomSheetActionRow(
+                                title = if (position == NavBarPosition.BOTTOM) "Bottom" else "Top",
+                                onClick = { ThemeSettingsRepository.setNavBarPosition(position) },
+                                selected = position == navBarPosition,
+                                modifier = Modifier.semantics {
+                                    role = Role.RadioButton
+                                    selected = position == navBarPosition
+                                },
+                                trailingContent = {
+                                    if (position == navBarPosition) {
+                                        Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary)
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
             }

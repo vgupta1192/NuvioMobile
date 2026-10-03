@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.widthIn
@@ -33,11 +34,13 @@ import com.nuvio.app.core.ui.NuvioNavBarScrollState
 import com.nuvio.app.core.ui.NuvioClassicNavigationBar
 import com.nuvio.app.core.ui.FloatingNavigationBar
 import com.nuvio.app.core.ui.FloatingNavigationItem
+import com.nuvio.app.core.ui.floatingNavigationBarPadding
 import com.nuvio.app.core.ui.PlatformBackHandler
 import com.nuvio.app.core.ui.nuvio
 import com.nuvio.app.core.ui.rememberNuvioNavBarScrollState
 import com.nuvio.app.features.profiles.NuvioProfile
 import com.nuvio.app.features.profiles.ProfileSwitcherTab
+import com.nuvio.app.features.settings.NavBarPosition
 import com.nuvio.app.features.settings.NavBarStyle
 import com.nuvio.app.features.settings.ThemeSettingsRepository
 import dev.chrisbanes.haze.hazeSource
@@ -89,6 +92,14 @@ internal fun MainTabsDestination(
         val extraJellyfinEnabled = com.nuvio.app.features.jellyfin.JellyfinPlatform.navEntryEnabled
         var extraMenuOpen by remember { mutableStateOf(false) }
         val navBarStyleSetting by remember { ThemeSettingsRepository.navBarStyle }.collectAsStateWithLifecycle()
+        val navBarPositionSetting by remember { ThemeSettingsRepository.navBarPosition }.collectAsStateWithLifecycle()
+        // Fork: the floating panel can live at the top of the phone screen (Settings →
+        // navigation bar → Position). Tablets already run a top bar, and the classic bar
+        // is a solid bottom bar by design, so only the phone pill bar honors the setting.
+        val navBarAtTop = !isTabletLayout &&
+            !useNativeBottomTabs &&
+            navBarStyleSetting != NavBarStyle.CLASSIC &&
+            navBarPositionSetting == NavBarPosition.TOP
         val navBarGlowEnabled by ThemeSettingsRepository.navBarGlowEnabled.collectAsStateWithLifecycle()
         val floatingNavigationItems = listOfNotNull(
             FloatingNavigationItem(
@@ -117,17 +128,20 @@ internal fun MainTabsDestination(
                     onClick = { extraMenuOpen = true },
                     label = "Extra",
                     content = { _ ->
+                        // The bar's JellyTabRow renders item.label for every non-compact tab
+                        // (that is where the Profile label comes from too), so the content
+                        // visual must stay icon-only or the tab shows "Extra" twice.
                         ExtraNavTabContent(
                             selected = extraMenuOpen,
                             expanded = extraMenuOpen,
                             showLiveTv = extraLiveTvEnabled,
                             showJellyfin = extraJellyfinEnabled,
-                            popupBelowAnchor = isTabletLayout,
+                            popupBelowAnchor = isTabletLayout || navBarAtTop,
                             onDismiss = { extraMenuOpen = false },
                             onLiveTv = { com.nuvio.app.features.livetv.LiveTvLauncher.open() },
                             onJellyfin = { com.nuvio.app.features.jellyfin.JellyfinLauncher.open() },
                             iconSize = 28.dp,
-                            showLabel = true,
+                            showLabel = false,
                         )
                     },
                 )
@@ -145,7 +159,7 @@ internal fun MainTabsDestination(
                         onProfileSelected = onProfileSelected,
                         onAddProfileRequested = onAddProfileRequested,
                         hazeState = navBarHazeState,
-                        popupBelowAnchor = isTabletLayout,
+                        popupBelowAnchor = isTabletLayout || navBarAtTop,
                     )
                 },
             ),
@@ -217,7 +231,17 @@ internal fun MainTabsDestination(
         ) { innerPadding ->
             Box(modifier = Modifier.fillMaxSize()) {
                 CompositionLocalProvider(
-                    LocalNuvioBottomNavigationOverlayPadding provides if (useNativeBottomTabs) 49.dp else if (!isTabletLayout && navBarStyleSetting != NavBarStyle.CLASSIC) 72.dp else 0.dp,
+                    // The overlay padding keeps scrollable content clear of the floating bar.
+                    // Top position frees the bottom edge (content clears the system gesture
+                    // inset via plain padding below) and relies on the bar's blur for the top,
+                    // like the tablet layout does.
+                    LocalNuvioBottomNavigationOverlayPadding provides if (useNativeBottomTabs) {
+                        49.dp
+                    } else if (navBarAtTop || (isTabletLayout || navBarStyleSetting == NavBarStyle.CLASSIC)) {
+                        0.dp
+                    } else {
+                        72.dp
+                    },
                     LocalNuvioNavBarScrollState provides navBarScrollState,
                 ) {
                     AppTabHost(
@@ -229,6 +253,13 @@ internal fun MainTabsDestination(
                             .fillMaxSize()
                             .then(if (isTabletLayout || navBarStyleSetting != NavBarStyle.CLASSIC) Modifier.hazeSource(state = navBarHazeState) else Modifier)
                             .then(if (navBarStyleSetting == NavBarStyle.ADAPTIVE) Modifier.nestedScroll(navBarScrollState.nestedScrollConnection) else Modifier)
+                            .then(
+                                if (navBarAtTop) {
+                                    Modifier.padding(bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding())
+                                } else {
+                                    Modifier
+                                },
+                            )
                             .padding(innerPadding),
                     )
                 }
@@ -256,9 +287,19 @@ internal fun MainTabsDestination(
                         else -> {}
                     }
                     FloatingNavigationBar(
-                        modifier = Modifier.align(Alignment.BottomCenter),
+                        modifier = Modifier.align(if (navBarAtTop) Alignment.TopCenter else Alignment.BottomCenter),
                         scrollState = navBarScrollState,
                         hazeState = navBarHazeState,
+                        // The default padding reserves the bottom system inset; a top bar
+                        // mirrors the tablet padding instead (status bar + gap).
+                        contentPadding = if (navBarAtTop) {
+                            PaddingValues(
+                                top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 10.dp,
+                                bottom = 8.dp,
+                            )
+                        } else {
+                            floatingNavigationBarPadding()
+                        },
                         items = floatingNavigationItems,
                         glowEnabled = navBarGlowEnabled,
                     )

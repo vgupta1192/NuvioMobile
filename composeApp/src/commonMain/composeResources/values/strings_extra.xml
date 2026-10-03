@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Fork-only strings (Extra settings page). Kept in a separate file so upstream edits
+     to strings.xml can never break the patch hunks. -->
+<resources>
+    <string name="extra_settings_title" translatable="false">Extra</string>
+</resources>

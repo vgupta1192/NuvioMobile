@@ -22,3 +22,17 @@ enum class NavBarStyle(
             entries.firstOrNull { it.key.equals(key, ignoreCase = true) } ?: ADAPTIVE
     }
 }
+
+/** Where the navigation panel sits on the phone screen. Classic bar stays bottom-only. */
+enum class NavBarPosition(
+    val key: String,
+) {
+    BOTTOM("bottom"),
+    TOP("top"),
+    ;
+
+    companion object {
+        fun fromKey(key: String?): NavBarPosition =
+            entries.firstOrNull { it.key.equals(key, ignoreCase = true) } ?: BOTTOM
+    }
+}
