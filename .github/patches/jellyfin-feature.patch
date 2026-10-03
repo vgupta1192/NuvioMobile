@@ -2995,10 +2995,10 @@ index 027eed9..ab82908 100644
                  for (result in resultChannel) {
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraSettingsPage.kt
 new file mode 100644
-index 0000000..a610c8d
+index 0000000..c4796e0
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraSettingsPage.kt
-@@ -0,0 +1,227 @@
+@@ -0,0 +1,228 @@
 +package com.nuvio.app.features.settings
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -3030,6 +3030,7 @@ index 0000000..a610c8d
 +import androidx.compose.ui.unit.dp
 +import androidx.lifecycle.compose.collectAsStateWithLifecycle
 +import com.nuvio.app.core.ui.NuvioInputField
++import com.nuvio.app.core.ui.nuvio
 +import com.nuvio.app.features.jellyfin.JellyfinLauncher
 +import com.nuvio.app.features.jellyfin.JellyfinRepository
 +import com.nuvio.app.features.jellyfin.JellyfinUiState
