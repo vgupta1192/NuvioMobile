@@ -164,6 +164,71 @@ index 0000000..921324b
 +        }?.apply()
 +    }
 +}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/settings/ThemeSettingsStorage.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/settings/ThemeSettingsStorage.android.kt
+index e1d96f4..db98d02 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/settings/ThemeSettingsStorage.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/settings/ThemeSettingsStorage.android.kt
+@@ -21,6 +21,7 @@ actual object ThemeSettingsStorage {
+     private const val liquidGlassNativeTabBarEnabledKey = "liquid_glass_native_tab_bar_enabled"
+     private const val selectedAppLanguageKey = "selected_app_language"
+     private const val NAV_BAR_STYLE_KEY = "nav_bar_style"
++    private const val NAV_BAR_POSITION_KEY = "nav_bar_position"
+     private const val navBarGlowEnabledKey = "nav_bar_glow_enabled"
+     private val profileScopedSyncKeys = listOf(
+         selectedThemeKey,
+@@ -29,6 +30,7 @@ actual object ThemeSettingsStorage {
+         navBarGlowEnabledKey,
+         liquidGlassNativeTabBarEnabledKey,
+         NAV_BAR_STYLE_KEY,
++        NAV_BAR_POSITION_KEY,
+     )
+ 
+     private var preferences: SharedPreferences? = null
+@@ -132,6 +134,16 @@ actual object ThemeSettingsStorage {
+             ?.apply()
+     }
+ 
++    actual fun loadNavBarPosition(): String? =
++        preferences?.getString(ProfileScopedKey.of(NAV_BAR_POSITION_KEY), null)
++
++    actual fun saveNavBarPosition(positionKey: String) {
++        preferences
++            ?.edit()
++            ?.putString(ProfileScopedKey.of(NAV_BAR_POSITION_KEY), positionKey)
++            ?.apply()
++    }
++
+     actual fun exportToSyncPayload(): JsonObject = buildJsonObject {
+         loadSelectedTheme()?.let { put(selectedThemeKey, encodeSyncString(it)) }
+         loadCustomThemeColors()?.let { put(customThemeColorsKey, encodeSyncString(it)) }
+@@ -139,6 +151,7 @@ actual object ThemeSettingsStorage {
+         loadAmoledEnabled()?.let { put(amoledEnabledKey, encodeSyncBoolean(it)) }
+         loadLiquidGlassNativeTabBarEnabled()?.let { put(liquidGlassNativeTabBarEnabledKey, encodeSyncBoolean(it)) }
+         loadNavBarStyle()?.let { put(NAV_BAR_STYLE_KEY, encodeSyncString(it)) }
++        loadNavBarPosition()?.let { put(NAV_BAR_POSITION_KEY, encodeSyncString(it)) }
+     }
+ 
+     actual fun replaceFromSyncPayload(payload: JsonObject) {
+@@ -152,6 +165,7 @@ actual object ThemeSettingsStorage {
+         payload.decodeSyncBoolean(amoledEnabledKey)?.let(::saveAmoledEnabled)
+         payload.decodeSyncBoolean(liquidGlassNativeTabBarEnabledKey)?.let(::saveLiquidGlassNativeTabBarEnabled)
+         payload.decodeSyncString(NAV_BAR_STYLE_KEY)?.let(::saveNavBarStyle)
++        payload.decodeSyncString(NAV_BAR_POSITION_KEY)?.let(::saveNavBarPosition)
+         applySelectedAppLanguage(loadSelectedAppLanguage() ?: AppLanguage.DEVICE.code)
+     }
+ }
+diff --git a/composeApp/src/commonMain/composeResources/values/strings_extra.xml b/composeApp/src/commonMain/composeResources/values/strings_extra.xml
+new file mode 100644
+index 0000000..4c34734
+--- /dev/null
++++ b/composeApp/src/commonMain/composeResources/values/strings_extra.xml
+@@ -0,0 +1,6 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Fork-only strings (Extra settings page). Kept in a separate file so upstream edits
++     to strings.xml can never break the patch hunks. -->
++<resources>
++    <string name="extra_settings_title" translatable="false">Extra</string>
++</resources>
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt
 index a048b31..87f16e6 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt
@@ -284,10 +349,15 @@ index d7f268d..32f9a4f 100644
                      DownloadsDestination(
                          route = route,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt
-index 9b12c4e..23a0c2d 100644
+index 9b12c4e..c18bda0 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt
-@@ -10,13 +10,15 @@ import androidx.compose.foundation.layout.padding
+@@ -6,17 +6,20 @@ import androidx.compose.foundation.layout.PaddingValues
+ import androidx.compose.foundation.layout.WindowInsets
+ import androidx.compose.foundation.layout.asPaddingValues
+ import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.navigationBars
+ import androidx.compose.foundation.layout.padding
  import androidx.compose.foundation.layout.statusBars
  import androidx.compose.foundation.layout.widthIn
  import androidx.compose.material.icons.Icons
@@ -304,7 +374,7 @@ index 9b12c4e..23a0c2d 100644
  import androidx.compose.ui.Alignment
  import androidx.compose.ui.Modifier
  import androidx.compose.ui.draw.alpha
-@@ -24,6 +26,7 @@ import androidx.compose.ui.graphics.Color
+@@ -24,16 +27,20 @@ import androidx.compose.ui.graphics.Color
  import androidx.compose.ui.input.nestedscroll.nestedScroll
  import androidx.compose.ui.unit.dp
  import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -312,15 +382,20 @@ index 9b12c4e..23a0c2d 100644
  import com.nuvio.app.core.ui.LocalNuvioBottomNavigationOverlayPadding
  import com.nuvio.app.core.ui.LocalNuvioNavBarScrollState
  import com.nuvio.app.core.ui.NuvioNavBarScrollState
-@@ -31,6 +34,7 @@ import com.nuvio.app.core.ui.NuvioClassicNavigationBar
+ import com.nuvio.app.core.ui.NuvioClassicNavigationBar
  import com.nuvio.app.core.ui.FloatingNavigationBar
  import com.nuvio.app.core.ui.FloatingNavigationItem
++import com.nuvio.app.core.ui.floatingNavigationBarPadding
  import com.nuvio.app.core.ui.PlatformBackHandler
 +import com.nuvio.app.core.ui.nuvio
  import com.nuvio.app.core.ui.rememberNuvioNavBarScrollState
  import com.nuvio.app.features.profiles.NuvioProfile
  import com.nuvio.app.features.profiles.ProfileSwitcherTab
-@@ -78,6 +82,12 @@ internal fun MainTabsDestination(
++import com.nuvio.app.features.settings.NavBarPosition
+ import com.nuvio.app.features.settings.NavBarStyle
+ import com.nuvio.app.features.settings.ThemeSettingsRepository
+ import dev.chrisbanes.haze.hazeSource
+@@ -78,7 +85,21 @@ internal fun MainTabsDestination(
          val tabsRouteActive = rootRouteActive
          val navBarScrollState = rememberNuvioNavBarScrollState()
          val navBarHazeState = rememberHazeState()
@@ -331,9 +406,18 @@ index 9b12c4e..23a0c2d 100644
 +        val extraJellyfinEnabled = com.nuvio.app.features.jellyfin.JellyfinPlatform.navEntryEnabled
 +        var extraMenuOpen by remember { mutableStateOf(false) }
          val navBarStyleSetting by remember { ThemeSettingsRepository.navBarStyle }.collectAsStateWithLifecycle()
++        val navBarPositionSetting by remember { ThemeSettingsRepository.navBarPosition }.collectAsStateWithLifecycle()
++        // Fork: the floating panel can live at the top of the phone screen (Settings →
++        // navigation bar → Position). Tablets already run a top bar, and the classic bar
++        // is a solid bottom bar by design, so only the phone pill bar honors the setting.
++        val navBarAtTop = !isTabletLayout &&
++            !useNativeBottomTabs &&
++            navBarStyleSetting != NavBarStyle.CLASSIC &&
++            navBarPositionSetting == NavBarPosition.TOP
          val navBarGlowEnabled by ThemeSettingsRepository.navBarGlowEnabled.collectAsStateWithLifecycle()
          val floatingNavigationItems = listOfNotNull(
-@@ -99,13 +109,27 @@ internal fun MainTabsDestination(
+             FloatingNavigationItem(
+@@ -99,13 +120,30 @@ internal fun MainTabsDestination(
                  drawable = Res.drawable.sidebar_library,
                  label = stringResource(Res.string.compose_nav_library),
              ),
@@ -351,23 +435,35 @@ index 9b12c4e..23a0c2d 100644
 +                    onClick = { extraMenuOpen = true },
 +                    label = "Extra",
 +                    content = { _ ->
++                        // The bar's JellyTabRow renders item.label for every non-compact tab
++                        // (that is where the Profile label comes from too), so the content
++                        // visual must stay icon-only or the tab shows "Extra" twice.
 +                        ExtraNavTabContent(
 +                            selected = extraMenuOpen,
 +                            expanded = extraMenuOpen,
 +                            showLiveTv = extraLiveTvEnabled,
 +                            showJellyfin = extraJellyfinEnabled,
-+                            popupBelowAnchor = isTabletLayout,
++                            popupBelowAnchor = isTabletLayout || navBarAtTop,
 +                            onDismiss = { extraMenuOpen = false },
 +                            onLiveTv = { com.nuvio.app.features.livetv.LiveTvLauncher.open() },
 +                            onJellyfin = { com.nuvio.app.features.jellyfin.JellyfinLauncher.open() },
 +                            iconSize = 28.dp,
-+                            showLabel = true,
++                            showLabel = false,
 +                        )
 +                    },
                  )
              } else {
                  null
-@@ -154,12 +178,26 @@ internal fun MainTabsDestination(
+@@ -121,7 +159,7 @@ internal fun MainTabsDestination(
+                         onProfileSelected = onProfileSelected,
+                         onAddProfileRequested = onAddProfileRequested,
+                         hazeState = navBarHazeState,
+-                        popupBelowAnchor = isTabletLayout,
++                        popupBelowAnchor = isTabletLayout || navBarAtTop,
+                     )
+                 },
+             ),
+@@ -154,12 +192,26 @@ internal fun MainTabsDestination(
                              icon = Res.drawable.sidebar_library,
                              contentDescription = stringResource(Res.string.compose_nav_library),
                          )
@@ -399,6 +495,60 @@ index 9b12c4e..23a0c2d 100644
                              )
                          }
                          NavItem(
+@@ -179,7 +231,17 @@ internal fun MainTabsDestination(
+         ) { innerPadding ->
+             Box(modifier = Modifier.fillMaxSize()) {
+                 CompositionLocalProvider(
+-                    LocalNuvioBottomNavigationOverlayPadding provides if (useNativeBottomTabs) 49.dp else if (!isTabletLayout && navBarStyleSetting != NavBarStyle.CLASSIC) 72.dp else 0.dp,
++                    // The overlay padding keeps scrollable content clear of the floating bar.
++                    // Top position frees the bottom edge (content clears the system gesture
++                    // inset via plain padding below) and relies on the bar's blur for the top,
++                    // like the tablet layout does.
++                    LocalNuvioBottomNavigationOverlayPadding provides if (useNativeBottomTabs) {
++                        49.dp
++                    } else if (navBarAtTop || (isTabletLayout || navBarStyleSetting == NavBarStyle.CLASSIC)) {
++                        0.dp
++                    } else {
++                        72.dp
++                    },
+                     LocalNuvioNavBarScrollState provides navBarScrollState,
+                 ) {
+                     AppTabHost(
+@@ -191,6 +253,13 @@ internal fun MainTabsDestination(
+                             .fillMaxSize()
+                             .then(if (isTabletLayout || navBarStyleSetting != NavBarStyle.CLASSIC) Modifier.hazeSource(state = navBarHazeState) else Modifier)
+                             .then(if (navBarStyleSetting == NavBarStyle.ADAPTIVE) Modifier.nestedScroll(navBarScrollState.nestedScrollConnection) else Modifier)
++                            .then(
++                                if (navBarAtTop) {
++                                    Modifier.padding(bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding())
++                                } else {
++                                    Modifier
++                                },
++                            )
+                             .padding(innerPadding),
+                     )
+                 }
+@@ -218,9 +287,19 @@ internal fun MainTabsDestination(
+                         else -> {}
+                     }
+                     FloatingNavigationBar(
+-                        modifier = Modifier.align(Alignment.BottomCenter),
++                        modifier = Modifier.align(if (navBarAtTop) Alignment.TopCenter else Alignment.BottomCenter),
+                         scrollState = navBarScrollState,
+                         hazeState = navBarHazeState,
++                        // The default padding reserves the bottom system inset; a top bar
++                        // mirrors the tablet padding instead (status bar + gap).
++                        contentPadding = if (navBarAtTop) {
++                            PaddingValues(
++                                top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 10.dp,
++                                bottom = 8.dp,
++                            )
++                        } else {
++                            floatingNavigationBarPadding()
++                        },
+                         items = floatingNavigationItems,
+                         glowEnabled = navBarGlowEnabled,
+                     )
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/ExtraNavTab.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/ExtraNavTab.kt
 new file mode 100644
 index 0000000..2067ba3
@@ -2843,6 +2993,482 @@ index 027eed9..ab82908 100644
  
              try {
                  for (result in resultChannel) {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraSettingsPage.kt
+new file mode 100644
+index 0000000..a610c8d
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraSettingsPage.kt
+@@ -0,0 +1,227 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.lazy.LazyListScope
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material3.Button
++import androidx.compose.material3.ButtonDefaults
++import androidx.compose.material3.CircularProgressIndicator
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.OutlinedTextField
++import androidx.compose.material3.OutlinedTextFieldDefaults
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.saveable.rememberSaveable
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.input.PasswordVisualTransformation
++import androidx.compose.ui.unit.dp
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.core.ui.NuvioInputField
++import com.nuvio.app.features.jellyfin.JellyfinLauncher
++import com.nuvio.app.features.jellyfin.JellyfinRepository
++import com.nuvio.app.features.jellyfin.JellyfinUiState
++import com.nuvio.app.features.livetv.LiveTvEpgRepository
++import com.nuvio.app.features.livetv.LiveTvLauncher
++import com.nuvio.app.features.livetv.LiveTvRepository
++
++/**
++ * Fork settings page that groups the two fork features (Jellyfin + Live TV) under one
++ * "Extra" entry. Controls bind straight to the feature repositories — the same objects the
++ * feature screens observe, so sign-in and toggles here are reflected there immediately.
++ * Strings are hardcoded English on purpose (fork-only page, keeps the patch lean).
++ */
++internal fun LazyListScope.extraSettingsContent(isTablet: Boolean) {
++    item { ExtraJellyfinSection(isTablet = isTablet) }
++    item { ExtraLiveTvSection(isTablet = isTablet) }
++}
++
++@Composable
++private fun ExtraJellyfinSection(isTablet: Boolean) {
++    LaunchedEffect(Unit) { JellyfinRepository.initialize() }
++    val state by JellyfinRepository.uiState.collectAsStateWithLifecycle()
++    val session = state.session
++    SettingsSection(title = "Jellyfin", isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            if (session == null) {
++                ExtraJellyfinSignIn(state = state, isTablet = isTablet)
++            } else {
++                SettingsNavigationRow(
++                    title = "Signed in as ${session.userName}",
++                    description = session.serverUrl,
++                    isTablet = isTablet,
++                    onClick = { JellyfinLauncher.open() },
++                )
++                SettingsGroupDivider(isTablet = isTablet)
++                SettingsNavigationRow(
++                    title = "Open Jellyfin",
++                    description = "Browse libraries, resume and play",
++                    isTablet = isTablet,
++                    onClick = { JellyfinLauncher.open() },
++                )
++                SettingsGroupDivider(isTablet = isTablet)
++                SettingsNavigationRow(
++                    title = "Sign out",
++                    description = "Hides Jellyfin libraries, search results and streams",
++                    isTablet = isTablet,
++                    onClick = { JellyfinRepository.signOut() },
++                )
++            }
++        }
++        if (session != null && state.libraries.isNotEmpty()) {
++            Spacer(modifier = Modifier.height(10.dp))
++            Text(
++                text = "Libraries",
++                style = MaterialTheme.typography.titleSmall,
++                fontWeight = FontWeight.SemiBold,
++                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
++            )
++            SettingsGroup(isTablet = isTablet) {
++                state.libraries.forEachIndexed { index, library ->
++                    if (index > 0) SettingsGroupDivider(isTablet = isTablet)
++                    SettingsSwitchRow(
++                        title = library.name,
++                        description = "Show this library in Jellyfin",
++                        checked = library.id !in state.hiddenLibraryIds,
++                        isTablet = isTablet,
++                        onCheckedChange = { JellyfinRepository.toggleLibraryHidden(library.id) },
++                    )
++                }
++            }
++        }
++    }
++}
++
++@Composable
++private fun ExtraJellyfinSignIn(state: JellyfinUiState, isTablet: Boolean) {
++    val tokens = MaterialTheme.nuvio
++    var serverUrl by rememberSaveable { mutableStateOf("") }
++    var username by rememberSaveable { mutableStateOf("") }
++    var password by rememberSaveable { mutableStateOf("") }
++    Column(
++        modifier = Modifier
++            .fillMaxWidth()
++            .padding(horizontal = 16.dp, vertical = 12.dp),
++        verticalArrangement = Arrangement.spacedBy(10.dp),
++    ) {
++        Text(
++            text = "Connect your Jellyfin server",
++            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
++            color = tokens.colors.textPrimary,
++        )
++        NuvioInputField(
++            value = serverUrl,
++            onValueChange = { serverUrl = it },
++            placeholder = "Server address (https://…)",
++        )
++        NuvioInputField(
++            value = username,
++            onValueChange = { username = it },
++            placeholder = "Username",
++        )
++        OutlinedTextField(
++            value = password,
++            onValueChange = { password = it },
++            modifier = Modifier.fillMaxWidth(),
++            singleLine = true,
++            shape = RoundedCornerShape(12.dp),
++            placeholder = {
++                Text(
++                    text = "Password",
++                    color = tokens.colors.textMuted,
++                    style = MaterialTheme.typography.bodyLarge,
++                )
++            },
++            visualTransformation = PasswordVisualTransformation(),
++            textStyle = MaterialTheme.typography.bodyLarge.copy(color = tokens.colors.textPrimary),
++            colors = OutlinedTextFieldDefaults.colors(
++                focusedBorderColor = tokens.colors.borderFocus,
++                unfocusedBorderColor = tokens.colors.borderDefault,
++                focusedContainerColor = tokens.colors.surfaceElevated,
++                unfocusedContainerColor = tokens.colors.surfaceElevated,
++                cursorColor = tokens.colors.accent,
++            ),
++        )
++        Button(
++            enabled = !state.isLoadingSession && serverUrl.isNotBlank() && username.isNotBlank(),
++            onClick = { JellyfinRepository.signIn(serverUrl, username, password) },
++            modifier = Modifier.fillMaxWidth(),
++            colors = ButtonDefaults.buttonColors(containerColor = tokens.colors.accent),
++        ) {
++            if (state.isLoadingSession) {
++                CircularProgressIndicator(
++                    modifier = Modifier.size(16.dp),
++                    strokeWidth = 2.dp,
++                    color = Color.White,
++                )
++            } else {
++                Text(text = "Sign in")
++            }
++        }
++        if (state.sessionError != null) {
++            Text(
++                text = state.sessionError.orEmpty(),
++                style = MaterialTheme.typography.bodySmall,
++                color = MaterialTheme.colorScheme.error,
++            )
++        }
++    }
++}
++
++@Composable
++private fun ExtraLiveTvSection(isTablet: Boolean) {
++    LaunchedEffect(Unit) {
++        LiveTvRepository.initialize()
++        LiveTvEpgRepository.initialize()
++    }
++    val state by LiveTvRepository.uiState.collectAsStateWithLifecycle()
++    val epgState by LiveTvEpgRepository.uiState.collectAsStateWithLifecycle()
++    SettingsSection(title = "Live TV", isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            SettingsSwitchRow(
++                title = "Hide adult channels",
++                description = "Filters adult channels out of the Live TV list",
++                checked = state.hideAdultChannels,
++                isTablet = isTablet,
++                onCheckedChange = { LiveTvRepository.setHideAdultChannels(it) },
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsNavigationRow(
++                title = "Open Live TV",
++                description = "Channels, categories, addons and favorites",
++                isTablet = isTablet,
++                onClick = { LiveTvLauncher.open() },
++            )
++        }
++        Spacer(modifier = Modifier.height(10.dp))
++        Text(
++            text = "TV guide sources (XMLTV)",
++            style = MaterialTheme.typography.titleSmall,
++            fontWeight = FontWeight.SemiBold,
++            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
++        )
++        SettingsGroup(isTablet = isTablet) {
++            epgState.sources.forEachIndexed { index, source ->
++                if (index > 0) SettingsGroupDivider(isTablet = isTablet)
++                SettingsSwitchRow(
++                    title = source.name,
++                    description = "Episode guide for matching channels",
++                    checked = source.isEnabled,
++                    isTablet = isTablet,
++                    onCheckedChange = { LiveTvEpgRepository.toggleSource(source.id) },
++                )
++            }
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NavBarStyle.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NavBarStyle.kt
+index fd4842b..3be001a 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NavBarStyle.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NavBarStyle.kt
+@@ -22,3 +22,17 @@ enum class NavBarStyle(
+             entries.firstOrNull { it.key.equals(key, ignoreCase = true) } ?: ADAPTIVE
+     }
+ }
++
++/** Where the navigation panel sits on the phone screen. Classic bar stays bottom-only. */
++enum class NavBarPosition(
++    val key: String,
++) {
++    BOTTOM("bottom"),
++    TOP("top"),
++    ;
++
++    companion object {
++        fun fromKey(key: String?): NavBarPosition =
++            entries.firstOrNull { it.key.equals(key, ignoreCase = true) } ?: BOTTOM
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NavigationBarSettingsSheet.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NavigationBarSettingsSheet.kt
+index 9d514c8..c1f9369 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NavigationBarSettingsSheet.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NavigationBarSettingsSheet.kt
+@@ -13,7 +13,9 @@ import androidx.compose.material3.MaterialTheme
+ import androidx.compose.material3.Text
+ import androidx.compose.material3.rememberModalBottomSheetState
+ import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.rememberCoroutineScope
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.semantics.Role
+ import androidx.compose.ui.semantics.role
+@@ -43,6 +45,7 @@ internal fun NavigationBarSettingsSheet(
+ ) {
+     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+     val scope = rememberCoroutineScope()
++    val navBarPosition by ThemeSettingsRepository.navBarPosition.collectAsStateWithLifecycle()
+     val dismiss: () -> Unit = {
+         scope.launch { dismissNuvioBottomSheet(sheetState, onDismiss) }
+     }
+@@ -77,6 +80,38 @@ internal fun NavigationBarSettingsSheet(
+                     }
+                 }
+             }
++            item {
++                // Fork: the floating panel can sit at the top or the bottom of the phone
++                // screen. The classic bar is a solid bottom bar by design, so the section
++                // only applies to the pill styles.
++                AnimatedVisibility(selectedStyle != NavBarStyle.CLASSIC) {
++                    Column {
++                        NuvioBottomSheetDivider()
++                        Text(
++                            text = "Position",
++                            style = MaterialTheme.typography.titleSmall,
++                            fontWeight = FontWeight.SemiBold,
++                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
++                        )
++                        NavBarPosition.entries.forEach { position ->
++                            NuvioBottomSheetActionRow(
++                                title = if (position == NavBarPosition.BOTTOM) "Bottom" else "Top",
++                                onClick = { ThemeSettingsRepository.setNavBarPosition(position) },
++                                selected = position == navBarPosition,
++                                modifier = Modifier.semantics {
++                                    role = Role.RadioButton
++                                    selected = position == navBarPosition
++                                },
++                                trailingContent = {
++                                    if (position == navBarPosition) {
++                                        Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary)
++                                    }
++                                },
++                            )
++                        }
++                    }
++                }
++            }
+             item {
+                 AnimatedVisibility(floatingNavigationGlowSupported && selectedStyle != NavBarStyle.CLASSIC) {
+                     Column {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
+index 7f209ac..430ad24 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
+@@ -17,6 +17,7 @@ import nuvio.composeapp.generated.resources.compose_settings_page_appearance
+ import nuvio.composeapp.generated.resources.compose_settings_page_content_discovery
+ import nuvio.composeapp.generated.resources.compose_settings_page_debrid
+ import nuvio.composeapp.generated.resources.compose_settings_page_continue_watching
++import nuvio.composeapp.generated.resources.extra_settings_title
+ import nuvio.composeapp.generated.resources.compose_settings_page_homescreen
+ import nuvio.composeapp.generated.resources.compose_settings_page_integrations
+ import nuvio.composeapp.generated.resources.compose_settings_page_licenses_attributions
+@@ -156,6 +157,12 @@ internal enum class SettingsPage(
+         category = SettingsCategory.Account,
+         parentPage = Root,
+     ),
++    Extra(
++        // Fork page: Live TV + Jellyfin settings under one entry.
++        titleRes = Res.string.extra_settings_title,
++        category = SettingsCategory.General,
++        parentPage = Root,
++    ),
+ }
+ 
+ internal val SettingsPage.opensInlineOnTablet: Boolean
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt
+index 9fc7517..01ebb5f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt
+@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.LazyListScope
+ import androidx.compose.material.icons.Icons
+ import androidx.compose.material.icons.filled.Sync
+ import androidx.compose.material.icons.rounded.AccountCircle
++import androidx.compose.material.icons.rounded.Apps
+ import androidx.compose.material.icons.rounded.BugReport
+ import androidx.compose.material.icons.rounded.CloudDownload
+ import androidx.compose.material.icons.rounded.Extension
+@@ -74,6 +75,7 @@ internal fun LazyListScope.settingsRootContent(
+     onNotificationsClick: () -> Unit,
+     onContentDiscoveryClick: () -> Unit,
+     onIntegrationsClick: () -> Unit,
++    onExtraClick: (() -> Unit)? = null,
+     onTrackingClick: () -> Unit,
+     onSupportersContributorsClick: () -> Unit,
+     onLicensesAttributionsClick: () -> Unit,
+@@ -161,6 +163,17 @@ internal fun LazyListScope.settingsRootContent(
+                         isTablet = isTablet,
+                         onClick = onIntegrationsClick,
+                     )
++                    // Fork: Live TV + Jellyfin settings under one "Extra" entry.
++                    if (onExtraClick != null) {
++                        SettingsGroupDivider(isTablet = isTablet)
++                        SettingsNavigationRow(
++                            title = "Extra",
++                            description = "Live TV and Jellyfin",
++                            icon = Icons.Rounded.Apps,
++                            isTablet = isTablet,
++                            onClick = onExtraClick,
++                        )
++                    }
+                     SettingsGroupDivider(isTablet = isTablet)
+                     SettingsNavigationRow(
+                         title = stringResource(Res.string.compose_settings_page_notifications),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
+index 0ec0239..73aada5 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
+@@ -697,6 +697,7 @@ private fun MobileSettingsScreen(
+                             onNotificationsClick = { onPageChange(SettingsPage.Notifications) },
+                             onContentDiscoveryClick = { onPageChange(SettingsPage.ContentDiscovery) },
+                             onIntegrationsClick = { onPageChange(SettingsPage.Integrations) },
++                            onExtraClick = { onPageChange(SettingsPage.Extra) },
+                             onTrackingClick = { onPageChange(SettingsPage.TraktAuthentication) },
+                             onSupportersContributorsClick = onSupportersContributorsClick,
+                             onLicensesAttributionsClick = onLicensesAttributionsClick,
+@@ -837,6 +838,9 @@ private fun MobileSettingsScreen(
+                     commentsEnabled = traktCommentsEnabled,
+                     onCommentsEnabledChange = TraktCommentsSettings::setEnabled,
+                 )
++                SettingsPage.Extra -> extraSettingsContent(
++                    isTablet = false,
++                )
+             }
+         }
+     }
+@@ -1118,6 +1122,7 @@ private fun TabletSettingsScreen(
+                                 onNotificationsClick = { openInlinePage(SettingsPage.Notifications) },
+                                 onContentDiscoveryClick = { openInlinePage(SettingsPage.ContentDiscovery) },
+                                 onIntegrationsClick = { openInlinePage(SettingsPage.Integrations) },
++                                onExtraClick = { openInlinePage(SettingsPage.Extra) },
+                                 onTrackingClick = { openInlinePage(SettingsPage.TraktAuthentication) },
+                                 onSupportersContributorsClick = { openInlinePage(SettingsPage.SupportersContributors) },
+                                 onLicensesAttributionsClick = { openInlinePage(SettingsPage.LicensesAttributions) },
+@@ -1262,6 +1267,9 @@ private fun TabletSettingsScreen(
+                         commentsEnabled = traktCommentsEnabled,
+                         onCommentsEnabledChange = TraktCommentsSettings::setEnabled,
+                     )
++                    SettingsPage.Extra -> extraSettingsContent(
++                        isTablet = true,
++                    )
+                 }
+             }
+         }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ThemeSettingsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ThemeSettingsRepository.kt
+index 3758104..470a724 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ThemeSettingsRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ThemeSettingsRepository.kt
+@@ -40,6 +40,9 @@ object ThemeSettingsRepository {
+     private val _navBarStyle = MutableStateFlow(NavBarStyle.ADAPTIVE)
+     val navBarStyle: StateFlow<NavBarStyle> = _navBarStyle.asStateFlow()
+ 
++    private val _navBarPosition = MutableStateFlow(NavBarPosition.BOTTOM)
++    val navBarPosition: StateFlow<NavBarPosition> = _navBarPosition.asStateFlow()
++
+     private val _navBarGlowEnabled = MutableStateFlow(true)
+     val navBarGlowEnabled: StateFlow<Boolean> = _navBarGlowEnabled.asStateFlow()
+ 
+@@ -69,6 +72,7 @@ object ThemeSettingsRepository {
+         _selectedAppLanguage.value = AppLanguage.DEVICE
+         _navBarGlowEnabled.value = true
+         _navBarStyle.value = NavBarStyle.ADAPTIVE
++        _navBarPosition.value = NavBarPosition.BOTTOM
+     }
+ 
+     private fun loadFromDisk() {
+@@ -95,6 +99,7 @@ object ThemeSettingsRepository {
+         _selectedAppLanguage.value = appLanguage
+         _navBarGlowEnabled.value = ThemeSettingsStorage.loadNavBarGlowEnabled() ?: true
+         _navBarStyle.value = NavBarStyle.fromKey(ThemeSettingsStorage.loadNavBarStyle())
++        _navBarPosition.value = NavBarPosition.fromKey(ThemeSettingsStorage.loadNavBarPosition())
+     }
+ 
+     fun setTheme(theme: AppTheme) {
+@@ -148,6 +153,13 @@ object ThemeSettingsRepository {
+         ThemeSettingsStorage.saveNavBarStyle(style.key)
+     }
+ 
++    fun setNavBarPosition(position: NavBarPosition) {
++        ensureLoaded()
++        if (_navBarPosition.value == position) return
++        _navBarPosition.value = position
++        ThemeSettingsStorage.saveNavBarPosition(position.key)
++    }
++
+     fun setNavBarGlowEnabled(enabled: Boolean) {
+         ensureLoaded()
+         if (_navBarGlowEnabled.value == enabled) return
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ThemeSettingsStorage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ThemeSettingsStorage.kt
+index 658fe89..9dcf9e2 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ThemeSettingsStorage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ThemeSettingsStorage.kt
+@@ -16,6 +16,8 @@ internal expect object ThemeSettingsStorage {
+     fun applySelectedAppLanguage(languageCode: String)
+     fun loadNavBarStyle(): String?
+     fun saveNavBarStyle(styleKey: String)
++    fun loadNavBarPosition(): String?
++    fun saveNavBarPosition(positionKey: String)
+     fun loadNavBarGlowEnabled(): Boolean?
+     fun saveNavBarGlowEnabled(enabled: Boolean)
+     fun exportToSyncPayload(): JsonObject
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt
 index b88346f..b2296dd 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt
@@ -2908,3 +3534,53 @@ index 0000000..0a9fc37
 +        if (value == null) values.remove(key) else values[key] = value
 +    }
 +}
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/settings/ThemeSettingsStorage.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/settings/ThemeSettingsStorage.ios.kt
+index 9dfea14..879b384 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/settings/ThemeSettingsStorage.ios.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/settings/ThemeSettingsStorage.ios.kt
+@@ -17,6 +17,7 @@ actual object ThemeSettingsStorage {
+     private const val liquidGlassNativeTabBarEnabledKey = "liquid_glass_native_tab_bar_enabled"
+     private const val selectedAppLanguageKey = "selected_app_language"
+     private const val navBarStyleKey = "nav_bar_style"
++    private const val navBarPositionKey = "nav_bar_position"
+     private const val navBarGlowEnabledKey = "nav_bar_glow_enabled"
+     private val profileScopedSyncKeys = listOf(
+         selectedThemeKey,
+@@ -25,6 +26,7 @@ actual object ThemeSettingsStorage {
+         navBarGlowEnabledKey,
+         liquidGlassNativeTabBarEnabledKey,
+         navBarStyleKey,
++        navBarPositionKey,
+     )
+ 
+     actual fun loadSelectedTheme(): String? =
+@@ -122,6 +124,13 @@ actual object ThemeSettingsStorage {
+         NSUserDefaults.standardUserDefaults.setObject(styleKey, forKey = ProfileScopedKey.of(navBarStyleKey))
+     }
+ 
++    actual fun loadNavBarPosition(): String? =
++        NSUserDefaults.standardUserDefaults.stringForKey(ProfileScopedKey.of(navBarPositionKey))
++
++    actual fun saveNavBarPosition(positionKey: String) {
++        NSUserDefaults.standardUserDefaults.setObject(positionKey, forKey = ProfileScopedKey.of(navBarPositionKey))
++    }
++
+     actual fun exportToSyncPayload(): JsonObject = buildJsonObject {
+         loadSelectedTheme()?.let { put(selectedThemeKey, encodeSyncString(it)) }
+         loadCustomThemeColors()?.let { put(customThemeColorsKey, encodeSyncString(it)) }
+@@ -129,6 +138,7 @@ actual object ThemeSettingsStorage {
+         loadAmoledEnabled()?.let { put(amoledEnabledKey, encodeSyncBoolean(it)) }
+         loadLiquidGlassNativeTabBarEnabled()?.let { put(liquidGlassNativeTabBarEnabledKey, encodeSyncBoolean(it)) }
+         loadNavBarStyle()?.let { put(navBarStyleKey, encodeSyncString(it)) }
++        loadNavBarPosition()?.let { put(navBarPositionKey, encodeSyncString(it)) }
+     }
+ 
+     actual fun replaceFromSyncPayload(payload: JsonObject) {
+@@ -142,6 +152,7 @@ actual object ThemeSettingsStorage {
+         payload.decodeSyncBoolean(amoledEnabledKey)?.let(::saveAmoledEnabled)
+         payload.decodeSyncBoolean(liquidGlassNativeTabBarEnabledKey)?.let(::saveLiquidGlassNativeTabBarEnabled)
+         payload.decodeSyncString(navBarStyleKey)?.let(::saveNavBarStyle)
++        payload.decodeSyncString(navBarPositionKey)?.let(::saveNavBarPosition)
+         applySelectedAppLanguage(loadSelectedAppLanguage() ?: AppLanguage.DEVICE.code)
+     }
+ }
