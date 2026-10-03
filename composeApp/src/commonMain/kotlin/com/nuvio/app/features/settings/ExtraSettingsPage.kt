@@ -29,6 +29,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nuvio.app.core.ui.NuvioInputField
+import com.nuvio.app.core.ui.nuvio
 import com.nuvio.app.features.jellyfin.JellyfinLauncher
 import com.nuvio.app.features.jellyfin.JellyfinRepository
 import com.nuvio.app.features.jellyfin.JellyfinUiState
