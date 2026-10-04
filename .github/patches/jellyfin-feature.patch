@@ -3385,8 +3385,9 @@ index 0ec0239..73aada5 100644
                              onTrackingClick = { onPageChange(SettingsPage.TraktAuthentication) },
                              onSupportersContributorsClick = onSupportersContributorsClick,
                              onLicensesAttributionsClick = onLicensesAttributionsClick,
-@@ -837,6 +838,9 @@ private fun MobileSettingsScreen(
+@@ -837,7 +838,10 @@ private fun MobileSettingsScreen(
                      commentsEnabled = traktCommentsEnabled,
+                     mdbListConnected = mdbListConnected,
                      onCommentsEnabledChange = TraktCommentsSettings::setEnabled,
                  )
 +                SettingsPage.Extra -> extraSettingsContent(
@@ -3403,8 +3404,9 @@ index 0ec0239..73aada5 100644
                                  onTrackingClick = { openInlinePage(SettingsPage.TraktAuthentication) },
                                  onSupportersContributorsClick = { openInlinePage(SettingsPage.SupportersContributors) },
                                  onLicensesAttributionsClick = { openInlinePage(SettingsPage.LicensesAttributions) },
-@@ -1262,6 +1267,9 @@ private fun TabletSettingsScreen(
+@@ -1262,7 +1267,10 @@ private fun TabletSettingsScreen(
                          commentsEnabled = traktCommentsEnabled,
+                         mdbListConnected = mdbListConnected,
                          onCommentsEnabledChange = TraktCommentsSettings::setEnabled,
                      )
 +                    SettingsPage.Extra -> extraSettingsContent(
