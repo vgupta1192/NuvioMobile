@@ -288,10 +288,17 @@ private fun ExoPlayerSurface(
     }
     var probeAttempted by remember(playerSourceKey) { mutableStateOf(false) }
 
-    val extractorsFactory = remember {
-        DefaultExtractorsFactory()
+    val extractorsFactory = remember(sourceUrl, sanitizedSourceHeaders) {
+        val baseExtractors = DefaultExtractorsFactory()
             .setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS)
             .setTsExtractorTimestampSearchBytes(1500 * TsExtractor.TS_PACKET_SIZE)
+        autoSyncExtractorsFactoryOrNull(
+            delegate = baseExtractors,
+            sourceUrl = sourceUrl,
+            sourceHeaders = sanitizedSourceHeaders,
+            scope = coroutineScope,
+            context = context,
+        ) ?: baseExtractors
     }
     val dataSourceFactory = remember(
         context,
@@ -707,8 +714,7 @@ private fun ExoPlayerSurface(
     }
 
     LaunchedEffect(exoPlayer) {
-        onControllerReady(
-            object : PlayerEngineController {
+        val baseController = object : PlayerEngineController {
                 override fun play() {
                     exoPlayer.playWhenReady = true
                     exoPlayer.play()
@@ -917,7 +923,21 @@ private fun ExoPlayerSurface(
                     subtitleDelayMs = delayMs.coerceIn(SUBTITLE_DELAY_MIN_MS, SUBTITLE_DELAY_MAX_MS)
                 }
             }
-        )
+
+            onControllerReady(
+                AutoSyncExoPlayerController(
+                    base = baseController,
+                    exoPlayer = exoPlayer,
+                    sidecar = sidecarController,
+                    scope = coroutineScope,
+                    context = context,
+                    sourceUrl = { sourceUrl },
+                    sourceHeaders = { sanitizedSourceHeaders },
+                    subtitleCandidates = { externalSubtitles },
+                    useLibass = { useLibass },
+                    resetSubtitleDelay = { subtitleDelayMs = 0 },
+                ),
+            )
     }
 
     LaunchedEffect(exoPlayer) {
