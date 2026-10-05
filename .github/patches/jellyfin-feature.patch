@@ -349,7 +349,7 @@ index d7f268d..32f9a4f 100644
                      DownloadsDestination(
                          route = route,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt
-index 9b12c4e..c18bda0 100644
+index 9b12c4e..8095184 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt
 @@ -6,17 +6,20 @@ import androidx.compose.foundation.layout.PaddingValues
@@ -374,18 +374,20 @@ index 9b12c4e..c18bda0 100644
  import androidx.compose.ui.Alignment
  import androidx.compose.ui.Modifier
  import androidx.compose.ui.draw.alpha
-@@ -24,16 +27,20 @@ import androidx.compose.ui.graphics.Color
+@@ -24,16 +27,22 @@ import androidx.compose.ui.graphics.Color
  import androidx.compose.ui.input.nestedscroll.nestedScroll
  import androidx.compose.ui.unit.dp
  import androidx.lifecycle.compose.collectAsStateWithLifecycle
 +import com.nuvio.app.core.ui.ExtraNavTabContent
  import com.nuvio.app.core.ui.LocalNuvioBottomNavigationOverlayPadding
  import com.nuvio.app.core.ui.LocalNuvioNavBarScrollState
++import com.nuvio.app.core.ui.LocalNuvioTopNavBarActive
  import com.nuvio.app.core.ui.NuvioNavBarScrollState
  import com.nuvio.app.core.ui.NuvioClassicNavigationBar
  import com.nuvio.app.core.ui.FloatingNavigationBar
  import com.nuvio.app.core.ui.FloatingNavigationItem
 +import com.nuvio.app.core.ui.floatingNavigationBarPadding
++import com.nuvio.app.core.ui.nuvioTopNavBarReservedHeight
  import com.nuvio.app.core.ui.PlatformBackHandler
 +import com.nuvio.app.core.ui.nuvio
  import com.nuvio.app.core.ui.rememberNuvioNavBarScrollState
@@ -395,7 +397,7 @@ index 9b12c4e..c18bda0 100644
  import com.nuvio.app.features.settings.NavBarStyle
  import com.nuvio.app.features.settings.ThemeSettingsRepository
  import dev.chrisbanes.haze.hazeSource
-@@ -78,7 +85,21 @@ internal fun MainTabsDestination(
+@@ -78,7 +87,21 @@ internal fun MainTabsDestination(
          val tabsRouteActive = rootRouteActive
          val navBarScrollState = rememberNuvioNavBarScrollState()
          val navBarHazeState = rememberHazeState()
@@ -417,7 +419,7 @@ index 9b12c4e..c18bda0 100644
          val navBarGlowEnabled by ThemeSettingsRepository.navBarGlowEnabled.collectAsStateWithLifecycle()
          val floatingNavigationItems = listOfNotNull(
              FloatingNavigationItem(
-@@ -99,13 +120,30 @@ internal fun MainTabsDestination(
+@@ -99,13 +122,30 @@ internal fun MainTabsDestination(
                  drawable = Res.drawable.sidebar_library,
                  label = stringResource(Res.string.compose_nav_library),
              ),
@@ -454,7 +456,7 @@ index 9b12c4e..c18bda0 100644
                  )
              } else {
                  null
-@@ -121,7 +159,7 @@ internal fun MainTabsDestination(
+@@ -121,7 +161,7 @@ internal fun MainTabsDestination(
                          onProfileSelected = onProfileSelected,
                          onAddProfileRequested = onAddProfileRequested,
                          hazeState = navBarHazeState,
@@ -463,7 +465,7 @@ index 9b12c4e..c18bda0 100644
                      )
                  },
              ),
-@@ -154,12 +192,26 @@ internal fun MainTabsDestination(
+@@ -154,12 +194,26 @@ internal fun MainTabsDestination(
                              icon = Res.drawable.sidebar_library,
                              contentDescription = stringResource(Res.string.compose_nav_library),
                          )
@@ -495,15 +497,24 @@ index 9b12c4e..c18bda0 100644
                              )
                          }
                          NavItem(
-@@ -179,7 +231,17 @@ internal fun MainTabsDestination(
+@@ -178,9 +232,28 @@ internal fun MainTabsDestination(
+             },
          ) { innerPadding ->
              Box(modifier = Modifier.fillMaxSize()) {
++                // Fork: a top-docked bar floats over the screen titles, so reserve its whole
++                // footprint above the content instead. Screens see LocalNuvioTopNavBarActive
++                // and drop their own status-bar padding (no double gap under the bar).
++                val topNavBarClearance = if (navBarAtTop) {
++                    WindowInsets.statusBars.asPaddingValues().calculateTopPadding() +
++                        nuvioTopNavBarReservedHeight
++                } else {
++                    0.dp
++                }
                  CompositionLocalProvider(
 -                    LocalNuvioBottomNavigationOverlayPadding provides if (useNativeBottomTabs) 49.dp else if (!isTabletLayout && navBarStyleSetting != NavBarStyle.CLASSIC) 72.dp else 0.dp,
 +                    // The overlay padding keeps scrollable content clear of the floating bar.
 +                    // Top position frees the bottom edge (content clears the system gesture
-+                    // inset via plain padding below) and relies on the bar's blur for the top,
-+                    // like the tablet layout does.
++                    // inset via plain padding below); the top edge is reserved explicitly.
 +                    LocalNuvioBottomNavigationOverlayPadding provides if (useNativeBottomTabs) {
 +                        49.dp
 +                    } else if (navBarAtTop || (isTabletLayout || navBarStyleSetting == NavBarStyle.CLASSIC)) {
@@ -512,15 +523,19 @@ index 9b12c4e..c18bda0 100644
 +                        72.dp
 +                    },
                      LocalNuvioNavBarScrollState provides navBarScrollState,
++                    LocalNuvioTopNavBarActive provides topNavBarClearance > 0.dp,
                  ) {
                      AppTabHost(
-@@ -191,6 +253,13 @@ internal fun MainTabsDestination(
+                         selectedTab = selectedTab,
+@@ -191,6 +264,15 @@ internal fun MainTabsDestination(
                              .fillMaxSize()
                              .then(if (isTabletLayout || navBarStyleSetting != NavBarStyle.CLASSIC) Modifier.hazeSource(state = navBarHazeState) else Modifier)
                              .then(if (navBarStyleSetting == NavBarStyle.ADAPTIVE) Modifier.nestedScroll(navBarScrollState.nestedScrollConnection) else Modifier)
 +                            .then(
 +                                if (navBarAtTop) {
-+                                    Modifier.padding(bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding())
++                                    Modifier
++                                        .padding(top = topNavBarClearance)
++                                        .padding(bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding())
 +                                } else {
 +                                    Modifier
 +                                },
@@ -528,7 +543,7 @@ index 9b12c4e..c18bda0 100644
                              .padding(innerPadding),
                      )
                  }
-@@ -218,9 +287,19 @@ internal fun MainTabsDestination(
+@@ -218,9 +300,19 @@ internal fun MainTabsDestination(
                          else -> {}
                      }
                      FloatingNavigationBar(
@@ -549,6 +564,40 @@ index 9b12c4e..c18bda0 100644
                          items = floatingNavigationItems,
                          glowEnabled = navBarGlowEnabled,
                      )
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/Components.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/Components.kt
+index 89cdb0e..a0f8d05 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/Components.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/Components.kt
+@@ -90,7 +90,13 @@ fun NuvioScreen(
+             .background(tokens.colors.background),
+         contentPadding = PaddingValues(
+             start = horizontalPadding,
+-            top = topPadding ?: tokens.spacing.screenTop + statusBarTop + nuvioPlatformExtraTopPadding,
++            // Top-docked bar: the tab host reserved the bar's footprint (status bar included)
++            // above this screen, so only the regular screen gap remains.
++            top = topPadding ?: if (LocalNuvioTopNavBarActive.current) {
++                tokens.spacing.screenTop + nuvioPlatformExtraTopPadding
++            } else {
++                tokens.spacing.screenTop + statusBarTop + nuvioPlatformExtraTopPadding
++            },
+             end = horizontalPadding,
+             bottom = nuvioSafeBottomPadding(tokens.spacing.screenBottom),
+         ),
+@@ -156,7 +162,13 @@ fun NuvioScreenHeader(
+         )
+         return
+     }
+-    val resolvedTopPadding = topPadding ?: if (includeStatusBarPadding) statusBarTop else NuvioTokens.Space.none
++    val resolvedTopPadding = topPadding ?: when {
++        // Top-docked bar: the viewport already starts below the bar, so a pinned header
++        // needs no status-bar padding — just a small gap.
++        LocalNuvioTopNavBarActive.current -> NuvioTokens.Space.s2
++        includeStatusBarPadding -> statusBarTop
++        else -> NuvioTokens.Space.none
++    }
+     Box(
+         modifier = modifier.fillMaxWidth(),
+     ) {
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/ExtraNavTab.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/ExtraNavTab.kt
 new file mode 100644
 index 0000000..2067ba3
@@ -738,18 +787,21 @@ index 0000000..2067ba3
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/FloatingNavigationBar.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/FloatingNavigationBar.kt
-index 5ebafde..10a38e5 100644
+index 5ebafde..04445f6 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/FloatingNavigationBar.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/FloatingNavigationBar.kt
-@@ -3,6 +3,7 @@ package com.nuvio.app.core.ui
+@@ -3,8 +3,10 @@ package com.nuvio.app.core.ui
  import androidx.compose.foundation.layout.PaddingValues
  import androidx.compose.foundation.layout.asPaddingValues
  import androidx.compose.runtime.Composable
 +import androidx.compose.runtime.compositionLocalOf
  import androidx.compose.ui.Modifier
  import androidx.compose.ui.graphics.vector.ImageVector
++import androidx.compose.ui.unit.Dp
  import androidx.compose.ui.unit.dp
-@@ -16,8 +17,17 @@ internal class FloatingNavigationItem(
+ import dev.chrisbanes.haze.HazeState
+ import org.jetbrains.compose.resources.DrawableResource
+@@ -16,8 +18,17 @@ internal class FloatingNavigationItem(
      val icon: ImageVector? = null,
      val drawable: DrawableResource? = null,
      val content: (@Composable (onClick: () -> Unit) -> Unit)? = null,
@@ -767,6 +819,31 @@ index 5ebafde..10a38e5 100644
  internal expect val floatingNavigationGlowSupported: Boolean
  
  @Composable
+@@ -36,3 +47,8 @@ internal fun floatingNavigationBarPadding(): PaddingValues = PaddingValues(
+     bottom = nuvioBottomNavigationBarInsets().asPaddingValues().calculateBottomPadding() +
+         nuvioBottomNavigationExtraVerticalPadding + 8.dp,
+ )
++
++/** Footprint the floating bar takes between the status bar and the content when docked at the
++ *  top: top gap (10dp, mirrors the bar's contentPadding) + tallest track (48dp + 16dp labels)
++ *  + bottom gap (8dp) + breathing room. The tab host reserves this above the content. */
++internal val nuvioTopNavBarReservedHeight: Dp = 10.dp + 64.dp + 8.dp + 4.dp
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/PlatformInsets.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/PlatformInsets.kt
+index 6b53708..fc2f2c7 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/PlatformInsets.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/PlatformInsets.kt
+@@ -21,6 +21,11 @@ internal val LocalNuvioBottomNavigationOverlayPadding = staticCompositionLocalOf
+ 
+ internal val LocalBottomInsetsConsumed = staticCompositionLocalOf { false }
+ 
++/** True while the phone floating bar is docked at the top: the tab host reserves the bar's
++ *  whole footprint (status bar included) above the content, so screens drop their own
++ *  status-bar top padding to avoid a double gap under the bar. */
++internal val LocalNuvioTopNavBarActive = staticCompositionLocalOf { false }
++
+ /** CompositionLocal providing the shared [NuvioNavBarScrollState] so child screens can attach the nestedScrollConnection. */
+ val LocalNuvioNavBarScrollState = staticCompositionLocalOf<NuvioNavBarScrollState?> { null }
+ 
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt
 new file mode 100644
 index 0000000..5e8fd44
@@ -3374,10 +3451,10 @@ index 9fc7517..01ebb5f 100644
                      SettingsNavigationRow(
                          title = stringResource(Res.string.compose_settings_page_notifications),
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
-index 0ec0239..73aada5 100644
+index 817e417..934357f 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
-@@ -697,6 +697,7 @@ private fun MobileSettingsScreen(
+@@ -705,6 +705,7 @@ private fun MobileSettingsScreen(
                              onNotificationsClick = { onPageChange(SettingsPage.Notifications) },
                              onContentDiscoveryClick = { onPageChange(SettingsPage.ContentDiscovery) },
                              onIntegrationsClick = { onPageChange(SettingsPage.Integrations) },
@@ -3385,8 +3462,7 @@ index 0ec0239..73aada5 100644
                              onTrackingClick = { onPageChange(SettingsPage.TraktAuthentication) },
                              onSupportersContributorsClick = onSupportersContributorsClick,
                              onLicensesAttributionsClick = onLicensesAttributionsClick,
-@@ -837,7 +838,10 @@ private fun MobileSettingsScreen(
-                     commentsEnabled = traktCommentsEnabled,
+@@ -846,6 +847,9 @@ private fun MobileSettingsScreen(
                      mdbListConnected = mdbListConnected,
                      onCommentsEnabledChange = TraktCommentsSettings::setEnabled,
                  )
@@ -3396,7 +3472,7 @@ index 0ec0239..73aada5 100644
              }
          }
      }
-@@ -1118,6 +1122,7 @@ private fun TabletSettingsScreen(
+@@ -1128,6 +1132,7 @@ private fun TabletSettingsScreen(
                                  onNotificationsClick = { openInlinePage(SettingsPage.Notifications) },
                                  onContentDiscoveryClick = { openInlinePage(SettingsPage.ContentDiscovery) },
                                  onIntegrationsClick = { openInlinePage(SettingsPage.Integrations) },
@@ -3404,8 +3480,7 @@ index 0ec0239..73aada5 100644
                                  onTrackingClick = { openInlinePage(SettingsPage.TraktAuthentication) },
                                  onSupportersContributorsClick = { openInlinePage(SettingsPage.SupportersContributors) },
                                  onLicensesAttributionsClick = { openInlinePage(SettingsPage.LicensesAttributions) },
-@@ -1262,7 +1267,10 @@ private fun TabletSettingsScreen(
-                         commentsEnabled = traktCommentsEnabled,
+@@ -1273,6 +1278,9 @@ private fun TabletSettingsScreen(
                          mdbListConnected = mdbListConnected,
                          onCommentsEnabledChange = TraktCommentsSettings::setEnabled,
                      )
