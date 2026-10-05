@@ -1,0 +1,245 @@
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
+index 0a9fc37..83640ea 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
+@@ -1,21 +1,71 @@
+ package com.nuvio.app.features.jellyfin
+ 
+-// Jellyfin is an Android-first fork feature; this target only needs the declarations to compile.
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.suspendCancellableCoroutine
++import kotlinx.coroutines.withContext
++import platform.Foundation.NSHTTPURLResponse
++import platform.Foundation.NSMutableURLRequest
++import platform.Foundation.NSURL
++import platform.Foundation.NSURLSession
++import platform.Foundation.NSURLSessionConfiguration
++import platform.Foundation.NSUTF8StringEncoding
++import platform.Foundation.NSUserDefaults
++import platform.Foundation.NSString
++import platform.Foundation.create
++import platform.Foundation.dataUsingEncoding
++import platform.Foundation.dataTaskWithRequest
++import platform.Foundation.requestWithURL
++import platform.Foundation.setValue
++import kotlin.coroutines.resume
++
+ internal actual object JellyfinPlatform {
+-    actual val navEntryEnabled: Boolean = false
++    actual val navEntryEnabled: Boolean = true
++
++    private val session: NSURLSession by lazy {
++        val config = NSURLSessionConfiguration.defaultSessionConfiguration()
++        config.timeoutIntervalForRequest = 15.0
++        config.timeoutIntervalForResource = 60.0
++        NSURLSession.sessionWithConfiguration(config)
++    }
+ 
+     actual suspend fun httpCall(
+         method: String,
+         url: String,
+         headers: Map<String, String>,
+         body: String?,
+-    ): JellyfinHttpResponse? = null
+-
+-    private val values = mutableMapOf<String, String>()
++    ): JellyfinHttpResponse? = withContext(Dispatchers.Default) {
++        runCatching {
++            suspendCancellableCoroutine { cont ->
++                val request = NSMutableURLRequest.requestWithURL(NSURL(string = url))
++                request.HTTPMethod = method.uppercase()
++                headers.forEach { (name, value) -> request.setValue(value, forHTTPHeaderField = name) }
++                if (method.uppercase() == "POST" && body != null) {
++                    request.HTTPBody = (body as NSString).dataUsingEncoding(NSUTF8StringEncoding)
++                }
++                session.dataTaskWithRequest(request) { data, response, _ ->
++                    val http = response as? NSHTTPURLResponse
++                    val text = data?.let {
++                        NSString.create(it, NSUTF8StringEncoding) as? String
++                    } ?: ""
++                    if (http != null) {
++                        cont.resume(JellyfinHttpResponse(status = http.statusCode.toInt(), body = text))
++                    } else {
++                        cont.resume(null)
++                    }
++                }.resume()
++            }
++        }.getOrNull()
++    }
+ 
+-    actual fun loadString(key: String): String? = values[key]
++    actual fun loadString(key: String): String? =
++        NSUserDefaults.standardUserDefaults.stringForKey("nuvio_jellyfin_$key")
+ 
+     actual fun saveString(key: String, value: String?) {
+-        if (value == null) values.remove(key) else values[key] = value
++        val defaults = NSUserDefaults.standardUserDefaults
++        if (value == null) {
++            defaults.removeObjectForKey("nuvio_jellyfin_$key")
++        } else {
++            defaults.setObject(value, forKey = "nuvio_jellyfin_$key")
++        }
+     }
+ }
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt
+index c51d57a..7e98147 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt
+@@ -1,10 +1,134 @@
+ package com.nuvio.app.features.livetv
+ 
+-// Live TV is an Android-only fork feature; this target only needs the declarations to compile.
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.suspendCancellableCoroutine
++import kotlinx.coroutines.withContext
++import platform.Foundation.NSData
++import platform.Foundation.NSDataCompressionAlgorithmZlib
++import platform.Foundation.NSDate
++import platform.Foundation.NSFileModificationDate
++import platform.Foundation.NSFileManager
++import platform.Foundation.NSMutableURLRequest
++import platform.Foundation.NSURL
++import platform.Foundation.NSCachesDirectory
++import platform.Foundation.NSURLSession
++import platform.Foundation.NSURLSessionConfiguration
++import platform.Foundation.NSUTF8StringEncoding
++import platform.Foundation.NSUserDefaults
++import platform.Foundation.NSString
++import platform.Foundation.NSUserDomainMask
++import platform.Foundation.URLForDirectory
++import platform.Foundation.create
++import platform.Foundation.dataUsingEncoding
++import platform.Foundation.dataTaskWithRequest
++import platform.Foundation.decompressedUsingAlgorithm
++import platform.Foundation.requestWithURL
++import platform.Foundation.setValue
++import platform.Foundation.writeToURL
++import platform.posix.memcpy
++import kotlin.coroutines.resume
++
++private fun NSData.toByteArray(): ByteArray =
++    ByteArray(length.toInt()).also { memcpy(it.refTo(0), this@toByteArray.bytes, this@toByteArray.length) }
++
++private fun ByteArray.toNSData(): NSData =
++    NSData.create(bytes = this.refTo(0), length = this.size.toULong())
++
++private fun ByteArray.toUtf8(): String =
++    NSString.create(this, NSUTF8StringEncoding) as? String ?: ""
++
+ internal actual object LiveTvPlatform {
+-    actual val navEntryEnabled: Boolean = false
++    actual val navEntryEnabled: Boolean = true
++
++    private val session: NSURLSession by lazy {
++        val config = NSURLSessionConfiguration.defaultSessionConfiguration()
++        config.timeoutIntervalForRequest = 20.0
++        config.timeoutIntervalForResource = 60.0
++        NSURLSession.sessionWithConfiguration(config)
++    }
++
++    private fun cacheFileFor(cacheKey: String): NSURL? =
++        NSFileManager.defaultManager
++            .URLForDirectory(NSCachesDirectory, NSUserDomainMask, null, true, null)
++            ?.URLByAppendingPathComponent("livetv-epg/${cacheKey.replace(Regex("[^A-Za-z0-9_-]"), "_")}.xml")
+ 
+-    actual suspend fun fetchGuideText(cacheKey: String, url: String, forceRefresh: Boolean, maxAgeMs: Long): String? = null
++    actual suspend fun fetchGuideText(
++        cacheKey: String,
++        url: String,
++        forceRefresh: Boolean,
++        maxAgeMs: Long,
++    ): String? = withContext(Dispatchers.Default) {
++        val cacheFile = cacheFileFor(cacheKey)
++        if (!forceRefresh && cacheFile != null) {
++            val cached = NSString.create(cacheFile, NSUTF8StringEncoding) as? String
++            if (cached != null) {
++                val modified = NSFileManager.defaultManager
++                    .attributesOfItemAtPath(cacheFile.path ?: "", error = null)
++                    ?.get(NSFileModificationDate) as? NSDate
++                if (modified != null) {
++                    val ageMs = ((NSDate().timeIntervalSince1970 - modified.timeIntervalSince1970) * 1000).toLong()
++                    if (ageMs in 0 until maxAgeMs) {
++                        return@withContext cached
++                    }
++                }
++            }
++        }
++
++        val downloaded = runCatching { httpGet(url) }.getOrNull()
++            ?: return@withContext cacheFile?.let { NSString.create(it, NSUTF8StringEncoding) as? String }
++
++        val text = runCatching {
++            val bytes = downloaded.toByteArray()
++            if (bytes.size > 2 && bytes[0].toInt() == 0x1f && bytes[1].toInt() == 0x8b) {
++                gunzip(bytes)?.toByteArray()?.toUtf8() ?: bytes.toUtf8()
++            } else {
++                bytes.toUtf8()
++            }
++        }.getOrNull() ?: return@withContext null
++
++        runCatching {
++            cacheFile?.let { file -> text.toNSData().writeToURL(file, atomically = true) }
++        }
++        text
++    }
++
++    private suspend fun httpGet(url: String): NSData? =
++        suspendCancellableCoroutine { cont ->
++            val request = NSMutableURLRequest.requestWithURL(NSURL(string = url))
++            request.HTTPMethod = "GET"
++            session.dataTaskWithRequest(request) { data, response, _ ->
++                val http = response as? NSHTTPURLResponse
++                if (http != null && http.statusCode.toInt() == 200 && data != null) {
++                    cont.resume(data)
++                } else {
++                    cont.resume(null)
++                }
++            }.resume()
++        }
++
++    /** Strips the gzip container and inflates the raw DEFLATE payload with Apple's Zlib. */
++    private fun gunzip(bytes: ByteArray): NSData? = runCatching {
++        if (bytes[2].toInt() != 8) return null
++        val flags = bytes[3].toInt() and 0xff
++        var off = 10
++        if (flags and 0x04 != 0) {
++            if (off + 2 > bytes.size) return null
++            val xlen = (bytes[off].toInt() and 0xff) or ((bytes[off + 1].toInt() and 0xff) shl 8)
++            off += 2 + xlen
++        }
++        if (flags and 0x08 != 0) {
++            while (off < bytes.size && bytes[off].toInt() != 0) off++
++            off++
++        }
++        if (flags and 0x10 != 0) {
++            while (off < bytes.size && bytes[off].toInt() != 0) off++
++            off++
++        }
++        if (flags and 0x02 != 0) off += 2
++        if (off >= bytes.size - 8) return null
++        bytes.copyOfRange(off, bytes.size - 8).toNSData()
++            .decompressedUsingAlgorithm(NSDataCompressionAlgorithmZlib)
++    }.getOrNull()
+ 
+     actual fun formatClock(epochMs: Long): String {
+         val minutesOfDay = (epochMs / 60_000L).mod(1_440L)
+@@ -13,11 +137,15 @@ internal actual object LiveTvPlatform {
+ }
+ 
+ internal actual object LiveTvStorage {
+-    private val values = mutableMapOf<String, String>()
+-
+-    actual fun loadString(key: String): String? = values[key]
++    actual fun loadString(key: String): String? =
++        NSUserDefaults.standardUserDefaults.stringForKey("nuvio_livetv_$key")
+ 
+     actual fun saveString(key: String, value: String?) {
+-        if (value == null) values.remove(key) else values[key] = value
++        val defaults = NSUserDefaults.standardUserDefaults
++        if (value == null) {
++            defaults.removeObjectForKey("nuvio_livetv_$key")
++        } else {
++            defaults.setObject(value, forKey = "nuvio_livetv_$key")
++        }
+     }
+ }

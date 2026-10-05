@@ -387,7 +387,7 @@ jobs:
       - name: Apply feature and variant patches
         if: steps.ver.outputs.should_build == 'true'
         run: |
-          for P in livetv-feature livetv-variant jellyfin-feature autosync-feature jellyfintv-variant ios-15-compat; do
+          for P in livetv-feature livetv-variant jellyfin-feature autosync-feature jellyfintv-variant ios-15-compat ios-platform-actuals; do
             if ! git apply "fork-src/.github/patches/$P.patch"; then
               echo "::error::$P.patch no longer applies to upstream cmp-rewrite (iOS)"
               exit 1
