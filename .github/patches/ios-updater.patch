@@ -1,0 +1,178 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt
+index adb11cd..57080f7 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt
+@@ -1,6 +1,7 @@
+ package com.nuvio.app.features.updater
+ 
+ import com.nuvio.app.core.build.AppVersionConfig
++import com.nuvio.app.isIos
+ 
+ /**
+  * Self-host fork patch: updates come from github.com/vgupta1192/NuvioMobile releases. CI builds
+@@ -11,7 +12,7 @@ import com.nuvio.app.core.build.AppVersionConfig
+ internal object ForkBuild {
+     const val REPO = "vgupta1192/NuvioMobile"
+     private const val TAG_PREFIX = "fork-build-"
+-    private val assetPattern = Regex("-b(\\d+)\\.apk$", RegexOption.IGNORE_CASE)
++    private val assetPattern = Regex("-b(\\d+)\\.(apk|ipa)$", RegexOption.IGNORE_CASE)
+ 
+     val localBuild: Int
+         get() = AppVersionConfig.VERSION_NAME.substringAfter("-fork.", "").toIntOrNull() ?: 0
+@@ -31,6 +32,9 @@ internal object ForkBuild {
+             if (release.draft || !release.tagName.orEmpty().startsWith("mobile-jellyfin-livetv-")) continue
+             for (asset in release.assets) {
+                 val build = assetPattern.find(asset.name)?.groupValues?.get(1)?.toIntOrNull() ?: continue
++                // Android keeps its .apk-only selection; iOS takes this app's IPA assets
++                if (isIos && !(asset.name.endsWith(".ipa") && asset.name.startsWith("NuvioMobileJellyfinTV"))) continue
++                if (!isIos && !asset.name.endsWith(".apk", ignoreCase = true)) continue
+                 if (build <= bestBuild) continue
+                 bestBuild = build
+                 val name = release.name?.takeIf { it.isNotBlank() } ?: release.tagName.orEmpty()
+diff --git a/composeApp/src/iosFull/kotlin/com/nuvio/app/core/build/AppFeaturePolicy.ios.kt b/composeApp/src/iosFull/kotlin/com/nuvio/app/core/build/AppFeaturePolicy.ios.kt
+index e4dc2e2..afe3f0a 100644
+--- a/composeApp/src/iosFull/kotlin/com/nuvio/app/core/build/AppFeaturePolicy.ios.kt
++++ b/composeApp/src/iosFull/kotlin/com/nuvio/app/core/build/AppFeaturePolicy.ios.kt
+@@ -10,7 +10,7 @@ actual object AppFeaturePolicy {
+     actual val p2pEnabled: Boolean = true
+     actual val trailerPlaybackMode: TrailerPlaybackMode = TrailerPlaybackMode.IN_APP
+     actual val heroTrailerPlaybackSupported: Boolean = false
+-    actual val inAppUpdaterEnabled: Boolean = false
++    actual val inAppUpdaterEnabled: Boolean = true
+     actual val imdbRatingLogoEnabled: Boolean = true
+     actual val mediaPlaybackForegroundServiceEnabled: Boolean = false
+     actual val downloadForegroundServiceEnabled: Boolean = false
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.ios.kt
+index d7f22bd..daa5b3e 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.ios.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.ios.kt
+@@ -1,36 +1,116 @@
+ package com.nuvio.app.features.updater
+ 
+-import kotlinx.coroutines.runBlocking
+-import nuvio.composeapp.generated.resources.Res
+-import nuvio.composeapp.generated.resources.updates_not_available
+-import org.jetbrains.compose.resources.getString
++import io.ktor.client.HttpClient
++import io.ktor.client.engine.darwin.Darwin
++import io.ktor.client.request.get
++import io.ktor.client.statement.bodyAsBytes
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.withContext
++import platform.CoreGraphics.CGRectMake
++import platform.Foundation.NSFileManager
++import platform.Foundation.NSURL
++import platform.Foundation.NSUserDefaults
++import platform.Foundation.NSTemporaryDirectory
++import platform.UIKit.UIActivityViewController
++import platform.UIKit.UIApplication
++import platform.UIKit.UIWindowScene
++import platform.darwin.dispatch_async
++import platform.darwin.dispatch_get_main_queue
++import platform.posix.fclose
++import platform.posix.fopen
++import platform.posix.fwrite
+ 
++/**
++ * Fork patch: in-app fork-build updates on iOS. iOS sandboxes apps from replacing their own
++ * binary, so "install" hands the downloaded .ipa to the user's sideload tool via the share
++ * sheet (esign/Scarlet/Files all import IPA files). The update check, version comparison and
++ * banner come from the shared updater; only this platform surface differs from Android.
++ */
++@kotlinx.cinterop.ExperimentalForeignApi
+ actual object AppUpdaterPlatform {
+-    actual val isSupported: Boolean = false
++    actual val isSupported: Boolean = true
+     actual val isDebugBuild: Boolean = false
+ 
++    private val httpClient = HttpClient(Darwin) {
++        expectSuccess = false
++    }
++
+     actual fun getSupportedAbis(): List<String> = emptyList()
+ 
+-    actual fun getIgnoredTag(): String? = null
++    actual fun getIgnoredTag(): String? =
++        NSUserDefaults.standardUserDefaults.stringForKey("nuvio_update_ignored_tag")
+ 
+-    actual fun setIgnoredTag(tag: String?) = Unit
++    actual fun setIgnoredTag(tag: String?) {
++        val defaults = NSUserDefaults.standardUserDefaults
++        if (tag == null) {
++            defaults.removeObjectForKey("nuvio_update_ignored_tag")
++        } else {
++            defaults.setObject(tag, forKey = "nuvio_update_ignored_tag")
++        }
++    }
+ 
+-    actual fun getUpdateChannel(): String? = null
++    actual fun getUpdateChannel(): String? =
++        NSUserDefaults.standardUserDefaults.stringForKey("nuvio_update_channel")
+ 
+-    actual fun setUpdateChannel(channel: String) = Unit
++    actual fun setUpdateChannel(channel: String) {
++        NSUserDefaults.standardUserDefaults.setObject(channel, forKey = "nuvio_update_channel")
++    }
+ 
+-    actual fun deleteDownloadedApk(path: String) = Unit
++    actual fun deleteDownloadedApk(path: String) {
++        runCatching { NSFileManager.defaultManager.removeItemAtPath(path, error = null) }
++    }
+ 
+     actual suspend fun downloadApk(
+         assetUrl: String,
+         assetName: String,
+         onProgress: (downloadedBytes: Long, totalBytes: Long?) -> Unit,
+-    ): Result<String> = Result.failure(IllegalStateException(getString(Res.string.updates_not_available)))
++    ): Result<String> = withContext(Dispatchers.Default) {
++        runCatching {
++            val target = NSTemporaryDirectory() + assetName
++            val bytes = httpClient.get(assetUrl) {
++                onDownload { sent, total -> onProgress(sent, total) }
++            }.bodyAsBytes()
++            bytes.usePinned { pinned ->
++                val file = fopen(target, "wb")
++                    ?: error("cannot open $target for writing")
++                try {
++                    val written = fwrite(pinned.addressOf(0), 1u, bytes.size.toULong(), file)
++                    if (written != bytes.size.toULong()) error("short write ($written of ${bytes.size})")
++                } finally {
++                    fclose(file)
++                }
++            }
++            target
++        }
++    }
+ 
+     actual fun canRequestPackageInstalls(): Boolean = false
+ 
+     actual fun openUnknownSourcesSettings() = Unit
+ 
+-    actual fun installDownloadedApk(path: String): Result<Unit> =
+-        Result.failure(IllegalStateException(runBlocking { getString(Res.string.updates_not_available) }))
++    actual fun installDownloadedApk(path: String): Result<Unit> = runCatching {
++        val fileUrl = NSURL.fileURLWithPath(path)
++        dispatch_async(dispatch_get_main_queue()) {
++            runCatching {
++                val scene = UIApplication.sharedApplication.connectedScenes.anyObject() as? UIWindowScene
++                val root = scene?.windows?.firstOrNull { it.isKeyWindow }?.rootViewController
++                    ?: scene?.windows?.firstOrNull()?.rootViewController
++                var top = root
++                while (top?.presentedViewController != null) {
++                    top = top?.presentedViewController
++                }
++                top ?: error("no view controller to present the share sheet")
++                val share = UIActivityViewController(
++                    activityItems = listOf(fileUrl),
++                    applicationActivities = null,
++                )
++                top.view.let { sourceView ->
++                    share.popoverPresentationController?.sourceView = sourceView
++                    share.popoverPresentationController?.sourceRect =
++                        CGRectMake(sourceView.bounds.size.width / 2.0, sourceView.bounds.size.height / 2.0, 1.0, 1.0)
++                }
++                top.presentViewController(share, animated = true, completion = null)
++            }
++        }
++    }
+ }
