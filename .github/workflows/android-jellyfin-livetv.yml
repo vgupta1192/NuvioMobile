@@ -408,6 +408,20 @@ jobs:
             'NUVIO_IOS_DISTRIBUTION=full' \
             > local.properties
 
+      # build-ios-ipa.sh derives this path (build/ios-derived-full-release) and builds
+      # incrementally into it; it also holds the SPM checkouts (MPVKit/ffmpeg artifacts) and
+      # module caches. Rolling key: restore the newest entry via prefix, save under a fresh
+      # run_id key each time. If a repeat IPA build fails after this, suspect a poisoned cache
+      # first — delete the cache entry in the Actions UI before deeper debugging.
+      - name: Cache Xcode DerivedData (rolling)
+        if: steps.ver.outputs.should_build == 'true'
+        uses: actions/cache@v4
+        with:
+          path: build/ios-derived-full-release
+          key: ios-dd-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            ios-dd-${{ runner.os }}-
+
       - name: Prepare iOS dependencies
         if: steps.ver.outputs.should_build == 'true'
         run: ./scripts/prepare-ios-dependencies.sh
