@@ -461,7 +461,7 @@ index 0000000..a7c0c83
 +                        (listOf(id.substringBefore('.')) + channel.displayNames)
 +                            .map(::normalize)
 +                            .filter { it.isNotBlank() }
-+                            .forEach { key -> keys.putIfAbsent(key, id) }
++                            .forEach { key -> if (key !in keys) keys[key] = id } // Kotlin/Native-safe putIfAbsent (iOS build)
 +                    }
 +                    programs.putAll(parsed.programsByChannelId)
 +                } catch (error: CancellationException) {
