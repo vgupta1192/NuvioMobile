@@ -410,12 +410,14 @@ jobs:
 
       # build-ios-ipa.sh derives this path (build/ios-derived-full-release) and builds
       # incrementally into it; it also holds the SPM checkouts (MPVKit/ffmpeg artifacts) and
-      # module caches. Rolling key: restore the newest entry via prefix, save under a fresh
-      # run_id key each time. If a repeat IPA build fails after this, suspect a poisoned cache
-      # first — delete the cache entry in the Actions UI before deeper debugging.
-      - name: Cache Xcode DerivedData (rolling)
+      # module caches. Restore/save are SPLIT so the save step can run even when the build
+      # fails — failed iterations are exactly the ones that must not pay a cold 70-min build
+      # again. Rolling key: restore the newest entry via prefix, save under a fresh run_id
+      # key. If a repeat IPA build fails after this, suspect a poisoned cache first — delete
+      # the ios-dd-* entries in the Actions cache UI before deeper debugging.
+      - name: Restore Xcode DerivedData
         if: steps.ver.outputs.should_build == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: build/ios-derived-full-release
           key: ios-dd-${{ runner.os }}-${{ github.run_id }}
@@ -431,6 +433,13 @@ jobs:
         run: |
           set -o pipefail
           ./scripts/build-ios-ipa.sh 2>&1 | tee build-log-ios.txt
+
+      - name: Save Xcode DerivedData (also on build failure)
+        if: always() && steps.ver.outputs.should_build == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/ios-derived-full-release
+          key: ios-dd-${{ runner.os }}-${{ github.run_id }}
 
       - name: Rename IPA
         if: steps.ver.outputs.should_build == 'true'
