@@ -105,18 +105,18 @@ index 0a9fc37..79371f1 100644
      }
  }
 diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt
-index c51d57a..1e9a4fd 100644
+index c51d57a..5c44ce7 100644
 --- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt
 +++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt
-@@ -1,10 +1,56 @@
+@@ -1,10 +1,62 @@
  package com.nuvio.app.features.livetv
  
 -// Live TV is an Android-only fork feature; this target only needs the declarations to compile.
 +import io.ktor.client.HttpClient
++import io.ktor.client.call.body
 +import io.ktor.client.engine.darwin.Darwin
 +import io.ktor.client.plugins.HttpTimeout
 +import io.ktor.client.request.get
-+import io.ktor.client.statement.bodyAsText
 +import platform.Foundation.NSDate
 +import platform.Foundation.NSUserDefaults
 +import platform.Foundation.timeIntervalSince1970
@@ -138,8 +138,8 @@ index c51d57a..1e9a4fd 100644
 +    private fun nowMs(): Long = (NSDate().timeIntervalSince1970 * 1000).toLong()
 +
 +    /**
-+     * v1 iOS guide cache lives in NSUserDefaults (the Android actual uses the file system
-+     * with gzip support; plain-XML guides work here, .gz guide files are not yet decoded).
++     * iOS guide cache lives in NSUserDefaults. Plain and gzip (.gz) XMLTV guides are
++     * both supported — MiniGzip decodes gzip members without java.util.zip.
 +     */
 +    actual suspend fun fetchGuideText(
 +        cacheKey: String,
@@ -159,8 +159,14 @@ index c51d57a..1e9a4fd 100644
 +                }
 +            }
 +        }
-+        val text = runCatching { httpClient.get(url).bodyAsText() }.getOrNull()
-+            ?: return defaults.stringForKey(textKey)
++        val text = runCatching {
++            val bytes = httpClient.get(url).body<ByteArray>()
++            if (bytes.size > 2 && bytes[0].toInt() == 0x1f && bytes[1].toInt() == 0x8b) {
++                MiniGzip.gunzip(bytes)?.decodeToString() ?: bytes.decodeToString()
++            } else {
++                bytes.decodeToString()
++            }
++        }.getOrNull() ?: return defaults.stringForKey(textKey)
 +        defaults.setObject(text, forKey = textKey)
 +        defaults.setDouble(nowMs().toDouble(), forKey = timeKey)
 +        return text
@@ -168,7 +174,7 @@ index c51d57a..1e9a4fd 100644
  
      actual fun formatClock(epochMs: Long): String {
          val minutesOfDay = (epochMs / 60_000L).mod(1_440L)
-@@ -13,11 +59,15 @@ internal actual object LiveTvPlatform {
+@@ -13,11 +65,15 @@ internal actual object LiveTvPlatform {
  }
  
  internal actual object LiveTvStorage {
@@ -188,3 +194,235 @@ index c51d57a..1e9a4fd 100644
 +        }
      }
  }
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/MiniGzip.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/MiniGzip.kt
+new file mode 100644
+index 0000000..0915c5e
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/MiniGzip.kt
+@@ -0,0 +1,226 @@
++package com.nuvio.app.features.livetv
++
++/**
++ * Minimal DEFLATE (RFC 1951) + gzip (RFC 1952) decoder for the iOS EPG guide cache.
++ * java.util.zip is JVM-only and Apple's Compression APIs are not exposed to
++ * Kotlin/Native, so this is a small pure-Kotlin puff-style decoder. Handles
++ * stored/fixed/dynamic blocks, FEXTRA/FNAME/FCOMMENT/FHCRC header fields and
++ * multi-member files. CRC32 trailers are skipped rather than verified — the
++ * decoded guide XML is validated by the parser downstream.
++ */
++internal object MiniGzip {
++    private val LEN_BASE = intArrayOf(
++        3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59,
++        67, 83, 99, 115, 131, 163, 195, 227, 258,
++    )
++    private val LEN_EXTRA = intArrayOf(
++        0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3,
++        4, 4, 4, 4, 5, 5, 5, 5, 0,
++    )
++    private val DIST_BASE = intArrayOf(
++        1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385,
++        513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577,
++    )
++    private val DIST_EXTRA = intArrayOf(
++        0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8,
++        9, 9, 10, 10, 11, 11, 12, 12, 13, 13,
++    )
++    private val CODE_LENGTH_ORDER = intArrayOf(
++        16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
++    )
++    private val FIXED_LENGTH_TABLE = build(IntArray(144) { 8 } + IntArray(112) { 9 } + IntArray(24) { 7 } + IntArray(8) { 8 })
++    private val FIXED_DISTANCE_TABLE = build(IntArray(30) { 5 })
++
++    private class BitReader(val data: ByteArray, var pos: Int) {
++        var bitbuf: Long = 0
++        var bitcnt: Int = 0
++        var totalBits: Int = 0
++
++        fun bits(n: Int): Int {
++            while (bitcnt < n) {
++                if (pos >= data.size) throw IllegalStateException("out of input")
++                bitbuf = bitbuf or ((data[pos].toLong() and 0xffL) shl bitcnt)
++                pos++
++                bitcnt += 8
++                totalBits += 8
++            }
++            val v = (bitbuf and ((1L shl n) - 1)).toInt()
++            bitbuf = bitbuf shr n
++            bitcnt -= n
++            return v
++        }
++
++        fun align() {
++            val drop = bitcnt and 7
++            bitbuf = bitbuf shr drop
++            bitcnt -= drop
++        }
++
++        /** Bytes consumed from [data] so far, rounding the sub-byte remainder up. */
++        fun consumedBytes(): Int = (totalBits + 7) / 8
++    }
++
++    private class Output(initialCapacity: Int) {
++        var buf = ByteArray(initialCapacity)
++        var size = 0
++
++        fun append(b: Int) {
++            if (size == buf.size) buf = buf.copyOf(buf.size * 2 + 64)
++            buf[size++] = b.toByte()
++        }
++
++        fun byteAt(index: Int): Int = buf[index].toInt() and 0xff
++
++        fun result(): ByteArray = buf.copyOf(size)
++    }
++
++    /** Canonical Huffman decode table: (codeLength shl 16 or code) -> symbol. */
++    private fun build(lengths: IntArray): Pair<HashMap<Int, Int>, Int> {
++        var maxBits = 0
++        for (l in lengths) if (l > maxBits) maxBits = l
++        val blCount = IntArray(maxBits + 1)
++        for (l in lengths) if (l > 0) blCount[l]++
++        var code = 0
++        val nextCode = IntArray(maxBits + 2)
++        for (b in 1..maxBits) {
++            code = (code + blCount[b - 1]) shl 1
++            nextCode[b] = code
++        }
++        val table = HashMap<Int, Int>()
++        for (sym in lengths.indices) {
++            val l = lengths[sym]
++            if (l > 0) {
++                table[(l shl 16) or nextCode[l]] = sym
++                nextCode[l]++
++            }
++        }
++        return table to maxBits
++    }
++
++    private fun decodeSym(r: BitReader, table: HashMap<Int, Int>, maxBits: Int): Int {
++        var code = 0
++        var len = 0
++        while (true) {
++            code = (code shl 1) or r.bits(1)
++            len++
++            table[(len shl 16) or code]?.let { return it }
++            if (len > maxBits) throw IllegalStateException("bad huffman code")
++        }
++    }
++
++    private fun inflateAll(r: BitReader, out: Output) {
++        while (true) {
++            val bfinal = r.bits(1)
++            val btype = r.bits(2)
++            if (btype == 0) {
++                r.align()
++                val len = r.bits(16)
++                r.bits(16)
++                repeat(len) { out.append(r.bits(8)) }
++            } else if (btype == 1) {
++                inflateHuffmanBlock(
++                    r, out,
++                    FIXED_LENGTH_TABLE.first, FIXED_LENGTH_TABLE.second,
++                    FIXED_DISTANCE_TABLE.first, FIXED_DISTANCE_TABLE.second,
++                )
++            } else {
++                val hlit = r.bits(5) + 257
++                val hdist = r.bits(5) + 1
++                val hclen = r.bits(4) + 4
++                val cl = IntArray(19)
++                for (i in 0 until hclen) cl[CODE_LENGTH_ORDER[i]] = r.bits(3)
++                val (clTable, clMax) = build(cl)
++                val lengths = ArrayList<Int>(hlit + hdist)
++                var n = 0
++                while (n < hlit + hdist) {
++                    val sym = decodeSym(r, clTable, clMax)
++                    when {
++                        sym < 16 -> { lengths.add(sym); n++ }
++                        sym == 16 -> {
++                            val rep = 3 + r.bits(2)
++                            repeat(rep) { lengths.add(lengths[lengths.size - 1]) }
++                            n += rep
++                        }
++                        sym == 17 -> {
++                            val rep = 3 + r.bits(3)
++                            repeat(rep) { lengths.add(0) }
++                            n += rep
++                        }
++                        else -> {
++                            val rep = 11 + r.bits(7)
++                            repeat(rep) { lengths.add(0) }
++                            n += rep
++                        }
++                    }
++                }
++                val (lenTable, lenMax) = build(lengths.subList(0, hlit).toIntArray())
++                val (distTable, distMax) = build(lengths.subList(hlit, lengths.size).toIntArray())
++                inflateHuffmanBlock(r, out, lenTable, lenMax, distTable, distMax)
++            }
++            if (bfinal == 1) break
++        }
++    }
++
++    private fun inflateHuffmanBlock(
++        r: BitReader,
++        out: Output,
++        lenTable: HashMap<Int, Int>,
++        lenMax: Int,
++        distTable: HashMap<Int, Int>,
++        distMax: Int,
++    ) {
++        while (true) {
++            val sym = decodeSym(r, lenTable, lenMax)
++            if (sym < 256) {
++                out.append(sym)
++            } else if (sym == 256) {
++                return
++            } else {
++                val lenIdx = sym - 257
++                val length = LEN_BASE[lenIdx] + r.bits(LEN_EXTRA[lenIdx])
++                val distSym = decodeSym(r, distTable, distMax)
++                val dist = DIST_BASE[distSym] + r.bits(DIST_EXTRA[distSym])
++                val start = out.size - dist
++                if (start < 0) throw IllegalStateException("bad distance")
++                for (k in 0 until length) out.append(out.byteAt(start + k))
++            }
++        }
++    }
++
++    /**
++     * Decompresses a gzip stream (plain, header-optionals, multi-member). Returns null
++     * when the payload is not a well-formed gzip file — callers fall back to raw text.
++     */
++    fun gunzip(data: ByteArray): ByteArray? = runCatching {
++        if (data.size < 18) return null
++        val out = Output(maxOf(data.size * 4, 64 * 1024))
++        var pos = 0
++        var members = 0
++        while (pos + 18 <= data.size && data[pos].toInt() == 0x1f && data[pos + 1].toInt() == 0x8b) {
++            if (data[pos + 2].toInt() != 8) return null
++            val flg = data[pos + 3].toInt() and 0xff
++            var off = pos + 10
++            if (flg and 0x04 != 0) {
++                if (off + 2 > data.size) return null
++                val xlen = (data[off].toInt() and 0xff) or ((data[off + 1].toInt() and 0xff) shl 8)
++                off += 2 + xlen
++            }
++            if (flg and 0x08 != 0) {
++                while (off < data.size && data[off].toInt() != 0) off++
++                off++
++            }
++            if (flg and 0x10 != 0) {
++                while (off < data.size && data[off].toInt() != 0) off++
++                off++
++            }
++            if (flg and 0x02 != 0) off += 2
++            if (off >= data.size) return null
++            val r = BitReader(data, off)
++            inflateAll(r, out)
++            pos = off + r.consumedBytes() + 8 // skip CRC32 + ISIZE trailer
++            members++
++        }
++        if (members == 0 || out.size == 0) return null
++        out.result()
++    }.getOrNull()
++}
