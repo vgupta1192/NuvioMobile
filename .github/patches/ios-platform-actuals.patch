@@ -29,3 +29,162 @@ index 660c7dc..870be0b 100644
          }
  
          SettingsSection(
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
+index 0a9fc37..79371f1 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
+@@ -1,21 +1,63 @@
+ package com.nuvio.app.features.jellyfin
+ 
+-// Jellyfin is an Android-first fork feature; this target only needs the declarations to compile.
++import io.ktor.client.HttpClient
++import io.ktor.client.engine.darwin.Darwin
++import io.ktor.client.plugins.HttpTimeout
++import io.ktor.client.request.header
++import io.ktor.client.request.request
++import io.ktor.client.request.setBody
++import io.ktor.client.statement.bodyAsText
++import io.ktor.http.ContentType
++import io.ktor.http.HttpMethod
++import io.ktor.http.contentType
++import platform.Foundation.NSUserDefaults
++
+ internal actual object JellyfinPlatform {
+-    actual val navEntryEnabled: Boolean = false
++    actual val navEntryEnabled: Boolean = true
++
++    private val httpClient = HttpClient(Darwin) {
++        expectSuccess = false
++        install(HttpTimeout) {
++            requestTimeoutMillis = 60_000
++            connectTimeoutMillis = 15_000
++            socketTimeoutMillis = 60_000
++        }
++    }
+ 
+     actual suspend fun httpCall(
+         method: String,
+         url: String,
+         headers: Map<String, String>,
+         body: String?,
+-    ): JellyfinHttpResponse? = null
+-
+-    private val values = mutableMapOf<String, String>()
++    ): JellyfinHttpResponse? = runCatching {
++        val response = httpClient.request(url) {
++            this.method = when (method.uppercase()) {
++                "POST" -> HttpMethod.Post
++                "PUT" -> HttpMethod.Put
++                "DELETE" -> HttpMethod.Delete
++                "HEAD" -> HttpMethod.Head
++                else -> HttpMethod.Get
++            }
++            headers.forEach { (name, value) -> header(name, value) }
++            if (body != null && method.uppercase() != "GET") {
++                setBody(body)
++                if (headers.keys.none { it.equals("Content-Type", ignoreCase = true) }) {
++                    contentType(ContentType.Application.Json)
++                }
++            }
++        }
++        JellyfinHttpResponse(status = response.status.value, body = response.bodyAsText())
++    }.getOrNull()
+ 
+-    actual fun loadString(key: String): String? = values[key]
++    actual fun loadString(key: String): String? =
++        NSUserDefaults.standardUserDefaults.stringForKey("nuvio_jellyfin_$key")
+ 
+     actual fun saveString(key: String, value: String?) {
+-        if (value == null) values.remove(key) else values[key] = value
++        val defaults = NSUserDefaults.standardUserDefaults
++        if (value == null) {
++            defaults.removeObjectForKey("nuvio_jellyfin_$key")
++        } else {
++            defaults.setObject(value, forKey = "nuvio_jellyfin_$key")
++        }
+     }
+ }
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt
+index c51d57a..1e9a4fd 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt
+@@ -1,10 +1,56 @@
+ package com.nuvio.app.features.livetv
+ 
+-// Live TV is an Android-only fork feature; this target only needs the declarations to compile.
++import io.ktor.client.HttpClient
++import io.ktor.client.engine.darwin.Darwin
++import io.ktor.client.plugins.HttpTimeout
++import io.ktor.client.request.get
++import io.ktor.client.statement.bodyAsText
++import platform.Foundation.NSDate
++import platform.Foundation.NSUserDefaults
++import platform.Foundation.timeIntervalSince1970
++
+ internal actual object LiveTvPlatform {
+-    actual val navEntryEnabled: Boolean = false
++    actual val navEntryEnabled: Boolean = true
++
++    private val httpClient = HttpClient(Darwin) {
++        expectSuccess = false
++        install(HttpTimeout) {
++            requestTimeoutMillis = 60_000
++            connectTimeoutMillis = 20_000
++            socketTimeoutMillis = 60_000
++        }
++    }
+ 
+-    actual suspend fun fetchGuideText(cacheKey: String, url: String, forceRefresh: Boolean, maxAgeMs: Long): String? = null
++    private fun nowMs(): Long = (NSDate().timeIntervalSince1970 * 1000).toLong()
++
++    /**
++     * v1 iOS guide cache lives in NSUserDefaults (the Android actual uses the file system
++     * with gzip support; plain-XML guides work here, .gz guide files are not yet decoded).
++     */
++    actual suspend fun fetchGuideText(
++        cacheKey: String,
++        url: String,
++        forceRefresh: Boolean,
++        maxAgeMs: Long,
++    ): String? {
++        val defaults = NSUserDefaults.standardUserDefaults
++        val textKey = "nuvio_livetv_epg_$cacheKey"
++        val timeKey = "nuvio_livetv_epg_time_$cacheKey"
++        if (!forceRefresh) {
++            val cached = defaults.stringForKey(textKey)
++            if (cached != null) {
++                val ageMs = nowMs() - defaults.doubleForKey(timeKey).toLong()
++                if (ageMs in 0 until maxAgeMs) {
++                    return cached
++                }
++            }
++        }
++        val text = runCatching { httpClient.get(url).bodyAsText() }.getOrNull()
++            ?: return defaults.stringForKey(textKey)
++        defaults.setObject(text, forKey = textKey)
++        defaults.setDouble(nowMs().toDouble(), forKey = timeKey)
++        return text
++    }
+ 
+     actual fun formatClock(epochMs: Long): String {
+         val minutesOfDay = (epochMs / 60_000L).mod(1_440L)
+@@ -13,11 +59,15 @@ internal actual object LiveTvPlatform {
+ }
+ 
+ internal actual object LiveTvStorage {
+-    private val values = mutableMapOf<String, String>()
+-
+-    actual fun loadString(key: String): String? = values[key]
++    actual fun loadString(key: String): String? =
++        NSUserDefaults.standardUserDefaults.stringForKey("nuvio_livetv_$key")
+ 
+     actual fun saveString(key: String, value: String?) {
+-        if (value == null) values.remove(key) else values[key] = value
++        val defaults = NSUserDefaults.standardUserDefaults
++        if (value == null) {
++            defaults.removeObjectForKey("nuvio_livetv_$key")
++        } else {
++            defaults.setObject(value, forKey = "nuvio_livetv_$key")
++        }
+     }
+ }
