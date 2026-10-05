@@ -61,7 +61,7 @@ index 71a329e..12099d9 100644
      convenience init?(hexString: String?) {
          guard var value = hexString?.trimmingCharacters(in: .whitespacesAndNewlines),
 diff --git a/iosApp/iosApp/Player/MPVPlayerBridge.swift b/iosApp/iosApp/Player/MPVPlayerBridge.swift
-index c66d27b..c032d25 100644
+index c66d27b..0814986 100644
 --- a/iosApp/iosApp/Player/MPVPlayerBridge.swift
 +++ b/iosApp/iosApp/Player/MPVPlayerBridge.swift
 @@ -260,7 +260,7 @@ final class MPVPlayerViewController: UIViewController {
@@ -84,6 +84,17 @@ index c66d27b..c032d25 100644
          metalLayer.anchorPoint = CGPoint(x: 0, y: 0)
          metalLayer.position = .zero
          view.layer.addSublayer(metalLayer)
+@@ -702,7 +704,9 @@ final class MPVPlayerViewController: UIViewController {
+         saturation: Int,
+         gamma: Int
+     ) {
+-        metalLayer.wantsExtendedDynamicRangeContent = extendedDynamicRange
++        if #available(iOS 16.0, *) {
++            metalLayer.wantsExtendedDynamicRangeContent = extendedDynamicRange
++        }
+         guard mpv != nil else { return }
+ 
+         setStringProperty("hwdec", hardwareDecoder)
 diff --git a/iosApp/iosApp/Player/MetalLayer.swift b/iosApp/iosApp/Player/MetalLayer.swift
 index 49fd377..ba9f6a7 100644
 --- a/iosApp/iosApp/Player/MetalLayer.swift
