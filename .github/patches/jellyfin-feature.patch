@@ -523,7 +523,7 @@ index 9b12c4e..8095184 100644
 +                        72.dp
 +                    },
                      LocalNuvioNavBarScrollState provides navBarScrollState,
-+                    LocalNuvioTopNavBarActive provides topNavBarClearance > 0.dp,
++                    LocalNuvioTopNavBarActive provides (topNavBarClearance > 0.dp),
                  ) {
                      AppTabHost(
                          selectedTab = selectedTab,
