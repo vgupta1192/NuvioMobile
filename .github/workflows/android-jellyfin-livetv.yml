@@ -512,3 +512,5 @@ jobs:
           name: Mobile LiveTV CI debug logs
           prerelease: true
           files: build-log-ios.txt
+
+# [2026-10-05] force-builds must touch .github/** — the push trigger has a paths filter, empty commits never fire.
