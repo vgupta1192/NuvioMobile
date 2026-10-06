@@ -43,10 +43,10 @@ index e4dc2e2..afe3f0a 100644
      actual val mediaPlaybackForegroundServiceEnabled: Boolean = false
      actual val downloadForegroundServiceEnabled: Boolean = false
 diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.ios.kt
-index d7f22bd..79cf201 100644
+index d7f22bd..e83a64e 100644
 --- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.ios.kt
 +++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.ios.kt
-@@ -1,36 +1,120 @@
+@@ -1,36 +1,115 @@
  package com.nuvio.app.features.updater
  
 -import kotlinx.coroutines.runBlocking
@@ -63,12 +63,12 @@ index d7f22bd..79cf201 100644
 +import kotlinx.cinterop.usePinned
 +import kotlinx.coroutines.Dispatchers
 +import kotlinx.coroutines.withContext
-+import platform.CoreGraphics.CGRectMake
 +import platform.Foundation.NSFileManager
 +import platform.Foundation.NSURL
 +import platform.Foundation.NSUserDefaults
 +import platform.Foundation.NSTemporaryDirectory
 +import platform.UIKit.UIActivityViewController
++import platform.UIKit.UIViewController
 +import platform.UIKit.UIApplication
 +import platform.darwin.dispatch_async
 +import platform.darwin.dispatch_get_main_queue
@@ -157,25 +157,20 @@ index d7f22bd..79cf201 100644
 +        val fileUrl = NSURL.fileURLWithPath(path)
 +        dispatch_async(dispatch_get_main_queue()) {
 +            runCatching {
-+                val app = UIApplication.sharedApplication
-+                val root = app.keyWindow?.rootViewController
-+                    ?: app.windows?.firstOrNull { it.isKeyWindow }?.rootViewController
-+                    ?: app.windows?.firstOrNull()?.rootViewController
-+                var top = root
-+                while (top?.presentedViewController != null) {
-+                    top = top?.presentedViewController
++                // iOS 13+ presents UIActivityViewController on iPad as a centered sheet,
++                // so no popover source configuration is needed.
++                var top: UIViewController? =
++                    UIApplication.sharedApplication.keyWindow?.rootViewController
++                while (true) {
++                    val presented = top?.presentedViewController ?: break
++                    top = presented
 +                }
-+                top ?: error("no view controller to present the share sheet")
++                val host = top ?: error("no view controller to present the share sheet")
 +                val share = UIActivityViewController(
 +                    activityItems = listOf(fileUrl),
 +                    applicationActivities = null,
 +                )
-+                top.view.let { sourceView ->
-+                    share.popoverPresentationController?.sourceView = sourceView
-+                    share.popoverPresentationController?.sourceRect =
-+                        CGRectMake(sourceView.bounds.size.width / 2.0, sourceView.bounds.size.height / 2.0, 1.0, 1.0)
-+                }
-+                top.presentViewController(share, animated = true, completion = null)
++                host.presentViewController(share, animated = true, completion = null)
 +            }
 +        }
 +    }
