@@ -533,3 +533,4 @@ jobs:
 # round 2 2026-10-06: fixed Ktor onDownload import, cinterop pinning imports, keyWindow-based VC resolution
 # round 3 2026-10-06: keyWindow-only VC walk, nullable typing, no popover config (centered sheet on iPad)
 # b35: banner E2E test build 2026-10-06
+# b36: banner test for b35 install 2026-10-06
