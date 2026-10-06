@@ -43,10 +43,10 @@ index e4dc2e2..afe3f0a 100644
      actual val mediaPlaybackForegroundServiceEnabled: Boolean = false
      actual val downloadForegroundServiceEnabled: Boolean = false
 diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.ios.kt
-index d7f22bd..daa5b3e 100644
+index d7f22bd..79cf201 100644
 --- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.ios.kt
 +++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.ios.kt
-@@ -1,36 +1,116 @@
+@@ -1,36 +1,120 @@
  package com.nuvio.app.features.updater
  
 -import kotlinx.coroutines.runBlocking
@@ -55,8 +55,12 @@ index d7f22bd..daa5b3e 100644
 -import org.jetbrains.compose.resources.getString
 +import io.ktor.client.HttpClient
 +import io.ktor.client.engine.darwin.Darwin
++import io.ktor.client.plugins.onDownload
 +import io.ktor.client.request.get
 +import io.ktor.client.statement.bodyAsBytes
++import kotlinx.cinterop.ExperimentalForeignApi
++import kotlinx.cinterop.addressOf
++import kotlinx.cinterop.usePinned
 +import kotlinx.coroutines.Dispatchers
 +import kotlinx.coroutines.withContext
 +import platform.CoreGraphics.CGRectMake
@@ -66,7 +70,6 @@ index d7f22bd..daa5b3e 100644
 +import platform.Foundation.NSTemporaryDirectory
 +import platform.UIKit.UIActivityViewController
 +import platform.UIKit.UIApplication
-+import platform.UIKit.UIWindowScene
 +import platform.darwin.dispatch_async
 +import platform.darwin.dispatch_get_main_queue
 +import platform.posix.fclose
@@ -79,7 +82,7 @@ index d7f22bd..daa5b3e 100644
 + * sheet (esign/Scarlet/Files all import IPA files). The update check, version comparison and
 + * banner come from the shared updater; only this platform surface differs from Android.
 + */
-+@kotlinx.cinterop.ExperimentalForeignApi
++@OptIn(ExperimentalForeignApi::class)
  actual object AppUpdaterPlatform {
 -    actual val isSupported: Boolean = false
 +    actual val isSupported: Boolean = true
@@ -154,9 +157,10 @@ index d7f22bd..daa5b3e 100644
 +        val fileUrl = NSURL.fileURLWithPath(path)
 +        dispatch_async(dispatch_get_main_queue()) {
 +            runCatching {
-+                val scene = UIApplication.sharedApplication.connectedScenes.anyObject() as? UIWindowScene
-+                val root = scene?.windows?.firstOrNull { it.isKeyWindow }?.rootViewController
-+                    ?: scene?.windows?.firstOrNull()?.rootViewController
++                val app = UIApplication.sharedApplication
++                val root = app.keyWindow?.rootViewController
++                    ?: app.windows?.firstOrNull { it.isKeyWindow }?.rootViewController
++                    ?: app.windows?.firstOrNull()?.rootViewController
 +                var top = root
 +                while (top?.presentedViewController != null) {
 +                    top = top?.presentedViewController
