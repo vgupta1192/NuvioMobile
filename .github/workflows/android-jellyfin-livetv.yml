@@ -535,3 +535,4 @@ jobs:
 # b35: banner E2E test build 2026-10-06
 # b36: banner test for b35 install 2026-10-06
 # round 4: canRequestPackageInstalls=true on iOS (skip Android permission dialog)
+# b38: banner test for b37 (permission dialog fix) 2026-10-06
