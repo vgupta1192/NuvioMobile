@@ -532,3 +532,4 @@ jobs:
 # retry 2026-10-06: run 31 was cancelled infra-side (jobs cancelled, no failed step, no new log)
 # round 2 2026-10-06: fixed Ktor onDownload import, cinterop pinning imports, keyWindow-based VC resolution
 # round 3 2026-10-06: keyWindow-only VC walk, nullable typing, no popover config (centered sheet on iPad)
+# b35: banner E2E test build 2026-10-06
