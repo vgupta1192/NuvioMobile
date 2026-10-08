@@ -1,5 +1,5 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index 0456bb6..2dc428f 100644
+index 1f2f8c3..6c36f9a 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 @@ -290,10 +290,17 @@ private fun ExoPlayerSurface(
@@ -22,7 +22,7 @@ index 0456bb6..2dc428f 100644
      }
      val dataSourceFactory = remember(
          context,
-@@ -709,9 +716,8 @@ private fun ExoPlayerSurface(
+@@ -771,9 +778,8 @@ private fun ExoPlayerSurface(
      }
  
      LaunchedEffect(exoPlayer) {
@@ -34,7 +34,7 @@ index 0456bb6..2dc428f 100644
  
                  override fun play() {
                      exoPlayer.playWhenReady = true
-@@ -936,7 +942,21 @@ private fun ExoPlayerSurface(
+@@ -998,7 +1004,21 @@ private fun ExoPlayerSurface(
                      subtitleDelayMs = delayMs.coerceIn(SUBTITLE_DELAY_MIN_MS, SUBTITLE_DELAY_MAX_MS)
                  }
              }
@@ -9034,19 +9034,19 @@ index d6510d3..7be35ca 100644
          disableAutomaticSubtitleSelection()
          preferredSubtitleSelectionApplied = true
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index 49c0019..08f20d3 100644
+index e425be1..f6c2860 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -530,7 +530,8 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
+@@ -546,7 +546,8 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
              useCustomSubtitles = true
              preferredSubtitleSelectionApplied = true
              persistAddonSubtitlePreference(addon)
 -            playerController?.setSubtitleUri(addon.url)
 +            val autoSync = playerController as? AutoSyncPlayerController
 +            if (autoSync != null) autoSync.setSubtitleUriWithSelectedAutoSync(addon.url) else playerController?.setSubtitleUri(addon.url)
+             if (hasBurnedInServerSubtitle) clearServerSubtitleTrack()
          },
          onFetchAddonSubtitles = { fetchAddonSubtitlesForActiveItem() },
-         onSubtitleStyleChanged = PlayerSettingsRepository::setSubtitleStyle,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AutoSyncSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AutoSyncSettings.kt
 new file mode 100644
 index 0000000..024437f
@@ -9064,10 +9064,10 @@ index 0000000..024437f
 +@Composable
 +internal expect fun AutoSyncSettingsContent(enabled: Boolean, isTablet: Boolean)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-index 1ff99b9..660c7dc 100644
+index 38acfa0..c29d42d 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-@@ -561,6 +561,16 @@ private fun PlaybackSettingsSection(
+@@ -602,6 +602,16 @@ private fun PlaybackSettingsSection(
              }
          }
  
