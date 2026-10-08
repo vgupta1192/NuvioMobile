@@ -99,6 +99,7 @@ open class MainActivity : AppCompatActivity() {
         WatchedStorage.initialize(applicationContext)
         MetaScreenSettingsStorage.initialize(applicationContext)
         com.nuvio.app.features.shuffle.EpisodeShuffleStorage.initialize(applicationContext)
+        com.nuvio.app.features.jellyfin.JellyfinPlatform.initialize(applicationContext)
         HomeCatalogSettingsStorage.initialize(applicationContext)
         PlayerSettingsStorage.initialize(applicationContext)
         PlayerTrackPreferenceStorage.initialize(applicationContext)

@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.rounded.AccountCircle
+import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.Extension
@@ -74,6 +75,7 @@ internal fun LazyListScope.settingsRootContent(
     onNotificationsClick: () -> Unit,
     onContentDiscoveryClick: () -> Unit,
     onIntegrationsClick: () -> Unit,
+    onExtraClick: (() -> Unit)? = null,
     onTrackingClick: () -> Unit,
     onSupportersContributorsClick: () -> Unit,
     onLicensesAttributionsClick: () -> Unit,
@@ -161,6 +163,17 @@ internal fun LazyListScope.settingsRootContent(
                         isTablet = isTablet,
                         onClick = onIntegrationsClick,
                     )
+                    // Fork: Live TV + Jellyfin settings under one "Extra" entry.
+                    if (onExtraClick != null) {
+                        SettingsGroupDivider(isTablet = isTablet)
+                        SettingsNavigationRow(
+                            title = "Extra",
+                            description = "Live TV and Jellyfin",
+                            icon = Icons.Rounded.Apps,
+                            isTablet = isTablet,
+                            onClick = onExtraClick,
+                        )
+                    }
                     SettingsGroupDivider(isTablet = isTablet)
                     SettingsNavigationRow(
                         title = stringResource(Res.string.compose_settings_page_notifications),

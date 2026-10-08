@@ -21,6 +21,7 @@ import com.nuvio.app.features.catalog.nextCatalogPaginationState
 import com.nuvio.app.features.catalog.supportsPagination
 import com.nuvio.app.features.home.HomeCatalogSettingsRepository
 import com.nuvio.app.features.home.HomeCatalogSection
+import com.nuvio.app.features.jellyfin.JellyfinRepository
 import com.nuvio.app.features.home.MetaPreview
 import com.nuvio.app.features.home.filterReleasedItems
 import com.nuvio.app.core.poster.withCustomPosterUrls
@@ -90,7 +91,10 @@ object SearchRepository {
         val addonManifestErrorMessage = enabledAddons.firstEnabledManifestError()
         val activeAddons = enabledAddons.filter { it.manifest != null }
         val serverLibraries = ServerCatalog.titleLibraries()
-        if (activeAddons.isEmpty() && serverLibraries.isEmpty()) {
+        // Jellyfin fork feature: the user's Jellyfin server is a search source of its own, so a
+        // signed-in Jellyfin session keeps search alive even with no addons installed.
+        val jellyfinSearch = JellyfinRepository.hasSession
+        if (activeAddons.isEmpty() && serverLibraries.isEmpty() && !jellyfinSearch) {
             activeJob?.cancel()
             lastRequestKey = null
             _uiState.value = SearchUiState(
@@ -109,7 +113,7 @@ object SearchRepository {
             addons = activeAddons,
             query = normalizedQuery,
         )
-        if (requests.isEmpty() && serverLibraries.isEmpty()) {
+        if (requests.isEmpty() && serverLibraries.isEmpty() && !jellyfinSearch) {
             activeJob?.cancel()
             lastRequestKey = null
             _uiState.value = SearchUiState(
@@ -132,8 +136,10 @@ object SearchRepository {
                 },
             )
             serverLibraries.forEach { ref -> append("|server:${ref.connection.id}:${ref.library.id}") }
+            append('|')
+            append(JellyfinRepository.sessionKey.orEmpty())
         }
-        val loaders: List<suspend () -> HomeCatalogSection> =
+        val loaders: List<suspend () -> HomeCatalogSection?> =
             requests.map { request -> suspend { request.toSection(forceRefresh = forceRefresh) } } +
                 serverLibraries.map { ref ->
                     suspend {
@@ -143,6 +149,11 @@ object SearchRepository {
                             }
                         }
                     }
+                } +
+                if (jellyfinSearch) {
+                    listOf(suspend { JellyfinRepository.searchSection(normalizedQuery) })
+                } else {
+                    emptyList()
                 }
         if (canReuseRequestState(forceRefresh, requestKey, lastRequestKey)) return
         lastRequestKey = requestKey

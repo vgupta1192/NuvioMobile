@@ -6,17 +6,20 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.LiveTv
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -24,16 +27,22 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.nuvio.app.core.ui.ExtraNavTabContent
 import com.nuvio.app.core.ui.LocalNuvioBottomNavigationOverlayPadding
 import com.nuvio.app.core.ui.LocalNuvioNavBarScrollState
+import com.nuvio.app.core.ui.LocalNuvioTopNavBarActive
 import com.nuvio.app.core.ui.NuvioNavBarScrollState
 import com.nuvio.app.core.ui.NuvioClassicNavigationBar
 import com.nuvio.app.core.ui.FloatingNavigationBar
 import com.nuvio.app.core.ui.FloatingNavigationItem
+import com.nuvio.app.core.ui.floatingNavigationBarPadding
+import com.nuvio.app.core.ui.nuvioTopNavBarReservedHeight
 import com.nuvio.app.core.ui.PlatformBackHandler
+import com.nuvio.app.core.ui.nuvio
 import com.nuvio.app.core.ui.rememberNuvioNavBarScrollState
 import com.nuvio.app.features.profiles.NuvioProfile
 import com.nuvio.app.features.profiles.ProfileSwitcherTab
+import com.nuvio.app.features.settings.NavBarPosition
 import com.nuvio.app.features.settings.NavBarStyle
 import com.nuvio.app.features.settings.ThemeSettingsRepository
 import dev.chrisbanes.haze.hazeSource
@@ -78,7 +87,21 @@ internal fun MainTabsDestination(
         val tabsRouteActive = rootRouteActive
         val navBarScrollState = rememberNuvioNavBarScrollState()
         val navBarHazeState = rememberHazeState()
+        // Fork features share one "Extra" tab (vertical menu with Live TV + Jellyfin) instead
+        // of one compact tab each, so the bar stays readable on phones. The tab counts as
+        // selected while its menu is open, which parks the jelly pill on it until it closes.
+        val extraLiveTvEnabled = com.nuvio.app.features.livetv.LiveTvPlatform.navEntryEnabled
+        val extraJellyfinEnabled = com.nuvio.app.features.jellyfin.JellyfinPlatform.navEntryEnabled
+        var extraMenuOpen by remember { mutableStateOf(false) }
         val navBarStyleSetting by remember { ThemeSettingsRepository.navBarStyle }.collectAsStateWithLifecycle()
+        val navBarPositionSetting by remember { ThemeSettingsRepository.navBarPosition }.collectAsStateWithLifecycle()
+        // Fork: the floating panel can live at the top of the phone screen (Settings →
+        // navigation bar → Position). Tablets already run a top bar, and the classic bar
+        // is a solid bottom bar by design, so only the phone pill bar honors the setting.
+        val navBarAtTop = !isTabletLayout &&
+            !useNativeBottomTabs &&
+            navBarStyleSetting != NavBarStyle.CLASSIC &&
+            navBarPositionSetting == NavBarPosition.TOP
         val navBarGlowEnabled by ThemeSettingsRepository.navBarGlowEnabled.collectAsStateWithLifecycle()
         val floatingNavigationItems = listOfNotNull(
             FloatingNavigationItem(
@@ -99,13 +122,30 @@ internal fun MainTabsDestination(
                 drawable = Res.drawable.sidebar_library,
                 label = stringResource(Res.string.compose_nav_library),
             ),
-            // Live TV fork feature: opens its own route (Android and desktop)
-            if (com.nuvio.app.features.livetv.LiveTvPlatform.navEntryEnabled) {
+            // Fork features hub: opens a vertical menu with the fork destinations instead of
+            // navigating itself. `content` hosts both the tab visual and the popup.
+            if (extraLiveTvEnabled || extraJellyfinEnabled) {
                 FloatingNavigationItem(
-                    selected = false,
-                    onClick = { com.nuvio.app.features.livetv.LiveTvLauncher.open() },
-                    icon = androidx.compose.material.icons.Icons.Rounded.LiveTv,
-                    label = "Live TV",
+                    selected = extraMenuOpen,
+                    onClick = { extraMenuOpen = true },
+                    label = "Extra",
+                    content = { _ ->
+                        // The bar's JellyTabRow renders item.label for every non-compact tab
+                        // (that is where the Profile label comes from too), so the content
+                        // visual must stay icon-only or the tab shows "Extra" twice.
+                        ExtraNavTabContent(
+                            selected = extraMenuOpen,
+                            expanded = extraMenuOpen,
+                            showLiveTv = extraLiveTvEnabled,
+                            showJellyfin = extraJellyfinEnabled,
+                            popupBelowAnchor = isTabletLayout || navBarAtTop,
+                            onDismiss = { extraMenuOpen = false },
+                            onLiveTv = { com.nuvio.app.features.livetv.LiveTvLauncher.open() },
+                            onJellyfin = { com.nuvio.app.features.jellyfin.JellyfinLauncher.open() },
+                            iconSize = 28.dp,
+                            showLabel = false,
+                        )
+                    },
                 )
             } else {
                 null
@@ -121,7 +161,7 @@ internal fun MainTabsDestination(
                         onProfileSelected = onProfileSelected,
                         onAddProfileRequested = onAddProfileRequested,
                         hazeState = navBarHazeState,
-                        popupBelowAnchor = isTabletLayout,
+                        popupBelowAnchor = isTabletLayout || navBarAtTop,
                     )
                 },
             ),
@@ -154,12 +194,26 @@ internal fun MainTabsDestination(
                             icon = Res.drawable.sidebar_library,
                             contentDescription = stringResource(Res.string.compose_nav_library),
                         )
-                        if (com.nuvio.app.features.livetv.LiveTvPlatform.navEntryEnabled) {
+                        // Fork features hub (same Extra menu as the floating bar; the classic
+                        // bar shows no labels).
+                        if (extraLiveTvEnabled || extraJellyfinEnabled) {
                             NavItem(
-                                selected = false,
-                                onClick = { com.nuvio.app.features.livetv.LiveTvLauncher.open() },
-                                icon = Icons.Rounded.LiveTv,
-                                contentDescription = "Live TV",
+                                selected = extraMenuOpen,
+                                onClick = { extraMenuOpen = true },
+                                content = {
+                                    ExtraNavTabContent(
+                                        selected = extraMenuOpen,
+                                        expanded = extraMenuOpen,
+                                        showLiveTv = extraLiveTvEnabled,
+                                        showJellyfin = extraJellyfinEnabled,
+                                        popupBelowAnchor = false,
+                                        onDismiss = { extraMenuOpen = false },
+                                        onLiveTv = { com.nuvio.app.features.livetv.LiveTvLauncher.open() },
+                                        onJellyfin = { com.nuvio.app.features.jellyfin.JellyfinLauncher.open() },
+                                        iconSize = MaterialTheme.nuvio.components.navIconSize,
+                                        showLabel = false,
+                                    )
+                                },
                             )
                         }
                         NavItem(
@@ -178,9 +232,28 @@ internal fun MainTabsDestination(
             },
         ) { innerPadding ->
             Box(modifier = Modifier.fillMaxSize()) {
+                // Fork: a top-docked bar floats over the screen titles, so reserve its whole
+                // footprint above the content instead. Screens see LocalNuvioTopNavBarActive
+                // and drop their own status-bar padding (no double gap under the bar).
+                val topNavBarClearance = if (navBarAtTop) {
+                    WindowInsets.statusBars.asPaddingValues().calculateTopPadding() +
+                        nuvioTopNavBarReservedHeight
+                } else {
+                    0.dp
+                }
                 CompositionLocalProvider(
-                    LocalNuvioBottomNavigationOverlayPadding provides if (useNativeBottomTabs) 49.dp else if (!isTabletLayout && navBarStyleSetting != NavBarStyle.CLASSIC) 72.dp else 0.dp,
+                    // The overlay padding keeps scrollable content clear of the floating bar.
+                    // Top position frees the bottom edge (content clears the system gesture
+                    // inset via plain padding below); the top edge is reserved explicitly.
+                    LocalNuvioBottomNavigationOverlayPadding provides if (useNativeBottomTabs) {
+                        49.dp
+                    } else if (navBarAtTop || (isTabletLayout || navBarStyleSetting == NavBarStyle.CLASSIC)) {
+                        0.dp
+                    } else {
+                        72.dp
+                    },
                     LocalNuvioNavBarScrollState provides navBarScrollState,
+                    LocalNuvioTopNavBarActive provides (topNavBarClearance > 0.dp),
                 ) {
                     AppTabHost(
                         selectedTab = selectedTab,
@@ -191,6 +264,15 @@ internal fun MainTabsDestination(
                             .fillMaxSize()
                             .then(if (isTabletLayout || navBarStyleSetting != NavBarStyle.CLASSIC) Modifier.hazeSource(state = navBarHazeState) else Modifier)
                             .then(if (navBarStyleSetting == NavBarStyle.ADAPTIVE) Modifier.nestedScroll(navBarScrollState.nestedScrollConnection) else Modifier)
+                            .then(
+                                if (navBarAtTop) {
+                                    Modifier
+                                        .padding(top = topNavBarClearance)
+                                        .padding(bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding())
+                                } else {
+                                    Modifier
+                                },
+                            )
                             .padding(innerPadding),
                     )
                 }
@@ -218,9 +300,19 @@ internal fun MainTabsDestination(
                         else -> {}
                     }
                     FloatingNavigationBar(
-                        modifier = Modifier.align(Alignment.BottomCenter),
+                        modifier = Modifier.align(if (navBarAtTop) Alignment.TopCenter else Alignment.BottomCenter),
                         scrollState = navBarScrollState,
                         hazeState = navBarHazeState,
+                        // The default padding reserves the bottom system inset; a top bar
+                        // mirrors the tablet padding instead (status bar + gap).
+                        contentPadding = if (navBarAtTop) {
+                            PaddingValues(
+                                top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 10.dp,
+                                bottom = 8.dp,
+                            )
+                        } else {
+                            floatingNavigationBarPadding()
+                        },
                         items = floatingNavigationItems,
                         glowEnabled = navBarGlowEnabled,
                     )

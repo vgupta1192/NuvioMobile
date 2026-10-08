@@ -17,6 +17,7 @@ import nuvio.composeapp.generated.resources.compose_settings_page_appearance
 import nuvio.composeapp.generated.resources.compose_settings_page_content_discovery
 import nuvio.composeapp.generated.resources.compose_settings_page_debrid
 import nuvio.composeapp.generated.resources.compose_settings_page_continue_watching
+import nuvio.composeapp.generated.resources.extra_settings_title
 import nuvio.composeapp.generated.resources.compose_settings_page_homescreen
 import nuvio.composeapp.generated.resources.compose_settings_page_integrations
 import nuvio.composeapp.generated.resources.compose_settings_page_licenses_attributions
@@ -166,6 +167,12 @@ internal enum class SettingsPage(
         // Keep the enum name for saved navigation-state compatibility.
         titleRes = Res.string.compose_settings_page_tracking,
         category = SettingsCategory.Account,
+        parentPage = Root,
+    ),
+    Extra(
+        // Fork page: Live TV + Jellyfin settings under one entry.
+        titleRes = Res.string.extra_settings_title,
+        category = SettingsCategory.General,
         parentPage = Root,
     ),
 }

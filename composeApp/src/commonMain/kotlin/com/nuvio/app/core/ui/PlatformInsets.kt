@@ -21,6 +21,11 @@ internal val LocalNuvioBottomNavigationOverlayPadding = staticCompositionLocalOf
 
 internal val LocalBottomInsetsConsumed = staticCompositionLocalOf { false }
 
+/** True while the phone floating bar is docked at the top: the tab host reserves the bar's
+ *  whole footprint (status bar included) above the content, so screens drop their own
+ *  status-bar top padding to avoid a double gap under the bar. */
+internal val LocalNuvioTopNavBarActive = staticCompositionLocalOf { false }
+
 /** CompositionLocal providing the shared [NuvioNavBarScrollState] so child screens can attach the nestedScrollConnection. */
 val LocalNuvioNavBarScrollState = staticCompositionLocalOf<NuvioNavBarScrollState?> { null }
 

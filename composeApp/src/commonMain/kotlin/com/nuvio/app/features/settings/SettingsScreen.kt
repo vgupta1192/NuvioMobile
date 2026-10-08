@@ -705,6 +705,7 @@ private fun MobileSettingsScreen(
                             onNotificationsClick = { onPageChange(SettingsPage.Notifications) },
                             onContentDiscoveryClick = { onPageChange(SettingsPage.ContentDiscovery) },
                             onIntegrationsClick = { onPageChange(SettingsPage.Integrations) },
+                            onExtraClick = { onPageChange(SettingsPage.Extra) },
                             onTrackingClick = { onPageChange(SettingsPage.TraktAuthentication) },
                             onSupportersContributorsClick = onSupportersContributorsClick,
                             onLicensesAttributionsClick = onLicensesAttributionsClick,
@@ -854,6 +855,9 @@ private fun MobileSettingsScreen(
                     commentsEnabled = traktCommentsEnabled,
                     mdbListConnected = mdbListConnected,
                     onCommentsEnabledChange = TraktCommentsSettings::setEnabled,
+                )
+                SettingsPage.Extra -> extraSettingsContent(
+                    isTablet = false,
                 )
             }
         }
@@ -1137,6 +1141,7 @@ private fun TabletSettingsScreen(
                                 onNotificationsClick = { openInlinePage(SettingsPage.Notifications) },
                                 onContentDiscoveryClick = { openInlinePage(SettingsPage.ContentDiscovery) },
                                 onIntegrationsClick = { openInlinePage(SettingsPage.Integrations) },
+                                onExtraClick = { openInlinePage(SettingsPage.Extra) },
                                 onTrackingClick = { openInlinePage(SettingsPage.TraktAuthentication) },
                                 onSupportersContributorsClick = { openInlinePage(SettingsPage.SupportersContributors) },
                                 onLicensesAttributionsClick = { openInlinePage(SettingsPage.LicensesAttributions) },
@@ -1290,6 +1295,9 @@ private fun TabletSettingsScreen(
                         commentsEnabled = traktCommentsEnabled,
                         mdbListConnected = mdbListConnected,
                         onCommentsEnabledChange = TraktCommentsSettings::setEnabled,
+                    )
+                    SettingsPage.Extra -> extraSettingsContent(
+                        isTablet = true,
                     )
                 }
             }

@@ -67,7 +67,7 @@ internal fun JellyTabRow(
     ) {
         items.forEach { item ->
             Box(
-                Modifier.weight(1f).fillMaxHeight().graphicsLayer {
+                Modifier.weight(if (item.compact) 0.76f else 1f).fillMaxHeight().graphicsLayer {
                     val scale = if (active) motion.frame.contentScale else 1f
                     scaleX = scale
                     scaleY = scale
@@ -81,20 +81,26 @@ internal fun JellyTabRow(
                             item.drawable != null -> Icon(painterResource(item.drawable), null, iconModifier, tint = iconTint)
                         }
                     }
-                    Box(Modifier.height(labelHeight * labelFraction).fillMaxWidth().clipToBounds().alpha(labelFraction)) {
-                        Text(
-                            text = item.label,
-                            color = color,
-                            style = TextStyle(
-                                fontSize = if (compactSize) 12.sp else 13.sp,
-                                lineHeight = if (compactSize) 14.sp else 16.sp,
-                                fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-                                textAlign = TextAlign.Center,
-                            ),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                        )
+                    // Compact tabs keep a silent spacer so their icon stays on the same baseline
+                    // as the labeled tabs while the label area collapses on scroll.
+                    if (item.compact) {
+                        Spacer(Modifier.height(labelHeight * labelFraction))
+                    } else {
+                        Box(Modifier.height(labelHeight * labelFraction).fillMaxWidth().clipToBounds().alpha(labelFraction)) {
+                            Text(
+                                text = item.label,
+                                color = color,
+                                style = TextStyle(
+                                    fontSize = if (compactSize) 12.sp else 13.sp,
+                                    lineHeight = if (compactSize) 14.sp else 16.sp,
+                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                                    textAlign = TextAlign.Center,
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                            )
+                        }
                     }
                 }
             }
@@ -119,7 +125,7 @@ internal fun JellyTabTargets(
                 item.onClick()
             }
             Box(
-                modifier = Modifier.weight(1f).fillMaxHeight()
+                modifier = Modifier.weight(if (item.compact) 0.76f else 1f).fillMaxHeight()
                     .selectable(
                         selected = item.selected,
                         role = Role.Tab,

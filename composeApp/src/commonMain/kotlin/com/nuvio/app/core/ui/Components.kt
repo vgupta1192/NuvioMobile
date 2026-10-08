@@ -90,7 +90,13 @@ fun NuvioScreen(
             .background(tokens.colors.background),
         contentPadding = PaddingValues(
             start = horizontalPadding,
-            top = topPadding ?: tokens.spacing.screenTop + statusBarTop + nuvioPlatformExtraTopPadding,
+            // Top-docked bar: the tab host reserved the bar's footprint (status bar included)
+            // above this screen, so only the regular screen gap remains.
+            top = topPadding ?: if (LocalNuvioTopNavBarActive.current) {
+                tokens.spacing.screenTop + nuvioPlatformExtraTopPadding
+            } else {
+                tokens.spacing.screenTop + statusBarTop + nuvioPlatformExtraTopPadding
+            },
             end = horizontalPadding,
             bottom = nuvioSafeBottomPadding(tokens.spacing.screenBottom),
         ),
@@ -156,7 +162,13 @@ fun NuvioScreenHeader(
         )
         return
     }
-    val resolvedTopPadding = topPadding ?: if (includeStatusBarPadding) statusBarTop else NuvioTokens.Space.none
+    val resolvedTopPadding = topPadding ?: when {
+        // Top-docked bar: the viewport already starts below the bar, so a pinned header
+        // needs no status-bar padding — just a small gap.
+        LocalNuvioTopNavBarActive.current -> NuvioTokens.Space.s2
+        includeStatusBarPadding -> statusBarTop
+        else -> NuvioTokens.Space.none
+    }
     Box(
         modifier = modifier.fillMaxWidth(),
     ) {
