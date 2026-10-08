@@ -546,7 +546,8 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
             useCustomSubtitles = true
             preferredSubtitleSelectionApplied = true
             persistAddonSubtitlePreference(addon)
-            playerController?.setSubtitleUri(addon.url)
+            val autoSync = playerController as? AutoSyncPlayerController
+            if (autoSync != null) autoSync.setSubtitleUriWithSelectedAutoSync(addon.url) else playerController?.setSubtitleUri(addon.url)
             if (hasBurnedInServerSubtitle) clearServerSubtitleTrack()
         },
         onFetchAddonSubtitles = { fetchAddonSubtitlesForActiveItem() },

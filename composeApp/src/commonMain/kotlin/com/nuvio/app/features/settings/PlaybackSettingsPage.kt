@@ -603,6 +603,16 @@ private fun PlaybackSettingsSection(
         }
 
         SettingsSection(
+            title = "Auto Sync Subtitles",
+            isTablet = isTablet,
+        ) {
+            AutoSyncSettingsContent(
+                enabled = !autoPlayPlayerSettings.externalPlayerEnabled,
+                isTablet = isTablet,
+            )
+        }
+
+        SettingsSection(
             title = stringResource(Res.string.settings_playback_section_subtitle_rendering),
             isTablet = isTablet,
         ) {
