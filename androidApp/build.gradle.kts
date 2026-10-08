@@ -113,7 +113,7 @@ android {
         abi {
             isEnable = buildsReleaseApks
             reset()
-            include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+            include("arm64-v8a") // fork: single-ABI release APK (smaller APK + faster packaging)
             isUniversalApk = false
         }
     }
@@ -145,7 +145,7 @@ android {
 
 androidComponents {
     onVariants(selector().withBuildType("debug")) { variant ->
-        variant.applicationId.set("com.nuviodebug.com")
+        variant.applicationId.set("com.nuviodebug.com.livetv") // Live TV fork variant: installs alongside the main app
     }
 }
 

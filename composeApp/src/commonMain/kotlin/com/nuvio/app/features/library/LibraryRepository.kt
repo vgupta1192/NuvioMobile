@@ -616,8 +616,8 @@ object LibraryRepository {
             val providerSnapshot = provider.snapshot()
             val newUiState = LibraryUiState(
                 sourceMode = sourceMode,
-                items = providerSnapshot.items.withCustomPosterUrls(posterPattern),
-                sections = providerSnapshot.sections.map { section ->
+                items = providerSnapshot.items.withoutLiveTv().withCustomPosterUrls(posterPattern),
+                sections = providerSnapshot.sections.sectionsWithoutLiveTv().map { section ->
                     section.copy(items = section.items.withCustomPosterUrls(posterPattern))
                 },
                 isLoaded = providerSnapshot.hasLoaded,
@@ -631,6 +631,7 @@ object LibraryRepository {
         }
 
         val items = localSnapshot.items
+            .withoutLiveTv()
             .sortedByDescending { it.savedAtEpochMs }
         val sections = items
             .groupBy { it.type }
@@ -781,3 +782,14 @@ private fun localizedLibraryOtherTitle(): String =
 private fun localizedStringOrDefault(resource: StringResource, fallback: String): String =
     runCatching { runBlocking { getString(resource) } }
         .getOrDefault(fallback)
+
+// Live TV fork: saved TV channels stay out of the Library (they belong to the Live TV screen)
+private fun List<LibraryItem>.withoutLiveTv(): List<LibraryItem> =
+    filterNot { com.nuvio.app.features.livetv.LiveTvCatalogFilter.isLiveTvType(it.type) }
+
+// Provider sections can be user lists: drop a section only when TV items were all it held
+private fun List<LibrarySection>.sectionsWithoutLiveTv(): List<LibrarySection> =
+    mapNotNull { section ->
+        val kept = section.items.withoutLiveTv()
+        if (kept.isEmpty() && section.items.isNotEmpty()) null else section.copy(items = kept)
+    }

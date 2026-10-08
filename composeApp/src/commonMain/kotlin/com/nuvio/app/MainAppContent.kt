@@ -101,6 +101,13 @@ import com.nuvio.app.features.collection.CollectionSyncService
 import com.nuvio.app.features.details.MetaDetailsRepository
 import com.nuvio.app.features.details.MetaScreenSettingsRepository
 import com.nuvio.app.features.downloads.DownloadItem
+import com.nuvio.app.features.livetv.LiveTvChannel
+import com.nuvio.app.features.livetv.LiveTvLauncher
+import com.nuvio.app.features.livetv.LiveTvScreen
+import com.nuvio.app.features.livetv.LiveTvStreamOption
+import com.nuvio.app.features.player.sanitizePlaybackHeaders
+import com.nuvio.app.features.player.sanitizePlaybackResponseHeaders
+import com.nuvio.app.navigation.LiveTvRoute
 import com.nuvio.app.features.downloads.DownloadSubtitles
 import com.nuvio.app.features.downloads.DownloadsRepository
 import com.nuvio.app.features.home.HomeCatalogSection
@@ -707,6 +714,13 @@ internal fun MainAppContent(
 
         LaunchedEffect(navController) {
             if (!ownsAppRuntime) return@LaunchedEffect
+            LiveTvLauncher.openRequests.collectLatest {
+                if (navBackStack.lastOrNull() !is LiveTvRoute) navController.navigate(LiveTvRoute())
+            }
+        }
+
+        LaunchedEffect(navController) {
+            if (!ownsAppRuntime) return@LaunchedEffect
             AppDeepLinkRepository.pendingDeepLink.collectLatest { deepLink ->
                 when (deepLink) {
                     is AppDeepLink.Meta -> {
@@ -845,6 +859,33 @@ internal fun MainAppContent(
                 parentMetaType = item.parentMetaType,
                 initialPositionMs = resumeEntry?.lastPositionMs?.takeIf { it > 0L } ?: 0L,
                 initialProgressFraction = resumeEntry?.progressFraction?.takeIf { it > 0f },
+            )
+            if (playerSettingsUiState.externalPlayerEnabled) {
+                coroutineScope.launch { openExternalPlayback(playerLaunch) }
+                return
+            }
+            val launchId = PlayerLaunchStore.put(playerLaunch)
+            navController.navigate(PlayerRoute(launchId = launchId, title = playerLaunch.title))
+        }
+
+        fun openLiveTvChannel(channel: LiveTvChannel, option: LiveTvStreamOption) {
+            val stream = option.stream
+            val playerLaunch = PlayerLaunch(
+                profileId = activePlaybackProfileId,
+                title = channel.name,
+                sourceUrl = option.url,
+                sourceHeaders = sanitizePlaybackHeaders(stream.behaviorHints.proxyHeaders?.request),
+                sourceResponseHeaders = sanitizePlaybackResponseHeaders(stream.behaviorHints.proxyHeaders?.response),
+                logo = channel.displayLogo,
+                poster = channel.poster,
+                streamTitle = option.label,
+                streamSubtitle = option.subtitle,
+                providerName = stream.addonName,
+                providerAddonId = stream.addonId,
+                contentType = channel.type,
+                videoId = channel.id,
+                parentMetaId = channel.id,
+                parentMetaType = channel.type,
             )
             if (playerSettingsUiState.externalPlayerEnabled) {
                 coroutineScope.launch { openExternalPlayback(playerLaunch) }
@@ -1538,6 +1579,10 @@ internal fun MainAppContent(
                             AppFeaturePolicy.inAppUpdaterEnabled && AppUpdaterPlatform.isDebugBuild
                         ) appUpdaterController::showDebugTestUpdate else null,
                     )
+                }
+                entry<LiveTvRoute> { route ->
+                    val onBack = rememberGuardedPopBackStack(navController, route)
+                    LiveTvScreen(onBack = onBack, onPlay = ::openLiveTvChannel)
                 }
                 entry<DownloadsRoute> { route ->
                     DownloadsDestination(
