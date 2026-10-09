@@ -47,6 +47,8 @@ fun buildHomeCatalogDefinitions(addons: List<ManagedAddon>): List<HomeCatalogDef
     }.flatMap { (addon, manifest) ->
         manifest.catalogs
             .filter { catalog -> catalog.extra.none { it.isRequired } }
+            // Live TV fork: TV catalogs live on the Live TV screen only
+            .filterNot { catalog -> com.nuvio.app.features.livetv.LiveTvCatalogFilter.isLiveTvCatalog(addon, catalog) }
             .map { catalog ->
                 HomeCatalogDefinition(
                     key = "${manifest.id}:${catalog.type}:${catalog.id}",

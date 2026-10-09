@@ -79,6 +79,7 @@ import com.nuvio.app.features.tracking.TrackingRefreshIntent
 import com.nuvio.app.features.trakt.TraktAuthRepository
 import com.nuvio.app.features.trakt.TraktAuthUiState
 import com.nuvio.app.features.trakt.TraktBrandAsset
+import com.nuvio.app.features.trakt.TraktConfig
 import com.nuvio.app.features.trakt.TraktConnectionMode
 import com.nuvio.app.features.trakt.traktBrandPainter
 import com.nuvio.app.features.watchprogress.WatchProgressSourceCoordinator
@@ -191,10 +192,12 @@ internal fun TrackingProviderCards(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(if (isTablet) 16.dp else 12.dp),
     ) {
-        TraktProviderCard(
-            uiState = traktUiState,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        if (TraktConfig.CLIENT_ID.isNotBlank()) {
+            TraktProviderCard(
+                uiState = traktUiState,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         SimklProviderCard(
             uiState = simklUiState,
             isSyncing = syncState.isLoading,

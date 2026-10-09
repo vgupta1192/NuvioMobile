@@ -101,6 +101,13 @@ import com.nuvio.app.features.collection.CollectionSyncService
 import com.nuvio.app.features.details.MetaDetailsRepository
 import com.nuvio.app.features.details.MetaScreenSettingsRepository
 import com.nuvio.app.features.downloads.DownloadItem
+import com.nuvio.app.features.livetv.LiveTvChannel
+import com.nuvio.app.features.livetv.LiveTvLauncher
+import com.nuvio.app.features.livetv.LiveTvScreen
+import com.nuvio.app.features.livetv.LiveTvStreamOption
+import com.nuvio.app.features.player.sanitizePlaybackHeaders
+import com.nuvio.app.features.player.sanitizePlaybackResponseHeaders
+import com.nuvio.app.navigation.LiveTvRoute
 import com.nuvio.app.features.downloads.DownloadSubtitles
 import com.nuvio.app.features.downloads.DownloadsRepository
 import com.nuvio.app.features.home.HomeCatalogSection
@@ -108,6 +115,12 @@ import com.nuvio.app.features.home.HomeCatalogSettingsRepository
 import com.nuvio.app.features.home.HomeRepository
 import com.nuvio.app.features.home.buildAddonCatalogRefreshSignature
 import com.nuvio.app.features.home.components.shouldBlurContinueWatchingArtwork
+import com.nuvio.app.features.jellyfin.JELLYFIN_META_ID_PREFIX
+import com.nuvio.app.features.jellyfin.JellyfinItem
+import com.nuvio.app.features.jellyfin.JellyfinLauncher
+import com.nuvio.app.features.jellyfin.JellyfinRepository
+import com.nuvio.app.features.jellyfin.JellyfinDetailScreen
+import com.nuvio.app.features.jellyfin.JellyfinScreen
 import com.nuvio.app.features.library.LibraryItem
 import com.nuvio.app.features.library.LibraryRepository
 import com.nuvio.app.features.library.LibrarySection
@@ -699,6 +712,13 @@ internal fun MainAppContent(
 
         LaunchedEffect(navController) {
             if (!ownsAppRuntime) return@LaunchedEffect
+            LiveTvLauncher.openRequests.collectLatest {
+                if (navBackStack.lastOrNull() !is LiveTvRoute) navController.navigate(LiveTvRoute())
+            }
+        }
+
+        LaunchedEffect(navController) {
+            if (!ownsAppRuntime) return@LaunchedEffect
             AppDeepLinkRepository.pendingDeepLink.collectLatest { deepLink ->
                 when (deepLink) {
                     is AppDeepLink.Meta -> {
@@ -837,6 +857,72 @@ internal fun MainAppContent(
                 parentMetaType = item.parentMetaType,
                 initialPositionMs = resumeEntry?.lastPositionMs?.takeIf { it > 0L } ?: 0L,
                 initialProgressFraction = resumeEntry?.progressFraction?.takeIf { it > 0f },
+            )
+            if (playerSettingsUiState.externalPlayerEnabled) {
+                coroutineScope.launch { openExternalPlayback(playerLaunch) }
+                return
+            }
+            val launchId = PlayerLaunchStore.put(playerLaunch)
+            navController.navigate(PlayerRoute(launchId = launchId, title = playerLaunch.title))
+        }
+
+        fun openLiveTvChannel(channel: LiveTvChannel, option: LiveTvStreamOption) {
+            val stream = option.stream
+            val playerLaunch = PlayerLaunch(
+                profileId = activePlaybackProfileId,
+                title = channel.name,
+                sourceUrl = option.url,
+                sourceHeaders = sanitizePlaybackHeaders(stream.behaviorHints.proxyHeaders?.request),
+                sourceResponseHeaders = sanitizePlaybackResponseHeaders(stream.behaviorHints.proxyHeaders?.response),
+                logo = channel.displayLogo,
+                poster = channel.poster,
+                streamTitle = option.label,
+                streamSubtitle = option.subtitle,
+                providerName = stream.addonName,
+                providerAddonId = stream.addonId,
+                contentType = channel.type,
+                videoId = channel.id,
+                parentMetaId = channel.id,
+                parentMetaType = channel.type,
+            )
+            if (playerSettingsUiState.externalPlayerEnabled) {
+                coroutineScope.launch { openExternalPlayback(playerLaunch) }
+                return
+            }
+            val launchId = PlayerLaunchStore.put(playerLaunch)
+            navController.navigate(PlayerRoute(launchId = launchId, title = playerLaunch.title))
+        }
+
+        // Jellyfin fork feature: nav entry opens the Jellyfin route
+        LaunchedEffect(navController) {
+            if (!ownsAppRuntime) return@LaunchedEffect
+            JellyfinLauncher.openRequests.collectLatest {
+                if (navBackStack.lastOrNull() !is JellyfinRoute) navController.navigate(JellyfinRoute())
+            }
+        }
+
+        fun openJellyfinItem(item: JellyfinItem) {
+            val session = JellyfinRepository.uiState.value.session ?: return
+            val sourceUrl = JellyfinRepository.streamUrlFor(item) ?: return
+            val isEpisode = item.isEpisode
+            val playerLaunch = PlayerLaunch(
+                profileId = activePlaybackProfileId,
+                title = if (isEpisode) item.seriesName ?: item.name else item.name,
+                sourceUrl = sourceUrl,
+                poster = JellyfinRepository.posterUrlFor(item, maxWidth = 720),
+                background = JellyfinRepository.backdropUrlFor(item),
+                seasonNumber = item.parentIndexNumber,
+                episodeNumber = item.indexNumber,
+                episodeTitle = if (isEpisode) item.name else null,
+                episodeThumbnail = if (isEpisode) JellyfinRepository.posterUrlFor(item, maxWidth = 400) else null,
+                streamTitle = "Jellyfin · " + session.serverName,
+                providerName = "Jellyfin",
+                contentType = item.stremioType,
+                videoId = JELLYFIN_META_ID_PREFIX + item.id,
+                parentMetaId = JELLYFIN_META_ID_PREFIX + (item.seriesId ?: item.id),
+                parentMetaType = if (isEpisode) "series" else item.stremioType,
+                initialPositionMs = item.resumePositionMs,
+                initialProgressFraction = item.playedPercentage?.let { (it / 100.0).toFloat() },
             )
             if (playerSettingsUiState.externalPlayerEnabled) {
                 coroutineScope.launch { openExternalPlayback(playerLaunch) }
@@ -1291,12 +1377,23 @@ internal fun MainAppContent(
                             AppTabActions(
                                 onCatalogClick = onCatalogClick,
                                 onPosterClick = { meta ->
-                                    navController.navigate(
-                                        DetailRoute(type = meta.type, id = meta.id, title = meta.name),
-                                    )
+                                    if (meta.id.startsWith(JELLYFIN_META_ID_PREFIX)) {
+                                        navController.navigate(
+                                            JellyfinDetailRoute(
+                                                itemId = meta.id.removePrefix(JELLYFIN_META_ID_PREFIX),
+                                                title = meta.name,
+                                            ),
+                                        )
+                                    } else {
+                                        navController.navigate(
+                                            DetailRoute(type = meta.type, id = meta.id, title = meta.name),
+                                        )
+                                    }
                                 },
                                 onPosterLongClick = { meta ->
-                                    openPosterActions(PosterActionTarget(preview = meta))
+                                    if (!meta.id.startsWith(JELLYFIN_META_ID_PREFIX)) {
+                                        openPosterActions(PosterActionTarget(preview = meta))
+                                    }
                                 },
                                 onLibraryPosterClick = { item ->
                                     navController.navigate(
@@ -1534,6 +1631,18 @@ internal fun MainAppContent(
                             AppFeaturePolicy.inAppUpdaterEnabled && AppUpdaterPlatform.isDebugBuild
                         ) appUpdaterController::showDebugTestUpdate else null,
                     )
+                }
+                entry<LiveTvRoute> { route ->
+                    val onBack = rememberGuardedPopBackStack(navController, route)
+                    LiveTvScreen(onBack = onBack, onPlay = ::openLiveTvChannel)
+                }
+                entry<JellyfinRoute> { route ->
+                    val onBack = rememberGuardedPopBackStack(navController, route)
+                    JellyfinScreen(onBack = onBack, onPlay = ::openJellyfinItem)
+                }
+                entry<JellyfinDetailRoute> { route ->
+                    val onBack = rememberGuardedPopBackStack(navController, route)
+                    JellyfinDetailScreen(route = route, onBack = onBack, onPlay = ::openJellyfinItem)
                 }
                 entry<DownloadsRoute> { route ->
                     DownloadsDestination(

@@ -38,6 +38,24 @@ internal object AppUpdaterRepository {
     }
 
     suspend fun getLatestChannelUpdate(channel: UpdateChannel): Result<AppUpdate> = runCatching {
+        // Self-host fork patch: updates come from the fork's CI releases, newest build number wins
+        val forkResponse = httpRequestRaw(
+            method = "GET",
+            url = "https://api.github.com/repos/${ForkBuild.REPO}/releases?per_page=100",
+            headers = mapOf(
+                "Accept" to "application/vnd.github+json",
+                "User-Agent" to "NuvioMobile",
+            ),
+            body = "",
+        )
+        currentCoroutineContext().ensureActive()
+        if (forkResponse.status !in 200..299) {
+            error(getString(Res.string.updates_github_api_error, forkResponse.status))
+        }
+        return@runCatching ForkBuild.newest(json.decodeFromString<List<GitHubReleaseDto>>(forkResponse.body))
+            ?: throw NoChannelReleaseException()
+
+        @Suppress("UNREACHABLE_CODE")
         val response = httpRequestRaw(
             method = "GET",
             url = "https://api.github.com/repos/NuvioMedia/NuvioMobile/${releasePath(channel)}",

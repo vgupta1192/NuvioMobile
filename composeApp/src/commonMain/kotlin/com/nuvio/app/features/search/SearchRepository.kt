@@ -18,6 +18,7 @@ import com.nuvio.app.features.catalog.nextCatalogPaginationState
 import com.nuvio.app.features.catalog.supportsPagination
 import com.nuvio.app.features.home.HomeCatalogSettingsRepository
 import com.nuvio.app.features.home.HomeCatalogSection
+import com.nuvio.app.features.jellyfin.JellyfinRepository
 import com.nuvio.app.features.home.MetaPreview
 import com.nuvio.app.features.home.filterReleasedItems
 import com.nuvio.app.core.poster.withCustomPosterUrls
@@ -86,7 +87,10 @@ object SearchRepository {
         val hasPendingAddonManifests = enabledAddons.hasPendingEnabledManifests()
         val addonManifestErrorMessage = enabledAddons.firstEnabledManifestError()
         val activeAddons = enabledAddons.filter { it.manifest != null }
-        if (activeAddons.isEmpty()) {
+        // Jellyfin fork feature: the user's Jellyfin server is a search source of its own, so a
+        // signed-in Jellyfin session keeps search alive even with no addons installed.
+        val jellyfinSearch = JellyfinRepository.hasSession
+        if (activeAddons.isEmpty() && !jellyfinSearch) {
             activeJob?.cancel()
             lastRequestKey = null
             _uiState.value = SearchUiState(
@@ -105,7 +109,7 @@ object SearchRepository {
             addons = activeAddons,
             query = normalizedQuery,
         )
-        if (requests.isEmpty()) {
+        if (requests.isEmpty() && !jellyfinSearch) {
             activeJob?.cancel()
             lastRequestKey = null
             _uiState.value = SearchUiState(
@@ -127,6 +131,8 @@ object SearchRepository {
                     "${request.addon.manifestUrl}:${request.type}:${request.catalogId}"
                 },
             )
+            append('|')
+            append(JellyfinRepository.sessionKey.orEmpty())
         }
         if (canReuseRequestState(forceRefresh, requestKey, lastRequestKey)) return
         lastRequestKey = requestKey
@@ -136,6 +142,7 @@ object SearchRepository {
 
         activeJob = scope.launch {
             val resultChannel = Channel<IndexedSearchResult>(Channel.UNLIMITED)
+            val jellyfinIndex = if (jellyfinSearch) requests.size else -1
             val jobs = requests.mapIndexed { index, request ->
                 launch {
                     runCatching { request.toSection(forceRefresh = forceRefresh) }
@@ -160,11 +167,40 @@ object SearchRepository {
                         )
                 }
             }
+            val jellyfinJob = if (jellyfinSearch) {
+                launch {
+                    runCatching { JellyfinRepository.searchSection(normalizedQuery) }
+                        .fold(
+                            onSuccess = { section ->
+                                if (section != null) {
+                                    resultChannel.trySend(
+                                        IndexedSearchResult(
+                                            index = jellyfinIndex,
+                                            section = section,
+                                        ),
+                                    )
+                                }
+                            },
+                            onFailure = { error ->
+                                if (error is CancellationException) throw error
+                                resultChannel.trySend(
+                                    IndexedSearchResult(
+                                        index = jellyfinIndex,
+                                        error = error,
+                                    ),
+                                )
+                            },
+                        )
+                }
+            } else {
+                null
+            }
             val closeChannelJob = launch {
                 jobs.joinAll()
+                jellyfinJob?.join()
                 resultChannel.close()
             }
-            val results = arrayOfNulls<IndexedSearchResult>(requests.size)
+            val results = arrayOfNulls<IndexedSearchResult>(requests.size + if (jellyfinSearch) 1 else 0)
 
             try {
                 for (result in resultChannel) {
@@ -407,6 +443,8 @@ object SearchRepository {
         }.flatMap { (addon, manifest) ->
             manifest.catalogs
                 .filter { catalog -> catalog.supportsSearch() }
+                // Live TV fork: TV catalogs live on the Live TV screen only
+                .filterNot { catalog -> com.nuvio.app.features.livetv.LiveTvCatalogFilter.isLiveTvCatalog(addon, catalog) }
                 .map { catalog ->
                     SearchCatalogRequest(
                         addon = addon,
@@ -426,6 +464,7 @@ object SearchRepository {
         }.flatMap { (addon, manifest) ->
             manifest.catalogs
                 .filter { catalog -> catalog.supportsDiscover() }
+                .filterNot { catalog -> com.nuvio.app.features.livetv.LiveTvCatalogFilter.isLiveTvCatalog(addon, catalog) }
                 .map { catalog ->
                     val genreExtra = catalog.genreExtra()
                     DiscoverCatalogOption(

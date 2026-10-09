@@ -40,6 +40,16 @@ data class DetailRoute(
     override val title: String? = null,
 ) : AppRoute
 
+/** Jellyfin fork feature: the user's Jellyfin server libraries (own screen + detail route). */
+@Serializable
+data class JellyfinRoute(override val title: String = "Jellyfin") : AppRoute
+
+@Serializable
+data class JellyfinDetailRoute(
+    val itemId: String,
+    override val title: String? = null,
+) : AppRoute
+
 @Serializable
 data class PersonDetailRoute(
     val personId: Int,
@@ -141,6 +151,10 @@ data class CatalogRoute(
     override val title: String = "",
     override val subtitle: String? = null,
 ) : AppRoute
+
+/** Live TV (fork feature): channels from installed addons with an XMLTV programme guide. */
+@Serializable
+data class LiveTvRoute(override val title: String = "Live TV") : AppRoute
 
 @Serializable
 data class PlayerRoute(

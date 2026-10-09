@@ -17,6 +17,7 @@ import androidx.media3.extractor.text.SubtitleParser
 import androidx.media3.ui.SubtitleView
 import com.nuvio.app.R
 import com.nuvio.app.features.addons.httpGetTextWithHeaders
+import com.nuvio.app.features.player.autosync.AutoSyncSyncedSubtitle
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -38,6 +39,7 @@ internal class SidecarSubtitleController(
     private val getSubtitleDelayMs: () -> Int = { 0 },
 ) {
     private var sidecarSubtitleJob: Job? = null
+    private var sidecarGeneration: Int = 0
     var activeSidecarSubtitleKey: String? = null
         private set
     var sidecarTimedCues: List<CuesWithTiming> = emptyList()
@@ -46,6 +48,45 @@ internal class SidecarSubtitleController(
     private var exoSubtitleViewRef: WeakReference<SubtitleView>? = null
 
     fun isSidecarActive(): Boolean = activeSidecarSubtitleKey != null
+
+    /** Generation of the attach that loaded [url], or null when [url] is not the active sidecar. */
+    fun currentSidecarGenerationFor(url: String): Int? =
+        if (activeSidecarSubtitleKey == url) sidecarGeneration else null
+
+    /**
+     * AutoSync hook: swap in an already-parsed (possibly retimed) cue timeline for the active
+     * sidecar. When [newUrl] differs from the current key the old attach job is replaced with a
+     * fresh render loop for [newUrl].
+     */
+    fun commitPreparedSidecarSubtitle(
+        expectedCurrentUrl: String,
+        newUrl: String,
+        cues: List<CuesWithTiming>,
+        expectedGeneration: Int,
+    ): Boolean {
+        if (cues.isEmpty()) return false
+        if (activeSidecarSubtitleKey != expectedCurrentUrl) return false
+        if (sidecarGeneration != expectedGeneration) return false
+        if (newUrl != expectedCurrentUrl) {
+            sidecarSubtitleJob?.cancel()
+            sidecarSubtitleJob = null
+            sidecarGeneration++
+            activeSidecarSubtitleKey = newUrl
+            lastSidecarCueSignature = null
+            sidecarTimedCues = cues
+            sidecarSubtitleJob = scope.launch {
+                while (isActive && activeSidecarSubtitleKey == newUrl) {
+                    renderSidecarCuesAtCurrentPosition()
+                    delay(SIDECAR_RENDER_INTERVAL_MS)
+                }
+            }
+        } else {
+            sidecarTimedCues = cues
+            lastSidecarCueSignature = null
+            renderSidecarCuesAtCurrentPosition()
+        }
+        return true
+    }
 
     fun canAttachAddonSubtitleViaSidecar(url: String, useLibass: Boolean): Boolean {
         val mime = PlayerSubtitleUtils.mimeTypeFromUrl(url)
@@ -69,9 +110,11 @@ internal class SidecarSubtitleController(
     fun stopSidecarAddonSubtitle(clearView: Boolean = true) {
         sidecarSubtitleJob?.cancel()
         sidecarSubtitleJob = null
+        sidecarGeneration++
         activeSidecarSubtitleKey = null
         sidecarTimedCues = emptyList()
         lastSidecarCueSignature = null
+        AutoSyncSyncedSubtitle.clear() // AutoSync hook
         if (clearView) {
             postToSubtitleView { view ->
                 view.setTag(R.id.player_view_sidecar_generation_tag, null)
@@ -84,6 +127,13 @@ internal class SidecarSubtitleController(
         url: String,
         headers: Map<String, String> = emptyMap(),
         useLibass: Boolean = false,
+    ): Boolean = startSidecarAddonSubtitle(url, headers, useLibass, rawBodyLoader = null)
+
+    fun startSidecarAddonSubtitle(
+        url: String,
+        headers: Map<String, String> = emptyMap(),
+        useLibass: Boolean = false,
+        rawBodyLoader: (suspend () -> String)?,
     ): Boolean {
         if (!canAttachAddonSubtitleViaSidecar(url, useLibass)) return false
 
@@ -91,9 +141,11 @@ internal class SidecarSubtitleController(
         val urlMimeHint = PlayerSubtitleUtils.mimeTypeFromUrl(url)
 
         sidecarSubtitleJob?.cancel()
+        sidecarGeneration++
         activeSidecarSubtitleKey = subtitleKey
         lastSidecarCueSignature = null
         sidecarTimedCues = emptyList()
+        AutoSyncSyncedSubtitle.clear() // AutoSync hook
         postToSubtitleView { view ->
             view.setTag(R.id.player_view_sidecar_generation_tag, subtitleKey)
             view.setCues(emptyList())
@@ -101,8 +153,12 @@ internal class SidecarSubtitleController(
 
         sidecarSubtitleJob = scope.launch {
             try {
-                val rawBody = withContext(Dispatchers.IO) {
-                    httpGetTextWithHeaders(url = url, headers = headers)
+                val rawBody = if (rawBodyLoader != null) {
+                    rawBodyLoader.invoke()
+                } else {
+                    withContext(Dispatchers.IO) {
+                        httpGetTextWithHeaders(url = url, headers = headers)
+                    }
                 }
                 if (activeSidecarSubtitleKey != subtitleKey) return@launch
 
