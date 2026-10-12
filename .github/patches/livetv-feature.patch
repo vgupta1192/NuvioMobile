@@ -1,8 +1,8 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
-index 0142158..d3e712e 100644
+index 2ecdbeb5..c13fb52d 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
-@@ -91,6 +91,7 @@ open class MainActivity : AppCompatActivity() {
+@@ -92,6 +92,7 @@ open class MainActivity : AppCompatActivity() {
          SyncClientIdentityStorage.initialize(applicationContext)
          AddonHttpClientProvider.initialize(applicationContext)
          AddonStorage.initialize(applicationContext)
@@ -12,7 +12,7 @@ index 0142158..d3e712e 100644
          LibraryStorage.initialize(applicationContext)
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.android.kt
 new file mode 100644
-index 0000000..80a3169
+index 00000000..80a3169a
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.android.kt
 @@ -0,0 +1,101 @@
@@ -118,7 +118,7 @@ index 0000000..80a3169
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt
-index ecc7263..a048b31 100644
+index ecc72636..a048b310 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt
 @@ -47,6 +47,7 @@ internal val navigationSavedStateConfiguration = SavedStateConfiguration {
@@ -130,7 +130,7 @@ index ecc7263..a048b31 100644
      }
  }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index f47c59f..d7f268d 100644
+index 4d476215..8b272fdb 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 @@ -101,6 +101,13 @@ import com.nuvio.app.features.collection.CollectionSyncService
@@ -147,7 +147,7 @@ index f47c59f..d7f268d 100644
  import com.nuvio.app.features.downloads.DownloadSubtitles
  import com.nuvio.app.features.downloads.DownloadsRepository
  import com.nuvio.app.features.home.HomeCatalogSection
-@@ -697,6 +704,13 @@ internal fun MainAppContent(
+@@ -705,6 +712,13 @@ internal fun MainAppContent(
          }
      }
  
@@ -161,7 +161,7 @@ index f47c59f..d7f268d 100644
          LaunchedEffect(navController) {
              if (!ownsAppRuntime) return@LaunchedEffect
              AppDeepLinkRepository.pendingDeepLink.collectLatest { deepLink ->
-@@ -846,6 +860,33 @@ internal fun MainAppContent(
+@@ -854,6 +868,33 @@ internal fun MainAppContent(
              navController.navigate(PlayerRoute(launchId = launchId, title = playerLaunch.title))
          }
  
@@ -195,7 +195,7 @@ index f47c59f..d7f268d 100644
          fun openExternalStreamUrl(url: String): Boolean {
              val opened = runCatching {
                  uriHandler.openUri(url)
-@@ -1535,6 +1576,10 @@ internal fun MainAppContent(
+@@ -1539,6 +1580,10 @@ internal fun MainAppContent(
                          ) appUpdaterController::showDebugTestUpdate else null,
                      )
                  }
@@ -207,7 +207,7 @@ index f47c59f..d7f268d 100644
                      DownloadsDestination(
                          route = route,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt
-index 1032903..9b12c4e 100644
+index 10329036..9b12c4ef 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainTabsDestination.kt
 @@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
@@ -261,10 +261,10 @@ index 1032903..9b12c4e 100644
                              selected = selectedTab == AppScreenTab.Settings,
                              onClick = { onTabSelected(AppScreenTab.Settings) },
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeCatalogDefinitions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeCatalogDefinitions.kt
-index f4e50dd..8e8d786 100644
+index d459c358..17384894 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeCatalogDefinitions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeCatalogDefinitions.kt
-@@ -47,6 +47,8 @@ fun buildHomeCatalogDefinitions(addons: List<ManagedAddon>): List<HomeCatalogDef
+@@ -49,6 +49,8 @@ fun buildHomeCatalogDefinitions(addons: List<ManagedAddon>): List<HomeCatalogDef
      }.flatMap { (addon, manifest) ->
          manifest.catalogs
              .filter { catalog -> catalog.extra.none { it.isRequired } }
@@ -274,21 +274,21 @@ index f4e50dd..8e8d786 100644
                  HomeCatalogDefinition(
                      key = "${manifest.id}:${catalog.type}:${catalog.id}",
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryRepository.kt
-index 8572da5..b126261 100644
+index 7fdb1eaa..c9f06e1c 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryRepository.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryRepository.kt
-@@ -605,8 +605,8 @@ object LibraryRepository {
+@@ -614,8 +614,8 @@ object LibraryRepository {
              val providerSnapshot = provider.snapshot()
              val newUiState = LibraryUiState(
                  sourceMode = sourceMode,
--                items = providerSnapshot.items.withCustomPosterUrls(posterPattern),
--                sections = providerSnapshot.sections.map { section ->
-+                items = providerSnapshot.items.withoutLiveTv().withCustomPosterUrls(posterPattern),
-+                sections = providerSnapshot.sections.sectionsWithoutLiveTv().map { section ->
-                     section.copy(items = section.items.withCustomPosterUrls(posterPattern))
-                 },
+-                items = providerSnapshot.items,
+-                sections = providerSnapshot.sections,
++                items = providerSnapshot.items.withoutLiveTv(),
++                sections = providerSnapshot.sections.sectionsWithoutLiveTv(),
                  isLoaded = providerSnapshot.hasLoaded,
-@@ -620,6 +620,7 @@ object LibraryRepository {
+                 isLoading = providerSnapshot.isLoading,
+                 errorMessage = providerSnapshot.errorMessage,
+@@ -627,6 +627,7 @@ object LibraryRepository {
          }
  
          val items = localSnapshot.items
@@ -296,7 +296,7 @@ index 8572da5..b126261 100644
              .sortedByDescending { it.savedAtEpochMs }
          val sections = items
              .groupBy { it.type }
-@@ -767,3 +768,14 @@ private fun localizedLibraryOtherTitle(): String =
+@@ -775,3 +776,14 @@ private fun localizedLibraryOtherTitle(): String =
  private fun localizedStringOrDefault(resource: StringResource, fallback: String): String =
      runCatching { runBlocking { getString(resource) } }
          .getOrDefault(fallback)
@@ -313,7 +313,7 @@ index 8572da5..b126261 100644
 +    }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvCatalogFilter.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvCatalogFilter.kt
 new file mode 100644
-index 0000000..bcce7ff
+index 00000000..bcce7ffb
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvCatalogFilter.kt
 @@ -0,0 +1,45 @@
@@ -364,7 +364,7 @@ index 0000000..bcce7ff
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvEpgRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvEpgRepository.kt
 new file mode 100644
-index 0000000..a7c0c83
+index 00000000..a7c0c83e
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvEpgRepository.kt
 @@ -0,0 +1,157 @@
@@ -527,7 +527,7 @@ index 0000000..a7c0c83
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvLauncher.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvLauncher.kt
 new file mode 100644
-index 0000000..18dd793
+index 00000000..18dd7937
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvLauncher.kt
 @@ -0,0 +1,15 @@
@@ -548,7 +548,7 @@ index 0000000..18dd793
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvModels.kt
 new file mode 100644
-index 0000000..ff90e8e
+index 00000000..ff90e8ed
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvModels.kt
 @@ -0,0 +1,207 @@
@@ -761,7 +761,7 @@ index 0000000..ff90e8e
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.kt
 new file mode 100644
-index 0000000..4c8596c
+index 00000000..4c8596c1
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.kt
 @@ -0,0 +1,20 @@
@@ -787,7 +787,7 @@ index 0000000..4c8596c
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvRepository.kt
 new file mode 100644
-index 0000000..f95bc2d
+index 00000000..f95bc2df
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvRepository.kt
 @@ -0,0 +1,344 @@
@@ -1137,7 +1137,7 @@ index 0000000..f95bc2d
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvScreen.kt
 new file mode 100644
-index 0000000..b810486
+index 00000000..b8104861
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvScreen.kt
 @@ -0,0 +1,713 @@
@@ -1856,7 +1856,7 @@ index 0000000..b810486
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/XmlTvParser.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/XmlTvParser.kt
 new file mode 100644
-index 0000000..d83033a
+index 00000000..d83033a7
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/XmlTvParser.kt
 @@ -0,0 +1,174 @@
@@ -2035,10 +2035,10 @@ index 0000000..d83033a
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/search/SearchRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/search/SearchRepository.kt
-index f6a7ad6..027eed9 100644
+index 182e6308..9e58fca3 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/search/SearchRepository.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/search/SearchRepository.kt
-@@ -407,6 +407,8 @@ object SearchRepository {
+@@ -439,6 +439,8 @@ object SearchRepository {
          }.flatMap { (addon, manifest) ->
              manifest.catalogs
                  .filter { catalog -> catalog.supportsSearch() }
@@ -2047,7 +2047,7 @@ index f6a7ad6..027eed9 100644
                  .map { catalog ->
                      SearchCatalogRequest(
                          addon = addon,
-@@ -426,6 +428,7 @@ object SearchRepository {
+@@ -458,6 +460,7 @@ object SearchRepository {
          }.flatMap { (addon, manifest) ->
              manifest.catalogs
                  .filter { catalog -> catalog.supportsDiscover() }
@@ -2056,7 +2056,7 @@ index f6a7ad6..027eed9 100644
                      val genreExtra = catalog.genreExtra()
                      DiscoverCatalogOption(
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/navigation/Routes.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/navigation/Routes.kt
-index 7cd51dc..cdd9665 100644
+index 7cd51dc7..cdd96650 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/navigation/Routes.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/navigation/Routes.kt
 @@ -142,6 +142,10 @@ data class CatalogRoute(
@@ -2072,7 +2072,7 @@ index 7cd51dc..cdd9665 100644
      val launchId: Long,
 diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt
 new file mode 100644
-index 0000000..c51d57a
+index 00000000..c51d57a0
 --- /dev/null
 +++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt
 @@ -0,0 +1,23 @@
