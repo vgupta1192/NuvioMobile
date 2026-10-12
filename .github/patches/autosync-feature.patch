@@ -141,17 +141,17 @@ index 00000000..e9bba608
 +    }
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
-index a93e4bfb..152f8f4c 100644
+index a93e4bfb..3ba68f3b 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
-@@ -102,6 +102,7 @@ open class MainActivity : AppCompatActivity() {
-         com.nuvio.app.features.jellyfin.JellyfinPlatform.initialize(applicationContext)
-         HomeCatalogSettingsStorage.initialize(applicationContext)
-         PlayerSettingsStorage.initialize(applicationContext)
-+        com.nuvio.app.features.autosync.AutoSyncPreferencesAndroid.initialize(applicationContext) // AutoSync hook
+@@ -105,6 +105,7 @@ open class MainActivity : AppCompatActivity() {
          PlayerTrackPreferenceStorage.initialize(applicationContext)
          P2pSettingsStorage.initialize(applicationContext)
          P2pStreamingEngine.initialize(applicationContext)
++        com.nuvio.app.features.autosync.AutoSyncPreferencesAndroid.initialize(applicationContext) // AutoSync hook
+         ExternalPlayerPlatform.initialize(applicationContext)
+         SubtitleFileCache.initialize(applicationContext)
+         ProfileStorage.initialize(applicationContext)
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncDebugLog.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncDebugLog.kt
 new file mode 100644
 index 00000000..d4d15d86

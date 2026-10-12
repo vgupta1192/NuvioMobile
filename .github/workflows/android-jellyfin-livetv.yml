@@ -113,9 +113,9 @@ jobs:
         run: git apply fork-src/.github/patches/jellyfintv-updater.patch
 
       # Jellyfin variant: native Jellyfin feature + the side-install variant (see loop below);
+      # required together, otherwise the APK would install over another Nuvio app.
       # (combos also apply the Live TV patches first.) autosync-feature carries the
       # NuvioMobile-Reshaped AutoSync (AutoSync V2, bubble toasts, audio sync fallback).
-      # (combos also apply the Live TV patches first.)
       - name: Apply feature and variant patches
         if: steps.ver.outputs.should_build == 'true'
         run: |
