@@ -11,6 +11,7 @@ on:
     # a sync-pulse commit when upstream has an unbuilt release, which lands
     # here via the push trigger above.
 
+# 2026-10-12: re-arm push trigger (no runs fired since 10-08)
 permissions:
   contents: write
 
