@@ -1,0 +1,1215 @@
+diff --git a/composeApp/build.gradle.kts b/composeApp/build.gradle.kts
+index 77af931f..777538fe 100644
+--- a/composeApp/build.gradle.kts
++++ b/composeApp/build.gradle.kts
+@@ -488,6 +488,7 @@ kotlin {
+                 implementation(libs.mpv.android.lib)
+                 implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("lib-*.aar"))))
+                 implementation(files(sherpaOnnxAar)) // AutoSync: audio sync speech recognition
++                implementation("com.google.mlkit:translate:17.0.3") // Generated subtitles: on-device translation
+                 if (androidDistribution == "full") {
+                     implementation(files("libs/quickjs-kt-android-1.0.5-nuvio.aar"))
+                     implementation(libs.ksoup)
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
+index 3ba68f3b..c42a2b56 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
+@@ -106,6 +106,7 @@ open class MainActivity : AppCompatActivity() {
+         P2pSettingsStorage.initialize(applicationContext)
+         P2pStreamingEngine.initialize(applicationContext)
+         com.nuvio.app.features.autosync.AutoSyncPreferencesAndroid.initialize(applicationContext) // AutoSync hook
++        com.nuvio.app.features.player.generated.GeneratedSpeechModel.initialize(applicationContext) // Generated subtitles hook
+         ExternalPlayerPlatform.initialize(applicationContext)
+         SubtitleFileCache.initialize(applicationContext)
+         ProfileStorage.initialize(applicationContext)
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerEngineController.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerEngineController.android.kt
+index c7eb7bd1..f2140c19 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerEngineController.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerEngineController.android.kt
+@@ -7,6 +7,7 @@ import androidx.compose.runtime.rememberUpdatedState
+ import androidx.compose.ui.platform.LocalContext
+ import androidx.media3.datasource.DataSource
+ import androidx.media3.exoplayer.ExoPlayer
++import com.nuvio.app.features.player.GeneratedSubtitles
+ import com.nuvio.app.features.player.PlayerEngineController
+ import com.nuvio.app.features.player.SidecarSubtitleController
+ import com.nuvio.app.features.streams.StreamSubtitle
+@@ -89,9 +90,17 @@ internal class AutoSyncPlayerEngineController(
+     ) = coordinator.setAppliedListener(listener)
+ 
+     override fun setSubtitleUri(url: String) =
++        if (GeneratedSubtitles.isGenerated(url)) attachGenerated(url) else
+         coordinator.attachWithoutAutoSync(url, base::setSubtitleUri)
+ 
++    /** Generated subtitles come from the audio itself: nothing for AutoSync to check. */
++    private fun attachGenerated(url: String) {
++        coordinator.cancel()
++        base.setSubtitleUri(url)
++    }
++
+     override fun setSubtitleUriWithAutoSync(url: String) =
++        if (GeneratedSubtitles.isGenerated(url)) attachGenerated(url) else
+         coordinator.start(
+             url = url,
+             candidateScope = AutoSyncCandidateScope.STARTUP_SEARCH,
+@@ -99,6 +108,7 @@ internal class AutoSyncPlayerEngineController(
+         )
+ 
+     override fun setSubtitleUriWithSelectedAutoSync(url: String) =
++        if (GeneratedSubtitles.isGenerated(url)) attachGenerated(url) else
+         coordinator.start(
+             url = url,
+             candidateScope = AutoSyncCandidateScope.SELECTED_ONLY,
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+index bd6eb8c6..92509300 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+@@ -573,6 +573,22 @@ private fun ExoPlayerSurface(
+         dataSourceFactory = networkDataSourceFactory,
+     )
+ 
++    // Generated subtitles hook: English subtitles made from the audio when the generated entry is picked.
++    val generatedSubtitles = remember(exoPlayer, sidecarController, sourceUrl, sourceAudioUrl) {
++        com.nuvio.app.features.player.generated.GeneratedSubtitleSession(
++            context = context,
++            scope = coroutineScope,
++            player = exoPlayer,
++            sidecar = sidecarController,
++            sourceUrl = sourceUrl,
++            sourceAudioUrl = sourceAudioUrl,
++            dataSourceFactory = networkDataSourceFactory,
++        )
++    }
++    DisposableEffect(generatedSubtitles) {
++        onDispose { generatedSubtitles.stop() }
++    }
++
+     fun syncPlayerViewKeepScreenOn() {
+         playerViewRef?.keepScreenOn = exoPlayer.shouldKeepPlayerScreenOn()
+     }
+@@ -925,6 +941,15 @@ private fun ExoPlayerSurface(
+                 override fun setSubtitleUri(url: String) {
+                     Log.d(TAG, "setSubtitleUri: url=${url.redactedForLogs()}")
+                     subtitleSelectionJob?.cancel()
++                    if (GeneratedSubtitles.isGenerated(url)) { // Generated subtitles hook
++                        if (generatedSubtitles.start(url)) {
++                            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
++                                .buildUpon()
++                                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
++                                .build()
++                        }
++                        return
++                    }
+                     if (sidecarController.canAttachAddonSubtitleViaSidecar(url, useLibass)) {
+                         Log.d(TAG, "setSubtitleUri: using buffer-preserving sidecar for url=${url.redactedForLogs()}")
+                         val headers = externalSubtitles.firstOrNull { it.url == url }?.headers.orEmpty()
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt
+index 2a4232cd..b1d49e65 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt
+@@ -58,6 +58,9 @@ internal class HlsAudioSpotSampler(
+     )
+ 
+     private val bytes = AtomicLong()
++
++    @Volatile
++    private var cachedSegments: List<Segment>? = null
+     private val keys = ConcurrentHashMap<String, ByteArray>()
+     private val adjusters = ConcurrentHashMap<Int, TimestampAdjuster>()
+ 
+@@ -68,8 +71,10 @@ internal class HlsAudioSpotSampler(
+         isCancelled: () -> Boolean,
+         onSpot: (sampled: Int, bytes: Long) -> Unit,
+     ): AudioSpotSampler.Result {
++        // A sampler may be run again for later stretches (generated subtitles): the budget is per run.
++        bytes.set(0L)
+         val segments = try {
+-            loadSegments()
++            cachedSegments ?: loadSegments().also { cachedSegments = it }
+         } catch (error: Exception) {
+             return AudioSpotSampler.Result(0, bytes.get(), error.message ?: error.javaClass.simpleName)
+         }
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedRecognizer.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedRecognizer.kt
+new file mode 100644
+index 00000000..eb8f4816
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedRecognizer.kt
+@@ -0,0 +1,88 @@
++package com.nuvio.app.features.player.generated
++
++import android.content.Context
++import com.k2fsa.sherpa.onnx.FeatureConfig
++import com.k2fsa.sherpa.onnx.OfflineModelConfig
++import com.k2fsa.sherpa.onnx.OfflineRecognizer
++import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
++import com.k2fsa.sherpa.onnx.OfflineSenseVoiceModelConfig
++import com.k2fsa.sherpa.onnx.OfflineWhisperModelConfig
++import com.nuvio.app.features.player.GeneratedSubtitles
++
++/** On-device speech recognition for generated subtitles (sherpa-onnx, Apache-2.0). */
++internal class GeneratedRecognizer private constructor(
++    private val recognizer: OfflineRecognizer,
++    /** Whisper in translate mode already returns English. */
++    val translatesToEnglish: Boolean,
++    private val fixedLanguage: String,
++) : AutoCloseable {
++    /** [language] is the detected (or given) spoken language as a plain code, e.g. "zh". */
++    class Heard(val text: String, val language: String)
++
++    fun recognize(samples: FloatArray): Heard {
++        val stream = recognizer.createStream()
++        try {
++            stream.acceptWaveform(samples, SAMPLE_RATE)
++            recognizer.decode(stream)
++            val result = recognizer.getResult(stream)
++            val detected = result.lang.trim().removePrefix("<|").removeSuffix("|>").lowercase()
++            val language = when {
++                translatesToEnglish -> "en"
++                detected.isNotEmpty() && detected != "nospeech" -> detected
++                else -> fixedLanguage
++            }
++            return Heard(result.text, language)
++        } finally {
++            stream.release()
++        }
++    }
++
++    override fun close() = recognizer.release()
++
++    companion object {
++        private const val SAMPLE_RATE = 16_000
++
++        /** SenseVoice: Chinese, Cantonese, Japanese, Korean, English; [language] "auto" detects it. */
++        fun senseVoice(context: Context, language: String, threads: Int): GeneratedRecognizer {
++            val model = GeneratedSpeechModel.SENSE_VOICE
++            val code = language.takeIf { it in setOf("zh", "yue", "ja", "ko", "en") } ?: "auto"
++            val recognizer = OfflineRecognizer(
++                config = OfflineRecognizerConfig(
++                    featConfig = FeatureConfig(sampleRate = SAMPLE_RATE, featureDim = 80),
++                    modelConfig = OfflineModelConfig(
++                        senseVoice = OfflineSenseVoiceModelConfig(
++                            model = model.file(context, GeneratedSpeechModel.SENSE_VOICE_MODEL).absolutePath,
++                            language = code,
++                            useInverseTextNormalization = true,
++                        ),
++                        tokens = model.file(context, GeneratedSpeechModel.TOKENS).absolutePath,
++                        numThreads = threads,
++                    ),
++                ),
++            )
++            val fallback = if (code == "auto") GeneratedSubtitles.AUTO else code
++            return GeneratedRecognizer(recognizer, translatesToEnglish = false, fixedLanguage = fallback)
++        }
++
++        /** Whisper small, translating [language] speech (Hindi) straight into English. */
++        fun whisper(context: Context, language: String, threads: Int): GeneratedRecognizer {
++            val model = GeneratedSpeechModel.WHISPER_SMALL
++            val recognizer = OfflineRecognizer(
++                config = OfflineRecognizerConfig(
++                    featConfig = FeatureConfig(sampleRate = SAMPLE_RATE, featureDim = 80),
++                    modelConfig = OfflineModelConfig(
++                        whisper = OfflineWhisperModelConfig(
++                            encoder = model.file(context, GeneratedSpeechModel.WHISPER_ENCODER).absolutePath,
++                            decoder = model.file(context, GeneratedSpeechModel.WHISPER_DECODER).absolutePath,
++                            language = language,
++                            task = "translate",
++                        ),
++                        tokens = model.file(context, GeneratedSpeechModel.TOKENS).absolutePath,
++                        numThreads = threads,
++                    ),
++                ),
++            )
++            return GeneratedRecognizer(recognizer, translatesToEnglish = true, fixedLanguage = language)
++        }
++    }
++}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleModels.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleModels.kt
+new file mode 100644
+index 00000000..a86d25e0
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleModels.kt
+@@ -0,0 +1,159 @@
++package com.nuvio.app.features.player.generated
++
++import android.content.Context
++import com.nuvio.app.features.player.GeneratedSubtitleModelActions
++import com.nuvio.app.features.player.GeneratedSubtitles
++import com.nuvio.app.features.player.audiosync.SyncLog
++import java.io.File
++import java.net.HttpURLConnection
++import java.net.URL
++
++/** A speech recognition model for generated subtitles, downloaded once into app storage. */
++internal enum class GeneratedSpeechModel(
++    val label: String,
++    private val dirName: String,
++    /** Local file name to (download address, size in bytes). */
++    private val files: List<Pair<String, Pair<String, Long>>>,
++) {
++    /** Chinese, Cantonese, Japanese, Korean and English; fast. Text is translated afterwards. */
++    SENSE_VOICE(
++        label = "SenseVoice",
++        dirName = "sense-voice-int8-2025-09-09",
++        files = listOf(
++            SENSE_VOICE_MODEL to ("$SENSE_VOICE_BASE/model.int8.onnx" to 237_115_547L),
++            TOKENS to ("$SENSE_VOICE_BASE/tokens.txt" to 315_894L),
++        ),
++    ),
++
++    /** Multilingual Whisper, used for Hindi; it translates straight into English. */
++    WHISPER_SMALL(
++        label = "Whisper small",
++        dirName = "whisper-small-int8",
++        files = listOf(
++            WHISPER_ENCODER to ("$WHISPER_BASE/small-encoder.int8.onnx" to 112_442_483L),
++            WHISPER_DECODER to ("$WHISPER_BASE/small-decoder.int8.onnx" to 262_226_114L),
++            TOKENS to ("$WHISPER_BASE/small-tokens.txt" to 816_730L),
++        ),
++    );
++
++    val totalBytes: Long get() = files.sumOf { it.second.second }
++    val sizeMb: Int get() = (totalBytes / 1_000_000L).toInt()
++
++    fun directory(context: Context): File = File(context.filesDir, "generated-subtitles/$dirName")
++
++    fun file(context: Context, name: String): File = File(directory(context), name)
++
++    fun isReady(context: Context): Boolean =
++        files.all { (name, source) -> file(context, name).length() == source.second }
++
++    /**
++     * Downloads the missing files, reporting overall progress (0..1). Blocking; returns null when
++     * the model is ready, else the reason it is not.
++     */
++    fun download(context: Context, isCancelled: () -> Boolean, onProgress: (Float) -> Unit): String? {
++        val dir = directory(context)
++        dir.mkdirs()
++        var done = files.filter { (name, source) -> file(context, name).length() == source.second }
++            .sumOf { it.second.second }
++        for ((name, source) in files) {
++            val (address, size) = source
++            val target = file(context, name)
++            if (target.length() == size) continue
++            val partial = File(dir, "$name.part")
++            val failure = fetch(address, partial, size, isCancelled) { bytes ->
++                onProgress((done + bytes).toFloat() / totalBytes)
++            }
++            if (failure != null) return failure
++            if (!partial.renameTo(target)) return "could not save $name"
++            done += size
++        }
++        return null
++    }
++
++    companion object {
++        const val SENSE_VOICE_MODEL = "model.int8.onnx"
++        const val WHISPER_ENCODER = "encoder.int8.onnx"
++        const val WHISPER_DECODER = "decoder.int8.onnx"
++        const val TOKENS = "tokens.txt"
++
++        /** Registers persistence and Settings actions. Call once at app start. */
++        fun initialize(context: Context) {
++            val appContext = context.applicationContext
++            val preferences = appContext.getSharedPreferences("nuvio_generated_subtitles", Context.MODE_PRIVATE)
++            GeneratedSubtitles.installPersistence(
++                load = { key -> preferences.getString(key, null) },
++                save = { key, value -> preferences.edit().putString(key, value).apply() },
++            )
++            GeneratedSubtitles.modelActions = object : GeneratedSubtitleModelActions {
++                override fun deleteModels() {
++                    if (GeneratedSubtitleSession.running) return
++                    File(appContext.filesDir, "generated-subtitles").deleteRecursively()
++                    publish(appContext)
++                }
++            }
++            GeneratedSubtitles.supported = true
++            publish(appContext)
++        }
++
++        fun publish(context: Context) {
++            val ready = entries.filter { it.isReady(context) }
++            GeneratedSubtitles.publishModels(
++                if (ready.isEmpty()) "" else ready.joinToString(" · ") { "${it.label} (${it.sizeMb} MB)" },
++            )
++        }
++
++        private fun fetch(
++            address: String,
++            target: File,
++            expectedSize: Long,
++            isCancelled: () -> Boolean,
++            onBytes: (Long) -> Unit,
++        ): String? = try {
++            var url = URL(address)
++            var connection: HttpURLConnection
++            var redirects = 0
++            while (true) {
++                connection = url.openConnection() as HttpURLConnection
++                connection.connectTimeout = 15_000
++                connection.readTimeout = 30_000
++                connection.instanceFollowRedirects = false
++                val code = connection.responseCode
++                // HttpURLConnection does not follow cross-host redirects (Hugging Face -> CDN).
++                if (code in 300..399 && redirects++ < 5) {
++                    val location = connection.getHeaderField("Location") ?: return "redirect without location"
++                    connection.disconnect()
++                    url = URL(url, location)
++                    continue
++                }
++                if (code != 200) {
++                    connection.disconnect()
++                    return "HTTP $code"
++                }
++                break
++            }
++            connection.inputStream.use { input ->
++                target.outputStream().use { output ->
++                    val buffer = ByteArray(64 * 1024)
++                    var total = 0L
++                    while (true) {
++                        if (isCancelled()) return "cancelled"
++                        val read = input.read(buffer)
++                        if (read < 0) break
++                        output.write(buffer, 0, read)
++                        total += read
++                        onBytes(total)
++                    }
++                }
++            }
++            connection.disconnect()
++            if (target.length() != expectedSize) "incomplete download (${target.length()} of $expectedSize bytes)" else null
++        } catch (error: Exception) {
++            SyncLog.w("generated subtitles: model download failed for $address: ${error.message}")
++            error.message ?: error.javaClass.simpleName
++        }
++    }
++}
++
++private const val SENSE_VOICE_BASE =
++    "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/resolve/main"
++private const val WHISPER_BASE = "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small/resolve/main"
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
+new file mode 100644
+index 00000000..4f4ad790
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
+@@ -0,0 +1,486 @@
++@file:OptIn(androidx.media3.common.util.UnstableApi::class)
++
++package com.nuvio.app.features.player.generated
++
++import android.content.Context
++import android.net.Uri
++import android.os.Process
++import androidx.media3.common.C
++import androidx.media3.common.Format
++import androidx.media3.common.text.Cue
++import androidx.media3.datasource.DataSource
++import androidx.media3.exoplayer.ExoPlayer
++import androidx.media3.extractor.DefaultExtractorsFactory
++import androidx.media3.extractor.text.CuesWithTiming
++import com.nuvio.app.R
++import com.nuvio.app.features.player.GeneratedSubtitles
++import com.nuvio.app.features.player.SidecarSubtitleController
++import com.nuvio.app.features.player.audiosync.AudioSampleSink
++import com.nuvio.app.features.player.audiosync.AudioSpotSampler
++import com.nuvio.app.features.player.audiosync.AudioSyncDecoder
++import com.nuvio.app.features.player.audiosync.AudioSyncExtractorsFactory
++import com.nuvio.app.features.player.audiosync.HlsAudioSpotSampler
++import com.nuvio.app.features.player.audiosync.SileroVad
++import com.nuvio.app.features.player.audiosync.SileroVadWeights
++import com.nuvio.app.features.player.audiosync.SpeechAnalyzer
++import com.nuvio.app.features.player.audiosync.SpeechTimeline
++import com.nuvio.app.features.player.audiosync.SyncLog
++import com.nuvio.app.features.player.audiosync.asr.AsrModel
++import com.nuvio.app.features.player.audiosync.asr.SpeechSegmenter
++import com.nuvio.app.features.player.audiosync.selectedAudioFormat
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Job
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.isActive
++import kotlinx.coroutines.launch
++
++/**
++ * Generates English subtitles for the playing stream from its audio, ahead of the playhead:
++ * the stream's audio is read [LOOKAHEAD_MS] ahead over its own connection (single files and HLS
++ * playlists), cut into spoken lines by Silero VAD, recognised on the device (SenseVoice for
++ * Chinese/Cantonese/Japanese/Korean/English, Whisper small for Hindi, which translates by itself)
++ * and translated to English with ML Kit. Cues are pushed into the attached sidecar subtitle as
++ * they are ready; status lines ("Downloading speech model…") show in the subtitle itself.
++ */
++internal class GeneratedSubtitleSession(
++    context: Context,
++    private val scope: CoroutineScope,
++    private val player: ExoPlayer,
++    private val sidecar: SidecarSubtitleController,
++    sourceUrl: String,
++    sourceAudioUrl: String?,
++    private val dataSourceFactory: DataSource.Factory,
++) {
++    private val appContext = context.applicationContext
++    private val audioUrl = sourceAudioUrl?.takeIf { it.isNotBlank() } ?: sourceUrl
++    private val uri: Uri? = runCatching { Uri.parse(audioUrl) }.getOrNull()
++        ?.takeIf { it.scheme == "http" || it.scheme == "https" || it.scheme == "file" }
++    private val hls = uri?.path.orEmpty().lowercase().endsWith(".m3u8")
++
++    private class Run(val url: String) {
++        @Volatile
++        var stopped = false
++
++        @Volatile
++        var generation = 0L
++        var ticker: Job? = null
++        var worker: Thread? = null
++
++        // Written by the main-thread ticker, read by the worker.
++        @Volatile
++        var positionMs = 0L
++
++        @Volatile
++        var durationMs = 0L
++
++        @Volatile
++        var audioFormat: Format? = null
++
++        /** Shown at the playhead while no generated line covers it. */
++        @Volatile
++        var status: String? = "Generating subtitles from the audio…"
++
++        val cues = ArrayList<CuesWithTiming>()
++
++        @Volatile
++        var cuesVersion = 0
++    }
++
++    @Volatile
++    private var active: Run? = null
++
++    /** Attaches the generated subtitle [url] and starts generating; false if it can't be shown. */
++    fun start(url: String): Boolean {
++        stop()
++        if (uri == null) {
++            SyncLog.w("generated subtitles: stream address not supported")
++        }
++        val attached = sidecar.startSidecarAddonSubtitle(url = url, rawBodyLoader = { PLACEHOLDER_SRT })
++        if (!attached) return false
++        val current = Run(url)
++        current.generation = sidecar.currentGenerationFor(url) ?: return false
++        active = current
++        running = true
++        SyncLog.i("generated subtitles: started (${if (hls) "HLS playlist" else "single file"})")
++        current.ticker = scope.launch { tick(current) }
++        current.worker = Thread({ work(current) }, "NuvioGeneratedSubs").apply {
++            isDaemon = true
++            start()
++        }
++        return true
++    }
++
++    fun stop() {
++        val current = active ?: return
++        active = null
++        running = false
++        current.stopped = true
++        current.ticker?.cancel()
++        current.worker?.interrupt()
++        SyncLog.i("generated subtitles: stopped")
++    }
++
++    /** Main thread: follows the player, notices when the subtitle is replaced, pushes cues. */
++    private suspend fun tick(current: Run) {
++        // The placeholder is parsed asynchronously; committing before that would be overwritten.
++        while (scope.isActive && !current.stopped && sidecar.sidecarTimedCues.isEmpty()) {
++            if (sidecar.currentGenerationFor(current.url) != current.generation) break
++            delay(TICK_MS)
++        }
++        var committedVersion = -1
++        var committedStatus: String? = null
++        var statusAtMs = Long.MIN_VALUE
++        while (scope.isActive && !current.stopped) {
++            if (sidecar.currentGenerationFor(current.url) != current.generation) {
++                if (active === current) stop()
++                return
++            }
++            current.positionMs = player.currentPosition.coerceAtLeast(0L)
++            current.durationMs = player.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0L
++            current.audioFormat = player.currentTracks.selectedAudioFormat()
++            val status = current.status?.takeIf { !hasCueNear(current, current.positionMs) }
++            val statusMoved = status != null && kotlin.math.abs(current.positionMs - statusAtMs) > 1_000L
++            if (current.cuesVersion != committedVersion || status != committedStatus || statusMoved) {
++                val list = synchronized(current.cues) { ArrayList(current.cues) }
++                if (status != null) {
++                    statusAtMs = current.positionMs
++                    list += cue((statusAtMs - 200L).coerceAtLeast(0L), statusAtMs + STATUS_SHOW_MS, status)
++                    list.sortBy { it.startTimeUs }
++                }
++                if (list.isNotEmpty()) {
++                    sidecar.commitPreparedSidecarSubtitle(
++                        expectedCurrentUrl = current.url,
++                        newUrl = current.url,
++                        cues = list,
++                        expectedGeneration = current.generation,
++                    )
++                }
++                committedVersion = current.cuesVersion
++                committedStatus = status
++            }
++            delay(TICK_MS)
++        }
++    }
++
++    private fun hasCueNear(current: Run, positionMs: Long): Boolean = synchronized(current.cues) {
++        val fromUs = (positionMs - 1_500L) * 1_000L
++        val toUs = (positionMs + 4_000L) * 1_000L
++        current.cues.any { it.startTimeUs < toUs && it.startTimeUs + it.durationUs > fromUs }
++    }
++
++    // ---- worker thread ----
++
++    private fun work(current: Run) {
++        Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
++        var recognizer: GeneratedRecognizer? = null
++        val translator = GeneratedTranslator()
++        try {
++            val source = uri ?: run {
++                current.status = "Subtitles can't be generated for this stream"
++                return
++            }
++            val language = spokenLanguage(current)
++            val model = if (language == "hi") GeneratedSpeechModel.WHISPER_SMALL else GeneratedSpeechModel.SENSE_VOICE
++            SyncLog.i("generated subtitles: spoken language=$language model=${model.label}")
++            if (!model.isReady(appContext)) {
++                while (!current.stopped && !AsrModel.isUnmetered(appContext)) {
++                    current.status = "Connect to Wi-Fi to download the ${model.sizeMb} MB speech model for generated subtitles"
++                    Thread.sleep(3_000L)
++                }
++                if (current.stopped) return
++                val failure = model.download(appContext, isCancelled = { current.stopped }) { progress ->
++                    current.status = "Downloading speech model ${(progress * 100).toInt()}% (${model.sizeMb} MB, once)"
++                }
++                GeneratedSpeechModel.publish(appContext)
++                if (failure != null) {
++                    if (!current.stopped) current.status = "Speech model download failed: $failure"
++                    return
++                }
++            }
++            current.status = "Loading speech model…"
++            recognizer = when (model) {
++                GeneratedSpeechModel.WHISPER_SMALL -> GeneratedRecognizer.whisper(appContext, language, THREADS)
++                GeneratedSpeechModel.SENSE_VOICE -> GeneratedRecognizer.senseVoice(appContext, language, THREADS)
++            }
++            val weights = appContext.resources.openRawResource(R.raw.silero_vad_v5_16k).use { SileroVadWeights.read(it) }
++            val hlsSampler = if (hls) HlsAudioSpotSampler(source, dataSourceFactory, MAX_WINDOW_BYTES) else null
++            current.status = "Generating subtitles from the audio…"
++            val covered = ArrayList<LongArray>()
++            var failures = 0
++            while (!current.stopped) {
++                val positionMs = current.positionMs
++                val fromMs = nextUncovered(covered, positionMs)
++                val durationMs = current.durationMs
++                if (fromMs >= positionMs + LOOKAHEAD_MS || (durationMs > 0 && fromMs >= durationMs)) {
++                    Thread.sleep(500L)
++                    continue
++                }
++                // A short first window gets lines on screen quickly; later ones are longer.
++                val windowMs = if (fromMs - positionMs < FIRST_WINDOW_MS) FIRST_WINDOW_MS else WINDOW_MS
++                val toMs = if (durationMs > 0) minOf(fromMs + windowMs, durationMs) else fromMs + windowMs
++                if (!hasCueNear(current, positionMs) && fromMs <= positionMs + 2_000L) {
++                    current.status = "Generating subtitles from the audio…"
++                }
++                val startedAt = System.currentTimeMillis()
++                val segments = readWindow(current, source, hlsSampler, weights, fromMs, toMs)
++                if (current.stopped) return
++                if (segments == null) {
++                    failures++
++                    if (failures >= MAX_FAILURES) {
++                        current.status = "Couldn't read this stream's audio for generated subtitles"
++                        return
++                    }
++                    Thread.sleep(2_000L)
++                    continue
++                }
++                failures = 0
++                addCovered(covered, fromMs, toMs)
++                var lines = 0
++                for ((startMs, samples) in segments) {
++                    if (current.stopped) return
++                    val heard = recognizer.recognize(samples)
++                    val text = cleanText(heard.text) ?: continue
++                    val english = if (recognizer.translatesToEnglish || heard.language == "en") {
++                        text
++                    } else {
++                        translator.translate(text, heard.language.ifEmpty { language }) { message -> current.status = message }
++                            ?: continue
++                    }
++                    val endMs = startMs + samples.size * 1_000L / SileroVad.SAMPLE_RATE
++                    addLine(current, startMs, endMs, english)
++                    lines++
++                }
++                if (current.status?.startsWith("Downloading translation") == true || hasCueNear(current, current.positionMs)) {
++                    current.status = null
++                }
++                SyncLog.i(
++                    "generated subtitles: ${fromMs / 1_000}-${toMs / 1_000}s → $lines lines from ${segments.size} " +
++                        "speech segments in ${(System.currentTimeMillis() - startedAt) / 1_000}s",
++                )
++            }
++        } catch (_: InterruptedException) {
++        } catch (error: Throwable) {
++            SyncLog.w("generated subtitles failed: ${error.message}")
++            if (!current.stopped) current.status = "Generated subtitles stopped: ${error.message ?: error.javaClass.simpleName}"
++        } finally {
++            recognizer?.close()
++            translator.close()
++        }
++    }
++
++    /** The language to recognise: the user's choice, else the audio track's tag (Chinese if unknown). */
++    private fun spokenLanguage(current: Run): String {
++        val chosen = GeneratedSubtitles.spokenLanguage.value
++        if (chosen != GeneratedSubtitles.AUTO) return chosen
++        // The ticker publishes the track shortly after start.
++        repeat(20) {
++            if (current.audioFormat != null || current.stopped) return@repeat
++            Thread.sleep(100L)
++        }
++        val tag = current.audioFormat?.language?.lowercase()?.substringBefore('-').orEmpty()
++        return when (tag) {
++            "hi", "hin" -> "hi"
++            "ja", "jpn" -> "ja"
++            "ko", "kor" -> "ko"
++            "yue" -> "yue"
++            "en", "eng" -> "en"
++            "zh", "zho", "chi", "cmn" -> "zh"
++            else -> GeneratedSubtitles.AUTO
++        }
++    }
++
++    /**
++     * Reads [fromMs]..[toMs] of the stream's audio and returns its speech segments (start in ms,
++     * 16 kHz samples), or null when the audio couldn't be read.
++     */
++    private fun readWindow(
++        current: Run,
++        source: Uri,
++        hlsSampler: HlsAudioSpotSampler?,
++        weights: SileroVadWeights,
++        fromMs: Long,
++        toMs: Long,
++    ): List<Pair<Long, FloatArray>>? {
++        val analyzer = SpeechAnalyzer(SileroVad(weights), SpeechTimeline())
++        val segments = ArrayList<Pair<Long, FloatArray>>()
++        val segmenter = SpeechSegmenter { startFrame, samples ->
++            synchronized(segments) {
++                segments += startFrame.toLong() * SpeechTimeline.FRAME_DURATION_US / 1_000L to samples
++            }
++        }
++        analyzer.chunkListener = segmenter
++        val decoder = AudioSyncDecoder(analyzer, analyzer, allowVendorDecoders = false)
++        val sink = WindowSink(current, decoder, anyAudio = hlsSampler != null)
++        // Give up on the window when the user seeks far away from it.
++        val isCancelled = {
++            current.stopped || current.positionMs + SEEK_AWAY_MS < fromMs || current.positionMs > toMs + SEEK_AWAY_MS
++        }
++        try {
++            val result = if (hlsSampler != null) {
++                hlsSampler.run(listOf(fromMs), toMs - fromMs, listOf(sink), isCancelled) { _, _ -> }
++            } else {
++                AudioSpotSampler(source, dataSourceFactory, MAX_WINDOW_BYTES, MAX_WINDOW_BYTES, 0L).run(
++                    spotsMs = listOf(fromMs),
++                    spotMs = toMs - fromMs,
++                    workers = listOf(AudioSyncExtractorsFactory(DefaultExtractorsFactory(), sink)),
++                    isCancelled = isCancelled,
++                ) { _, _ -> }
++            }
++            if (result.sampled == 0) {
++                SyncLog.w("generated subtitles: reading ${fromMs / 1_000}-${toMs / 1_000}s failed: ${result.failure}")
++                return null
++            }
++            decoder.awaitDrained(DRAIN_TIMEOUT_MS)
++            Thread.sleep(DECODE_SETTLE_MS)
++            segmenter.flush()
++        } finally {
++            decoder.release()
++        }
++        return synchronized(segments) { segments.sortedBy { it.first } }
++    }
++
++    /** Feeds the playing audio track (or, for HLS segments, the first audio track) to [decoder]. */
++    private class WindowSink(
++        private val current: Run,
++        private val decoder: AudioSyncDecoder,
++        private val anyAudio: Boolean,
++    ) : AudioSampleSink {
++        @Volatile
++        private var taken: String? = null
++
++        override fun wantsSamples(format: Format): Boolean {
++            if (current.stopped) return false
++            val playing = current.audioFormat
++            if (!anyAudio && playing != null) return sameTrack(format, playing)
++            val track = format.id ?: format.sampleMimeType ?: return false
++            return track == (taken ?: track.also { taken = it })
++        }
++
++        override fun onSample(format: Format, timeUs: Long, data: ByteArray, offset: Int, size: Int) {
++            while (!decoder.offer(format, timeUs, data, offset, size)) {
++                if (current.stopped || !decoder.accepts(format)) return
++                Thread.sleep(5L)
++            }
++        }
++
++        override fun onDiscontinuity() {
++            decoder.awaitDrained(DRAIN_TIMEOUT_MS)
++            decoder.discontinuity()
++        }
++    }
++
++    private fun addLine(current: Run, startMs: Long, endMs: Long, text: String) {
++        val pieces = splitForScreen(text)
++        val totalChars = pieces.sumOf { it.length }.coerceAtLeast(1)
++        val spanMs = (endMs - startMs).coerceAtLeast(MIN_CUE_MS)
++        var atMs = startMs
++        val added = pieces.map { piece ->
++            val pieceMs = (spanMs * piece.length / totalChars).coerceAtLeast(MIN_CUE_MS / pieces.size)
++            cue(atMs, atMs + pieceMs + if (piece === pieces.last()) LINGER_MS else 0L, piece).also { atMs += pieceMs }
++        }
++        synchronized(current.cues) {
++            current.cues.removeAll { existing -> added.any { it.startTimeUs == existing.startTimeUs } }
++            current.cues += added
++            current.cues.sortBy { it.startTimeUs }
++            // A line stays until the next one starts, never on top of it.
++            for (index in 0 until current.cues.size - 1) {
++                val entry = current.cues[index]
++                val nextStart = current.cues[index + 1].startTimeUs
++                if (entry.startTimeUs + entry.durationUs > nextStart && nextStart > entry.startTimeUs) {
++                    current.cues[index] = CuesWithTiming(entry.cues, entry.startTimeUs, nextStart - entry.startTimeUs)
++                }
++            }
++            current.cuesVersion++
++        }
++    }
++
++    companion object {
++        /** Whether a session is generating (models must not be deleted meanwhile). */
++        @Volatile
++        var running = false
++
++        private const val PLACEHOLDER_SRT = "1\n00:00:00,000 --> 00:00:00,100\n…\n"
++        private const val TICK_MS = 250L
++        private const val STATUS_SHOW_MS = 2_500L
++        private const val LOOKAHEAD_MS = 120_000L
++        private const val FIRST_WINDOW_MS = 20_000L
++        private const val WINDOW_MS = 60_000L
++        private const val SEEK_AWAY_MS = 60_000L
++        private const val MAX_WINDOW_BYTES = 400L * 1_000_000L
++        private const val MAX_FAILURES = 4
++        private const val DRAIN_TIMEOUT_MS = 15_000L
++        private const val DECODE_SETTLE_MS = 300L
++        private const val MIN_CUE_MS = 1_200L
++        private const val LINGER_MS = 400L
++        private const val MAX_LINE_CHARS = 42
++        private const val THREADS = 2
++
++        private fun cue(startMs: Long, endMs: Long, text: String) = CuesWithTiming(
++            listOf(Cue.Builder().setText(text).build()),
++            startMs * 1_000L,
++            (endMs - startMs).coerceAtLeast(1L) * 1_000L,
++        )
++
++        /** Where the playhead's covered stretch ends, or (a little before) the playhead itself. */
++        private fun nextUncovered(covered: List<LongArray>, positionMs: Long): Long {
++            val probe = (positionMs - 2_000L).coerceAtLeast(0L)
++            var at = probe
++            var moved = true
++            while (moved) {
++                moved = false
++                for (range in covered) {
++                    if (at >= range[0] && at < range[1]) {
++                        at = range[1]
++                        moved = true
++                    }
++                }
++            }
++            return at
++        }
++
++        private fun addCovered(covered: MutableList<LongArray>, fromMs: Long, toMs: Long) {
++            covered += longArrayOf(fromMs, toMs)
++            covered.sortBy { it[0] }
++            val merged = ArrayList<LongArray>()
++            for (range in covered) {
++                val last = merged.lastOrNull()
++                if (last != null && range[0] <= last[1]) last[1] = maxOf(last[1], range[1]) else merged += range.copyOf()
++            }
++            covered.clear()
++            covered += merged
++        }
++
++        private fun sameTrack(a: Format, b: Format): Boolean {
++            if (a.sampleMimeType != b.sampleMimeType) return false
++            val periodPrefix = Regex("^(\\d+:)+")
++            val aId = a.id?.replace(periodPrefix, "")
++            val bId = b.id?.replace(periodPrefix, "")
++            if (!aId.isNullOrEmpty() && !bId.isNullOrEmpty()) return aId == bId
++            return a.language == b.language && a.channelCount == b.channelCount && a.sampleRate == b.sampleRate
++        }
++
++        /** Drops empty or punctuation-only results (music, sighs). */
++        private fun cleanText(text: String): String? {
++            val trimmed = text.replace(Regex("<\\|[^|]*\\|>"), "").trim()
++            return trimmed.takeIf { value -> value.any { it.isLetterOrDigit() } }
++        }
++
++        /** Breaks a long line into on-screen pieces of at most two lines each. */
++        private fun splitForScreen(text: String): List<String> {
++            val words = text.split(Regex("\\s+")).filter { it.isNotEmpty() }
++            if (words.isEmpty()) return listOf(text)
++            val lines = ArrayList<String>()
++            val line = StringBuilder()
++            for (word in words) {
++                if (line.isNotEmpty() && line.length + 1 + word.length > MAX_LINE_CHARS) {
++                    lines += line.toString()
++                    line.setLength(0)
++                }
++                if (line.isNotEmpty()) line.append(' ')
++                line.append(word)
++            }
++            if (line.isNotEmpty()) lines += line.toString()
++            return lines.chunked(2) { it.joinToString("\n") }
++        }
++    }
++}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedTranslator.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedTranslator.kt
+new file mode 100644
+index 00000000..e93763b4
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedTranslator.kt
+@@ -0,0 +1,66 @@
++package com.nuvio.app.features.player.generated
++
++import com.google.android.gms.tasks.Tasks
++import com.google.mlkit.nl.translate.TranslateLanguage
++import com.google.mlkit.nl.translate.Translation
++import com.google.mlkit.nl.translate.Translator
++import com.google.mlkit.nl.translate.TranslatorOptions
++import com.nuvio.app.features.player.audiosync.SyncLog
++import java.util.concurrent.TimeUnit
++
++/**
++ * Translates recognised lines into English with ML Kit's on-device translation (models of about
++ * 30 MB per language, downloaded once). Blocking; call from a background thread.
++ */
++internal class GeneratedTranslator : AutoCloseable {
++    private val translators = HashMap<String, Translator>()
++    private val ready = HashSet<String>()
++    private val failed = HashSet<String>()
++
++    /** English text of [text] spoken in [language], or null when it can't be translated. */
++    fun translate(text: String, language: String, onStatus: (String) -> Unit): String? {
++        val source = mlKitLanguage(language) ?: return null
++        if (source == TranslateLanguage.ENGLISH) return text
++        if (source in failed) return null
++        val translator = translators.getOrPut(source) {
++            Translation.getClient(
++                TranslatorOptions.Builder()
++                    .setSourceLanguage(source)
++                    .setTargetLanguage(TranslateLanguage.ENGLISH)
++                    .build(),
++            )
++        }
++        if (source !in ready) {
++            onStatus("Downloading translation model (about 30 MB, once)…")
++            try {
++                Tasks.await(translator.downloadModelIfNeeded(), 10, TimeUnit.MINUTES)
++                ready += source
++            } catch (error: Exception) {
++                SyncLog.w("generated subtitles: translation model for $source failed: ${error.message}")
++                failed += source
++                onStatus("Translation model download failed")
++                return null
++            }
++        }
++        return try {
++            Tasks.await(translator.translate(text), 30, TimeUnit.SECONDS)?.trim()?.takeIf { it.isNotEmpty() }
++        } catch (error: Exception) {
++            SyncLog.w("generated subtitles: translation failed: ${error.message}")
++            null
++        }
++    }
++
++    override fun close() {
++        translators.values.forEach { runCatching { it.close() } }
++        translators.clear()
++    }
++
++    private fun mlKitLanguage(code: String): String? = when (code.lowercase()) {
++        "zh", "yue", "cmn" -> TranslateLanguage.CHINESE
++        "ja" -> TranslateLanguage.JAPANESE
++        "ko" -> TranslateLanguage.KOREAN
++        "hi" -> TranslateLanguage.HINDI
++        "en" -> TranslateLanguage.ENGLISH
++        else -> TranslateLanguage.fromLanguageTag(code)
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitles.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitles.kt
+new file mode 100644
+index 00000000..2947117b
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitles.kt
+@@ -0,0 +1,98 @@
++package com.nuvio.app.features.player
++
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++
++/**
++ * English subtitles generated on the device from the audio (speech recognition + translation), for
++ * titles without usable subtitles. Offered as one extra entry in the subtitle list; the platform
++ * that can generate them sets [supported] and does the work when that entry is attached.
++ */
++object GeneratedSubtitles {
++    /** Pseudo address of the generated subtitle; the ".srt" ending lets it use the sidecar path. */
++    const val URL = "nuvio-generated://subtitles/english.srt"
++    private const val SCHEME = "nuvio-generated://"
++
++    /** Spoken languages the recogniser can be told to expect; [AUTO] follows the audio track's tag. */
++    const val AUTO = "auto"
++    val spokenLanguages: List<Pair<String, String>> = listOf(
++        AUTO to "Auto (from the audio track)",
++        "zh" to "Chinese",
++        "yue" to "Cantonese",
++        "ja" to "Japanese",
++        "ko" to "Korean",
++        "hi" to "Hindi",
++        "en" to "English",
++    )
++
++    /** Set by a platform that can generate subtitles (Android). */
++    var supported: Boolean = false
++
++    /** Model download/delete, registered by the platform. */
++    var modelActions: GeneratedSubtitleModelActions? = null
++
++    private val _autoGenerate = MutableStateFlow(false)
++    /** Pick the generated subtitle automatically when no subtitle in the preferred language exists. */
++    val autoGenerate: StateFlow<Boolean> = _autoGenerate.asStateFlow()
++
++    private val _spokenLanguage = MutableStateFlow(AUTO)
++    val spokenLanguage: StateFlow<String> = _spokenLanguage.asStateFlow()
++
++    private val _models = MutableStateFlow("")
++    /** One-line summary of the downloaded models, for Settings. */
++    val models: StateFlow<String> = _models.asStateFlow()
++
++    private var save: ((key: String, value: String) -> Unit)? = null
++
++    fun installPersistence(load: (key: String) -> String?, save: (key: String, value: String) -> Unit) {
++        this.save = save
++        _autoGenerate.value = load(KEY_AUTO) == "true"
++        _spokenLanguage.value = load(KEY_LANGUAGE)?.takeIf { code -> spokenLanguages.any { it.first == code } } ?: AUTO
++    }
++
++    fun setAutoGenerate(value: Boolean) {
++        _autoGenerate.value = value
++        save?.invoke(KEY_AUTO, value.toString())
++    }
++
++    fun setSpokenLanguage(code: String) {
++        _spokenLanguage.value = code
++        save?.invoke(KEY_LANGUAGE, code)
++    }
++
++    /** The next spoken language in [spokenLanguages], for a row that cycles through them. */
++    fun cycleSpokenLanguage() {
++        val index = spokenLanguages.indexOfFirst { it.first == _spokenLanguage.value }
++        setSpokenLanguage(spokenLanguages[(index + 1) % spokenLanguages.size].first)
++    }
++
++    fun spokenLanguageLabel(code: String = _spokenLanguage.value): String =
++        spokenLanguages.firstOrNull { it.first == code }?.second ?: code
++
++    fun publishModels(summary: String) {
++        _models.value = summary
++    }
++
++    fun isGenerated(url: String?): Boolean = url?.startsWith(SCHEME) == true
++
++    val entry: AddonSubtitle
++        get() = AddonSubtitle(
++            id = "nuvio-generated-english",
++            url = URL,
++            language = "en",
++            display = "English · Generated from the audio (on this device)",
++            addonName = "Nuvio",
++        )
++
++    /** [subtitles] plus the generated entry, last so a real subtitle always comes first. */
++    fun withEntry(subtitles: List<AddonSubtitle>): List<AddonSubtitle> =
++        if (!supported || subtitles.any { isGenerated(it.url) }) subtitles else subtitles + entry
++
++    private const val KEY_AUTO = "auto_generate"
++    private const val KEY_LANGUAGE = "spoken_language"
++}
++
++interface GeneratedSubtitleModelActions {
++    fun deleteModels()
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerRuntimeAutoSync.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerRuntimeAutoSync.kt
+index 292c21e6..3720fbc0 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerRuntimeAutoSync.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerRuntimeAutoSync.kt
+@@ -10,7 +10,7 @@ import com.nuvio.app.features.autosync.AutoSyncSubtitleCandidate
+ import kotlinx.coroutines.flow.collect
+ 
+ private fun List<AddonSubtitle>.toAutoSyncCandidates(): List<AutoSyncSubtitleCandidate> =
+-    map { subtitle ->
++    filterNot { GeneratedSubtitles.isGenerated(it.url) }.map { subtitle ->
+         AutoSyncSubtitleCandidate(
+             url = subtitle.url,
+             language = subtitle.language,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt
+index 40e92b22..9e849554 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt
+@@ -98,7 +98,9 @@ internal fun PlayerScreenContent(args: PlayerScreenArgs) {
+         runtime.episodeStreamsRepoState = episodeStreamsRepoState
+         runtime.metaUiState = metaUiState
+         runtime.addonsUiState = addonsUiState
+-        runtime.addonSubtitles = mergeStreamAndAddonSubtitles(addonSubtitles, runtime.externalSubtitles)
++        runtime.addonSubtitles = GeneratedSubtitles.withEntry( // Generated subtitles hook
++            mergeStreamAndAddonSubtitles(addonSubtitles, runtime.externalSubtitles),
++        )
+         runtime.isLoadingAddonSubtitles = isLoadingAddonSubtitles
+         runtime.horizontalSafePadding = horizontalSafePadding
+         runtime.metrics = metrics
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeTrackActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeTrackActions.kt
+index f8e90c81..ddaf6359 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeTrackActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeTrackActions.kt
+@@ -18,13 +18,25 @@ internal val PlayerScreenRuntime.visibleAddonSubtitles: List<AddonSubtitle>
+         val filtered = filterAddonSubtitlesForSettings(
+             subtitles = addonSubtitles,
+             settings = playerSettingsUiState,
+-        )
++        ).let { GeneratedSubtitles.withEntry(it) } // Generated subtitles hook
+         val selectedId = selectedAddonSubtitleId ?: return filtered
+         if (filtered.any { it.matchesSelection(selectedId) }) return filtered
+         val selectedSub = addonSubtitles.findSelectedAddon(selectedId) ?: return filtered
+         return listOf(selectedSub) + filtered
+     }
+ 
++/**
++ * The addon subtitles Nuvio may pick on its own. The generated subtitle joins them only when the
++ * user asked for it to be used automatically, and only once the real ones have loaded (it is
++ * last, so any real subtitle in the language wins).
++ */
++private val PlayerScreenRuntime.addonSubtitlesForAutoPick: List<AddonSubtitle>
++    get() = if (GeneratedSubtitles.autoGenerate.value && !isLoadingAddonSubtitles) {
++        addonSubtitles
++    } else {
++        addonSubtitles.filterNot { GeneratedSubtitles.isGenerated(it.url) }
++    }
++
+ internal val PlayerScreenRuntime.selectedAddonSubtitle: AddonSubtitle?
+     get() {
+         val selectedId = selectedAddonSubtitleId ?: return null
+@@ -215,7 +227,7 @@ private fun PlayerScreenRuntime.tryAutoSelectPreferredSubtitleFromAvailableTrack
+         val isPrimarySatisfied = primaryTarget != null && currentSelectedLang != null &&
+             SubtitleLanguageMatching.matchesLanguageCode(currentSelectedLang, primaryTarget)
+         val hasBetterAddonMatch = !isPrimarySatisfied && primaryTarget != null &&
+-            addonSubtitles.any { SubtitleLanguageMatching.matchesLanguageCode(it.language, primaryTarget) }
++            addonSubtitlesForAutoPick.any { SubtitleLanguageMatching.matchesLanguageCode(it.language, primaryTarget) }
+         if (!hasBetterAddonMatch) return
+     }
+ 
+@@ -259,7 +271,7 @@ private fun PlayerScreenRuntime.tryAutoSelectPreferredSubtitleFromAvailableTrack
+             return
+         }
+         if (matchedTargetPosition > 0 && !isLoadingAddonSubtitles) {
+-            val primaryAddonMatch = addonSubtitles.firstOrNull { subtitle ->
++            val primaryAddonMatch = addonSubtitlesForAutoPick.firstOrNull { subtitle ->
+                 SubtitleLanguageMatching.matchesLanguageCode(subtitle.language, selectionPlan.targets.first())
+             }
+             if (primaryAddonMatch != null) {
+@@ -298,7 +310,7 @@ private fun PlayerScreenRuntime.tryAutoSelectPreferredSubtitleFromAvailableTrack
+             return
+         }
+         val forcedAddonMatch = if (selectedAudioTrack != null) {
+-            addonSubtitles.firstOrNull { subtitle ->
++            addonSubtitlesForAutoPick.firstOrNull { subtitle ->
+                 addonSubtitleIsForced(subtitle) &&
+                     addonSubtitleMatchesLanguage(subtitle, requiredForcedTarget) &&
+                     addonSubtitleMatchesSelectedAudioLanguage(subtitle, selectedAudioTrack)
+@@ -340,7 +352,7 @@ private fun PlayerScreenRuntime.tryAutoSelectPreferredSubtitleFromAvailableTrack
+     if (playbackSnapshot.isLoading) return
+ 
+     val addonMatch = selectionPlan.targets.firstNotNullOfOrNull { target ->
+-        addonSubtitles.firstOrNull { subtitle ->
++        addonSubtitlesForAutoPick.firstOrNull { subtitle ->
+             (!subtitleStyle.useForcedSubtitles || !addonSubtitleIsForced(subtitle)) &&
+                 SubtitleLanguageMatching.matchesLanguageCode(subtitle.language, target)
+         }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AutoSyncPlaybackSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AutoSyncPlaybackSettings.kt
+index 175782ab..ec6dd552 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AutoSyncPlaybackSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AutoSyncPlaybackSettings.kt
+@@ -147,6 +147,7 @@ internal fun AutoSyncPlaybackSettingsRows(
+         onCheckedChange = AutoSyncPreferencesRepository::setDebugLogsEnabled,
+     )
+     AudioSyncFallbackSettingsRows(isTablet = isTablet, enabled = enabled && preferredSubtitleAutoSyncOnStart)
++    GeneratedSubtitleSettingsRows(isTablet = isTablet) // Generated subtitles hook
+ }
+ 
+ /** The audio sync fallback: it runs only after AutoSync, so it follows AutoSync's switch. */
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/GeneratedSubtitleSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/GeneratedSubtitleSettings.kt
+new file mode 100644
+index 00000000..927f39ba
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/GeneratedSubtitleSettings.kt
+@@ -0,0 +1,44 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.features.player.GeneratedSubtitles
++
++/** Settings for subtitles generated from the audio; shown only where they are supported. */
++@Composable
++internal fun GeneratedSubtitleSettingsRows(isTablet: Boolean) {
++    if (!GeneratedSubtitles.supported) return
++    val autoGenerate by GeneratedSubtitles.autoGenerate.collectAsStateWithLifecycle()
++    val spokenLanguage by GeneratedSubtitles.spokenLanguage.collectAsStateWithLifecycle()
++    val models by GeneratedSubtitles.models.collectAsStateWithLifecycle()
++
++    SettingsGroupDivider(isTablet = isTablet)
++    SettingsSwitchRow(
++        title = "Generate subtitles when none are found",
++        description = "Pick \"English · Generated from the audio\" by itself when no subtitle in your " +
++            "language exists. It is always in the subtitle list to pick by hand. Speech is recognised " +
++            "and translated on this device; models download once on Wi-Fi.",
++        checked = autoGenerate,
++        isTablet = isTablet,
++        onCheckedChange = GeneratedSubtitles::setAutoGenerate,
++    )
++    SettingsGroupDivider(isTablet = isTablet)
++    SettingsNavigationRow(
++        title = "Spoken language for generated subtitles",
++        description = GeneratedSubtitles.spokenLanguageLabel(spokenLanguage) +
++            " · Chinese, Cantonese, Japanese, Korean and English use SenseVoice (237 MB); " +
++            "Hindi uses Whisper small (375 MB). Tap to change.",
++        isTablet = isTablet,
++        onClick = GeneratedSubtitles::cycleSpokenLanguage,
++    )
++    if (models.isNotEmpty()) {
++        SettingsGroupDivider(isTablet = isTablet)
++        SettingsNavigationRow(
++            title = "Delete subtitle generation models",
++            description = models,
++            isTablet = isTablet,
++            onClick = { GeneratedSubtitles.modelActions?.deleteModels() },
++        )
++    }
++}

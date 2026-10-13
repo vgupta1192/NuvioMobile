@@ -136,7 +136,7 @@ jobs:
         if: steps.ver.outputs.should_build == 'true'
         run: |
           # optional-ports
-          for P in livetv-robustness custom-stretch jellyfin-subtitles audio-sync-hls; do
+          for P in livetv-robustness custom-stretch jellyfin-subtitles audio-sync-hls generated-subtitles; do
             if git apply "fork-src/.github/patches/$P.patch"; then
               echo "applied $P.patch"
             else
