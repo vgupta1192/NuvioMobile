@@ -225,10 +225,10 @@ index 00000000..eb8f4816
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleModels.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleModels.kt
 new file mode 100644
-index 00000000..a86d25e0
+index 00000000..13427fda
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleModels.kt
-@@ -0,0 +1,159 @@
+@@ -0,0 +1,165 @@
 +package com.nuvio.app.features.player.generated
 +
 +import android.content.Context
@@ -251,8 +251,8 @@ index 00000000..a86d25e0
 +        label = "SenseVoice",
 +        dirName = "sense-voice-int8-2025-09-09",
 +        files = listOf(
-+            SENSE_VOICE_MODEL to ("$SENSE_VOICE_BASE/model.int8.onnx" to 237_115_547L),
-+            TOKENS to ("$SENSE_VOICE_BASE/tokens.txt" to 315_894L),
++            FILE_SENSE_VOICE to ("$SENSE_VOICE_BASE/model.int8.onnx" to 237_115_547L),
++            FILE_TOKENS to ("$SENSE_VOICE_BASE/tokens.txt" to 315_894L),
 +        ),
 +    ),
 +
@@ -261,9 +261,9 @@ index 00000000..a86d25e0
 +        label = "Whisper small",
 +        dirName = "whisper-small-int8",
 +        files = listOf(
-+            WHISPER_ENCODER to ("$WHISPER_BASE/small-encoder.int8.onnx" to 112_442_483L),
-+            WHISPER_DECODER to ("$WHISPER_BASE/small-decoder.int8.onnx" to 262_226_114L),
-+            TOKENS to ("$WHISPER_BASE/small-tokens.txt" to 816_730L),
++            FILE_WHISPER_ENCODER to ("$WHISPER_BASE/small-encoder.int8.onnx" to 112_442_483L),
++            FILE_WHISPER_DECODER to ("$WHISPER_BASE/small-decoder.int8.onnx" to 262_226_114L),
++            FILE_TOKENS to ("$WHISPER_BASE/small-tokens.txt" to 816_730L),
 +        ),
 +    );
 +
@@ -302,10 +302,10 @@ index 00000000..a86d25e0
 +    }
 +
 +    companion object {
-+        const val SENSE_VOICE_MODEL = "model.int8.onnx"
-+        const val WHISPER_ENCODER = "encoder.int8.onnx"
-+        const val WHISPER_DECODER = "decoder.int8.onnx"
-+        const val TOKENS = "tokens.txt"
++        const val SENSE_VOICE_MODEL = FILE_SENSE_VOICE
++        const val WHISPER_ENCODER = FILE_WHISPER_ENCODER
++        const val WHISPER_DECODER = FILE_WHISPER_DECODER
++        const val TOKENS = FILE_TOKENS
 +
 +        /** Registers persistence and Settings actions. Call once at app start. */
 +        fun initialize(context: Context) {
@@ -388,6 +388,12 @@ index 00000000..a86d25e0
 +private const val SENSE_VOICE_BASE =
 +    "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/resolve/main"
 +private const val WHISPER_BASE = "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small/resolve/main"
++
++// File names, outside the companion: enum entries are built before their companion exists.
++private const val FILE_SENSE_VOICE = "model.int8.onnx"
++private const val FILE_WHISPER_ENCODER = "encoder.int8.onnx"
++private const val FILE_WHISPER_DECODER = "decoder.int8.onnx"
++private const val FILE_TOKENS = "tokens.txt"
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
 new file mode 100644
 index 00000000..4f4ad790
