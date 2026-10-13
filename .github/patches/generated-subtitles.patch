@@ -252,14 +252,15 @@ index 2a4232cd..018e2675 100644
                      TsExtractor.MODE_HLS,
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedRecognizer.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedRecognizer.kt
 new file mode 100644
-index 00000000..eb8f4816
+index 00000000..e980fb68
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedRecognizer.kt
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,109 @@
 +package com.nuvio.app.features.player.generated
 +
 +import android.content.Context
 +import com.k2fsa.sherpa.onnx.FeatureConfig
++import com.k2fsa.sherpa.onnx.OfflineDolphinModelConfig
 +import com.k2fsa.sherpa.onnx.OfflineModelConfig
 +import com.k2fsa.sherpa.onnx.OfflineRecognizer
 +import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
@@ -273,6 +274,8 @@ index 00000000..eb8f4816
 +    /** Whisper in translate mode already returns English. */
 +    val translatesToEnglish: Boolean,
 +    private val fixedLanguage: String,
++    /** The model's own language tag is not reliable (Dolphin CTC): always use [fixedLanguage]. */
++    private val ignoreDetected: Boolean = false,
 +) : AutoCloseable {
 +    /** [language] is the detected (or given) spoken language as a plain code, e.g. "zh". */
 +    class Heard(val text: String, val language: String)
@@ -286,7 +289,7 @@ index 00000000..eb8f4816
 +            val detected = result.lang.trim().removePrefix("<|").removeSuffix("|>").lowercase()
 +            val language = when {
 +                translatesToEnglish -> "en"
-+                detected.isNotEmpty() && detected != "nospeech" -> detected
++                !ignoreDetected && detected.isNotEmpty() && detected != "nospeech" -> detected
 +                else -> fixedLanguage
 +            }
 +            return Heard(result.text, language)
@@ -322,7 +325,25 @@ index 00000000..eb8f4816
 +            return GeneratedRecognizer(recognizer, translatesToEnglish = false, fixedLanguage = fallback)
 +        }
 +
-+        /** Whisper small, translating [language] speech (Hindi) straight into English. */
++        /** Dolphin (CTC, no language setting): [language] is what the text is translated from. */
++        fun dolphin(context: Context, language: String, threads: Int): GeneratedRecognizer {
++            val model = GeneratedSpeechModel.DOLPHIN
++            val recognizer = OfflineRecognizer(
++                config = OfflineRecognizerConfig(
++                    featConfig = FeatureConfig(sampleRate = SAMPLE_RATE, featureDim = 80),
++                    modelConfig = OfflineModelConfig(
++                        dolphin = OfflineDolphinModelConfig(
++                            model = model.file(context, GeneratedSpeechModel.DOLPHIN_MODEL).absolutePath,
++                        ),
++                        tokens = model.file(context, GeneratedSpeechModel.TOKENS).absolutePath,
++                        numThreads = threads,
++                    ),
++                ),
++            )
++            return GeneratedRecognizer(recognizer, translatesToEnglish = false, fixedLanguage = language, ignoreDetected = true)
++        }
++
++        /** Whisper small, translating [language] speech ("" = detect it) straight into English. */
 +        fun whisper(context: Context, language: String, threads: Int): GeneratedRecognizer {
 +            val model = GeneratedSpeechModel.WHISPER_SMALL
 +            val recognizer = OfflineRecognizer(
@@ -346,10 +367,10 @@ index 00000000..eb8f4816
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleModels.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleModels.kt
 new file mode 100644
-index 00000000..13427fda
+index 00000000..ff17d6be
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleModels.kt
-@@ -0,0 +1,165 @@
+@@ -0,0 +1,179 @@
 +package com.nuvio.app.features.player.generated
 +
 +import android.content.Context
@@ -377,7 +398,17 @@ index 00000000..13427fda
 +        ),
 +    ),
 +
-+    /** Multilingual Whisper, used for Hindi; it translates straight into English. */
++    /** Dolphin small (CTC): 40 Eastern languages, fast; text is translated afterwards. */
++    DOLPHIN(
++        label = "Dolphin",
++        dirName = "dolphin-small-ctc-int8-2025-04-02",
++        files = listOf(
++            FILE_DOLPHIN to ("$DOLPHIN_BASE/model.int8.onnx" to 249_658_954L),
++            FILE_TOKENS to ("$DOLPHIN_BASE/tokens.txt" to 504_662L),
++        ),
++    ),
++
++    /** Multilingual Whisper: any language, detects it, translates straight into English. */
 +    WHISPER_SMALL(
 +        label = "Whisper small",
 +        dirName = "whisper-small-int8",
@@ -424,6 +455,7 @@ index 00000000..13427fda
 +
 +    companion object {
 +        const val SENSE_VOICE_MODEL = FILE_SENSE_VOICE
++        const val DOLPHIN_MODEL = FILE_DOLPHIN
 +        const val WHISPER_ENCODER = FILE_WHISPER_ENCODER
 +        const val WHISPER_DECODER = FILE_WHISPER_DECODER
 +        const val TOKENS = FILE_TOKENS
@@ -508,19 +540,22 @@ index 00000000..13427fda
 +
 +private const val SENSE_VOICE_BASE =
 +    "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/resolve/main"
++private const val DOLPHIN_BASE =
++    "https://huggingface.co/csukuangfj/sherpa-onnx-dolphin-small-ctc-multi-lang-int8-2025-04-02/resolve/main"
 +private const val WHISPER_BASE = "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small/resolve/main"
 +
 +// File names, outside the companion: enum entries are built before their companion exists.
 +private const val FILE_SENSE_VOICE = "model.int8.onnx"
++private const val FILE_DOLPHIN = "model.int8.onnx"
 +private const val FILE_WHISPER_ENCODER = "encoder.int8.onnx"
 +private const val FILE_WHISPER_DECODER = "decoder.int8.onnx"
 +private const val FILE_TOKENS = "tokens.txt"
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
 new file mode 100644
-index 00000000..82034e21
+index 00000000..207c2044
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
-@@ -0,0 +1,519 @@
+@@ -0,0 +1,530 @@
 +@file:OptIn(androidx.media3.common.util.UnstableApi::class)
 +
 +package com.nuvio.app.features.player.generated
@@ -703,7 +738,11 @@ index 00000000..82034e21
 +                return
 +            }
 +            val language = spokenLanguage(current)
-+            val model = if (language in SENSE_VOICE_LANGUAGES) GeneratedSpeechModel.SENSE_VOICE else GeneratedSpeechModel.WHISPER_SMALL
++            val model = when {
++                language in SENSE_VOICE_LANGUAGES -> GeneratedSpeechModel.SENSE_VOICE
++                language in DOLPHIN_LANGUAGES && GeneratedSubtitles.fastAsianModel.value -> GeneratedSpeechModel.DOLPHIN
++                else -> GeneratedSpeechModel.WHISPER_SMALL
++            }
 +            SyncLog.i("generated subtitles: spoken language=$language model=${model.label}")
 +            if (!model.isReady(appContext)) {
 +                while (!current.stopped && !AsrModel.isUnmetered(appContext)) {
@@ -728,6 +767,7 @@ index 00000000..82034e21
 +                    WHISPER_THREADS,
 +                )
 +                GeneratedSpeechModel.SENSE_VOICE -> GeneratedRecognizer.senseVoice(appContext, language, THREADS)
++                GeneratedSpeechModel.DOLPHIN -> GeneratedRecognizer.dolphin(appContext, language, THREADS)
 +            }
 +            val weights = appContext.resources.openRawResource(R.raw.silero_vad_v5_16k).use { SileroVadWeights.read(it) }
 +            val hlsSampler = if (hls) HlsAudioSpotSampler(source, dataSourceFactory, MAX_WINDOW_BYTES) else null
@@ -944,6 +984,11 @@ index 00000000..82034e21
 +        private const val MIN_WHISPER_SAMPLES = SileroVad.SAMPLE_RATE * 6 / 10
 +        private val SENSE_VOICE_LANGUAGES = setOf("zh", "yue", "ja", "ko", "en")
 +
++        /** Dolphin languages ML Kit can also translate (Punjabi can't be, so Whisper keeps it). */
++        private val DOLPHIN_LANGUAGES = setOf(
++            "hi", "ur", "bn", "ta", "te", "gu", "mr", "th", "id", "ms", "vi", "tl", "ar", "fa", "ru",
++        )
++
 +        /** ISO 639-2 audio tags (as in Matroska) to the codes in [GeneratedSubtitles.spokenLanguages]. */
 +        private val THREE_LETTER_CODES = mapOf(
 +            "zho" to "zh", "chi" to "zh", "cmn" to "zh", "jpn" to "ja", "kor" to "ko", "eng" to "en",
@@ -1017,7 +1062,8 @@ index 00000000..82034e21
 +
 +        /** Drops empty or punctuation-only results (music, sighs). */
 +        private fun cleanText(text: String): String? {
-+            val trimmed = text.replace(Regex("<\\|[^|]*\\|>"), "").trim()
++            // Model tags: SenseVoice "<|zh|>", Dolphin "<hi><IN>".
++            val trimmed = text.replace(Regex("<\\|[^|]*\\|>"), "").replace(Regex("<[A-Za-z_-]{1,12}>"), "").trim()
 +            return trimmed.takeIf { value -> value.any { it.isLetterOrDigit() } }
 +        }
 +
@@ -1042,10 +1088,10 @@ index 00000000..82034e21
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedTranslator.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedTranslator.kt
 new file mode 100644
-index 00000000..e93763b4
+index 00000000..29bb72c2
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedTranslator.kt
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,67 @@
 +package com.nuvio.app.features.player.generated
 +
 +import com.google.android.gms.tasks.Tasks
@@ -1108,16 +1154,17 @@ index 00000000..e93763b4
 +        "ja" -> TranslateLanguage.JAPANESE
 +        "ko" -> TranslateLanguage.KOREAN
 +        "hi" -> TranslateLanguage.HINDI
++        "tl", "fil" -> TranslateLanguage.TAGALOG
 +        "en" -> TranslateLanguage.ENGLISH
 +        else -> TranslateLanguage.fromLanguageTag(code)
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitles.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitles.kt
 new file mode 100644
-index 00000000..1e4a88c6
+index 00000000..2ec5d86c
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitles.kt
-@@ -0,0 +1,142 @@
+@@ -0,0 +1,156 @@
 +package com.nuvio.app.features.player
 +
 +import kotlinx.coroutines.flow.MutableStateFlow
@@ -1198,6 +1245,18 @@ index 00000000..1e4a88c6
 +    private val _spokenLanguage = MutableStateFlow(AUTO)
 +    val spokenLanguage: StateFlow<String> = _spokenLanguage.asStateFlow()
 +
++    private val _fastAsianModel = MutableStateFlow(true)
++    /**
++     * For Indian, South-East Asian, Arabic, Persian and Russian audio with a known language: the
++     * faster Dolphin model plus translation (true) or Whisper, slower but often more accurate.
++     */
++    val fastAsianModel: StateFlow<Boolean> = _fastAsianModel.asStateFlow()
++
++    fun setFastAsianModel(value: Boolean) {
++        _fastAsianModel.value = value
++        save?.invoke(KEY_FAST_ASIAN, value.toString())
++    }
++
 +    private val _models = MutableStateFlow("")
 +    /** One-line summary of the downloaded models, for Settings. */
 +    val models: StateFlow<String> = _models.asStateFlow()
@@ -1208,6 +1267,7 @@ index 00000000..1e4a88c6
 +        this.save = save
 +        _mode.value = load(KEY_MODE)?.takeIf { code -> modes.any { it.first == code } }
 +            ?: if (load(KEY_AUTO) == "true") MODE_MISSING else MODE_OFF
++        _fastAsianModel.value = load(KEY_FAST_ASIAN) != "false"
 +        _spokenLanguage.value = load(KEY_LANGUAGE)?.takeIf { code -> spokenLanguages.any { it.first == code } } ?: AUTO
 +    }
 +
@@ -1255,6 +1315,7 @@ index 00000000..1e4a88c6
 +    private const val KEY_AUTO = "auto_generate"
 +    private const val KEY_MODE = "auto_mode"
 +    private const val KEY_LANGUAGE = "spoken_language"
++    private const val KEY_FAST_ASIAN = "fast_asian_model"
 +}
 +
 +interface GeneratedSubtitleModelActions {
@@ -1373,10 +1434,10 @@ index 175782ab..ec6dd552 100644
  /** The audio sync fallback: it runs only after AutoSync, so it follows AutoSync's switch. */
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/GeneratedSubtitleSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/GeneratedSubtitleSettings.kt
 new file mode 100644
-index 00000000..859c7aa2
+index 00000000..7d28d811
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/GeneratedSubtitleSettings.kt
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,102 @@
 +package com.nuvio.app.features.settings
 +
 +import androidx.compose.foundation.clickable
@@ -1407,6 +1468,7 @@ index 00000000..859c7aa2
 +    val mode by GeneratedSubtitles.mode.collectAsStateWithLifecycle()
 +    val spokenLanguage by GeneratedSubtitles.spokenLanguage.collectAsStateWithLifecycle()
 +    val models by GeneratedSubtitles.models.collectAsStateWithLifecycle()
++    val fastAsianModel by GeneratedSubtitles.fastAsianModel.collectAsStateWithLifecycle()
 +    var pickLanguage by remember { mutableStateOf(false) }
 +
 +    SettingsGroupDivider(isTablet = isTablet)
@@ -1421,11 +1483,21 @@ index 00000000..859c7aa2
 +    SettingsNavigationRow(
 +        title = "Spoken language for generated subtitles",
 +        description = GeneratedSubtitles.spokenLanguageLabel(spokenLanguage) +
-+            ". Chinese, Cantonese, Japanese, Korean and English use SenseVoice (237 MB); all other " +
-+            "languages, and audio without a language tag, use Whisper small (375 MB), which detects " +
-+            "the language and translates to English.",
++            ". Chinese, Cantonese, Japanese, Korean and English use SenseVoice (237 MB). Audio without " +
++            "a language tag, and languages below that Dolphin doesn't cover, use Whisper small " +
++            "(375 MB), which detects the language and translates to English.",
 +        isTablet = isTablet,
 +        onClick = { pickLanguage = true },
++    )
++    SettingsGroupDivider(isTablet = isTablet)
++    SettingsSwitchRow(
++        title = "Faster model for Indian and South-East Asian languages",
++        description = "Hindi, Urdu, Bengali, Tamil, Telugu, Gujarati, Marathi, Thai, Indonesian, Malay, " +
++            "Vietnamese, Tagalog, Arabic, Persian and Russian use Dolphin (250 MB) plus translation " +
++            "when the language is known. Off: Whisper, slower but sometimes more accurate.",
++        checked = fastAsianModel,
++        isTablet = isTablet,
++        onCheckedChange = GeneratedSubtitles::setFastAsianModel,
 +    )
 +    if (models.isNotEmpty()) {
 +        SettingsGroupDivider(isTablet = isTablet)
