@@ -130,6 +130,20 @@ jobs:
       # Same signing key for every build, so an update installs over the existing app. Gradle signs
       # debug builds with ~/.android/debug.keystore (alias androiddebugkey, password android); without
       # this secret each runner makes a random one and every update needs an uninstall first.
+      # Optional ports from DavidVamaiotu's Nuvio*-Reshaped, one patch per feature. They are
+      # warning-only: a patch that no longer applies is skipped and the build goes on without it.
+      - name: Apply optional Reshaped ports
+        if: steps.ver.outputs.should_build == 'true'
+        run: |
+          # optional-ports
+          for P in livetv-robustness; do
+            if git apply "fork-src/.github/patches/$P.patch"; then
+              echo "applied $P.patch"
+            else
+              echo "::warning::$P.patch no longer applies to upstream; building without it"
+            fi
+          done
+
       - name: Fixed signing key
         id: signkey
         if: steps.ver.outputs.should_build == 'true'

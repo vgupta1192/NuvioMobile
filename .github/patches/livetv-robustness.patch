@@ -1,0 +1,54 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+index 38e113f8..bf0b4878 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+@@ -297,7 +297,15 @@ private fun ExoPlayerSurface(
+     val extractorsFactory = remember(sourceUrl) {
+         AutoSyncExtractorsFactory( // AutoSync hook
+             delegate = DefaultExtractorsFactory()
+-                .setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS)
++                .setTsExtractorFlags(
++                    DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS or
++                        // Live TV robustness: broadcast restreams often send IDR frames rarely or never.
++                        if (com.nuvio.app.features.autosync.AutoSyncLiveSources.isLive(sourceUrl)) {
++                            DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES
++                        } else {
++                            0
++                        },
++                )
+                 .setTsExtractorTimestampSearchBytes(1500 * TsExtractor.TS_PACKET_SIZE),
+             sourceKey = sourceUrl,
+         )
+@@ -591,6 +599,8 @@ private fun ExoPlayerSurface(
+             }
+         }
+ 
++        var liveEdgeRejoins = 0 // Live TV robustness: live window recovery
++
+         fun reportPlayerError(error: PlaybackException) {
+             if (
+                 playerSettings.decoderPriority == DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON &&
+@@ -626,6 +636,15 @@ private fun ExoPlayerSurface(
+                     error,
+                 )
+ 
++                // Live TV robustness: a paused or stalled live stream fell out of its playlist
++                // window; rejoin the live edge (at most 3 times until playback is ready again).
++                if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW && liveEdgeRejoins < 3) {
++                    liveEdgeRejoins++
++                    exoPlayer.seekToDefaultPosition()
++                    exoPlayer.prepare()
++                    return
++                }
++
+                 val isSourceError = error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW ||
+                         error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED ||
+                         error.cause?.toString()?.contains("UnrecognizedInputFormatException") == true
+@@ -672,6 +691,7 @@ private fun ExoPlayerSurface(
+                         "terminalError=${exoPlayer.playerError?.errorCodeName ?: "none"}",
+                 )
+                 if (playbackState == Player.STATE_READY) {
++                    liveEdgeRejoins = 0 // Live TV robustness: live window recovery
+                     fallbackStartPositionMs = null
+                     latestOnError.value(null)
+                     exoPlayer.logCurrentTracks("STATE_READY")
