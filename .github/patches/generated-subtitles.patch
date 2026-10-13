@@ -887,10 +887,10 @@ index 00000000..f4e0a5ef
 +private const val FILE_TOKENS = "tokens.txt"
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
 new file mode 100644
-index 00000000..6b5d0f53
+index 00000000..13ae425a
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
-@@ -0,0 +1,744 @@
+@@ -0,0 +1,843 @@
 +@file:OptIn(androidx.media3.common.util.UnstableApi::class)
 +
 +package com.nuvio.app.features.player.generated
@@ -1088,15 +1088,24 @@ index 00000000..6b5d0f53
 +            }
 +            // With a DeepL key, Whisper writes the spoken language down and DeepL translates whole
 +            // lines with context; without one (or if DeepL stops working) Whisper translates itself.
++            // The online entry: Whisper large-v3 on Groq hears the speech instead of a model here.
++            val groq = GeneratedSubtitles.groqKey.value.trim()
++                .takeIf { it.isNotEmpty() && current.url == GeneratedSubtitles.ONLINE_URL }
++                ?.let(::GroqWhisperClient)
 +            var deepl: DeepLTranslator? = GeneratedSubtitles.deeplKey.value.trim().takeIf { it.isNotEmpty() }
-+                ?.takeIf { model == whisperModel }
++                ?.takeIf { groq != null || model == whisperModel }
 +                ?.let(::DeepLTranslator)
 +            SyncLog.i(
-+                "generated subtitles: spoken language=$language model=${model.label}" +
++                "generated subtitles: spoken language=$language model=" +
++                    (if (groq != null) "Groq Whisper large-v3" else model.label) +
 +                    if (deepl != null) " translation=DeepL" else "",
 +            )
-+            var asr: GeneratedRecognizer = prepareRecognizer(current, model, language, translate = deepl == null) ?: return
-+            recognizer = asr
++            lateinit var asr: GeneratedRecognizer
++            if (groq == null) {
++                asr = prepareRecognizer(current, model, language, translate = deepl == null) ?: return
++                recognizer = asr
++            }
++            deeplContext = ""
 +            val weights = appContext.resources.openRawResource(R.raw.silero_vad_v5_16k).use { SileroVadWeights.read(it) }
 +            // Playlists and manifests also hide behind other addresses: the first bytes tell.
 +            val kind = HlsAudioSpotSampler.manifestKind(source, dataSourceFactory)
@@ -1113,7 +1122,6 @@ index 00000000..6b5d0f53
 +            current.status = "Generating subtitles from the audio…"
 +            val covered = ArrayList<LongArray>()
 +            var switchedToWhisper = false
-+            var deeplContext = ""
 +            var deeplFailures = 0
 +            var failures = 0
 +            while (!current.stopped) {
@@ -1152,7 +1160,23 @@ index 00000000..6b5d0f53
 +                // Lines written in the spoken language, translated together by DeepL below.
 +                val forDeepL = ArrayList<Triple<Long, Long, String>>()
 +                var deeplSource: String? = null
-+                for ((startMs, samples) in sentences) {
++                if (groq != null) {
++                    val added = try {
++                        generateOnline(current, groq, deepl.takeUnless { onlineDeeplOff }, sentences, language)
++                    } catch (failure: GroqWhisperClient.Failure) {
++                        current.status = if (failure.permanent) {
++                            "${failure.message}: check the Groq key in Settings"
++                        } else {
++                            "${failure.message}, retrying…"
++                        }
++                        if (failure.permanent) return
++                        removeCovered(covered, fromMs, toMs)
++                        Thread.sleep(maxOf(failure.retryAfterMs, 5_000L))
++                        continue
++                    }
++                    lines += added
++                }
++                for ((startMs, samples) in if (groq != null) emptyList() else sentences) {
 +                    if (current.stopped) return
 +                    // Whisper invents words for very short sounds; such bits rarely carry a line.
 +                    if (asr.whisper && samples.size < MIN_WHISPER_SAMPLES) continue
@@ -1337,6 +1361,69 @@ index 00000000..6b5d0f53
 +            decoder.release()
 +        }
 +        return synchronized(segments) { segments.sortedBy { it.first } }
++    }
++
++    /** The previous lines sent to DeepL, as context for the next request. */
++    @Volatile
++    private var deeplContext = ""
++
++    /** DeepL stopped working for the online entry: Groq translates by itself. */
++    @Volatile
++    private var onlineDeeplOff = false
++
++    /**
++     * Sends the speech of one window ([sentences], joined with short gaps) to Groq and adds the
++     * lines it hears at their place on the timeline. Returns the number of lines added.
++     */
++    private fun generateOnline(
++        current: Run,
++        groq: GroqWhisperClient,
++        deepl: DeepLTranslator?,
++        sentences: List<Pair<Long, FloatArray>>,
++        language: String,
++    ): Int {
++        if (sentences.isEmpty()) return 0
++        val rate = SileroVad.SAMPLE_RATE
++        val gap = rate * 4 / 10
++        // (start and end in the upload in seconds, start on the timeline in ms) per sentence.
++        val parts = ArrayList<Triple<Double, Double, Long>>()
++        val audio = FloatArray(sentences.sumOf { it.second.size } + gap * (sentences.size - 1))
++        var at = 0
++        for ((startMs, samples) in sentences) {
++            samples.copyInto(audio, at)
++            parts += Triple(at.toDouble() / rate, (at + samples.size).toDouble() / rate, startMs)
++            at += samples.size + gap
++        }
++        fun timelineMs(sec: Double): Long {
++            val part = parts.lastOrNull { it.first <= sec + 0.05 } ?: parts.first()
++            return part.third + ((sec.coerceIn(part.first, part.second) - part.first) * 1_000).toLong()
++        }
++        val hint = language.takeUnless { it == GeneratedSubtitles.AUTO }.orEmpty()
++        var heard = groq.recognize(audio, rate, translate = deepl == null, language = hint)
++        var english: List<String>? = null
++        if (deepl != null) {
++            val texts = heard.map { cleanText(it.text) ?: "" }
++            try {
++                english = deepl.translate(texts, DeepLTranslator.sourceCode(heard.firstOrNull()?.language?.let { whisperCode(it) } ?: hint), deeplContext)
++                deeplContext = texts.filter { it.isNotEmpty() }.takeLast(DEEPL_CONTEXT_LINES).joinToString("\n")
++            } catch (failure: DeepLTranslator.Failure) {
++                if (failure.permanent) {
++                    onlineDeeplOff = true
++                    current.status = "${failure.message}: Groq translates instead"
++                }
++                heard = groq.recognize(audio, rate, translate = true, language = hint)
++            }
++        }
++        var added = 0
++        heard.forEachIndexed { index, line ->
++            val text = (english?.getOrNull(index) ?: line.text).let(::cleanText) ?: return@forEachIndexed
++            if (isWhisperFiller(text) || !looksEnglish(text)) return@forEachIndexed
++            val startMs = timelineMs(line.startSec)
++            val endMs = maxOf(timelineMs(line.endSec), startMs + MIN_CUE_MS)
++            addLine(current, startMs, endMs, text)
++            added++
++        }
++        return added
 +    }
 +
 +    /** Set when the last window was dropped because the user seeked away (not a failure). */
@@ -1597,6 +1684,18 @@ index 00000000..6b5d0f53
 +            }
 +        }
 +
++        /** Groq names the language in English ("japanese"); the codes here are ISO 639-1. */
++        private fun whisperCode(name: String): String = when (name.lowercase()) {
++            "japanese" -> "ja"; "chinese" -> "zh"; "cantonese" -> "yue"; "korean" -> "ko"; "hindi" -> "hi"
++            "urdu" -> "ur"; "bengali" -> "bn"; "tamil" -> "ta"; "telugu" -> "te"; "malayalam" -> "ml"
++            "kannada" -> "kn"; "marathi" -> "mr"; "gujarati" -> "gu"; "punjabi" -> "pa"; "thai" -> "th"
++            "indonesian" -> "id"; "malay" -> "ms"; "tagalog" -> "tl"; "vietnamese" -> "vi"; "turkish" -> "tr"
++            "arabic" -> "ar"; "persian" -> "fa"; "russian" -> "ru"; "ukrainian" -> "uk"; "polish" -> "pl"
++            "spanish" -> "es"; "portuguese" -> "pt"; "french" -> "fr"; "german" -> "de"; "italian" -> "it"
++            "dutch" -> "nl"; "swedish" -> "sv"; "greek" -> "el"; "hebrew" -> "he"; "english" -> "en"
++            else -> name.takeIf { it.length in 2..3 }.orEmpty()
++        }
++
 +        /** Mostly Latin letters: what an English line looks like. */
 +        private fun looksEnglish(text: String): Boolean {
 +            var letters = 0
@@ -1718,12 +1817,134 @@ index 00000000..97c85c25
 +        else -> TranslateLanguage.fromLanguageTag(code)
 +    }
 +}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GroqWhisperClient.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GroqWhisperClient.kt
+new file mode 100644
+index 00000000..c74c81c3
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GroqWhisperClient.kt
+@@ -0,0 +1,116 @@
++package com.nuvio.app.features.player.generated
++
++import com.nuvio.app.features.player.audiosync.SyncLog
++import java.io.ByteArrayOutputStream
++import java.net.HttpURLConnection
++import java.net.URL
++import java.nio.ByteBuffer
++import java.nio.ByteOrder
++import java.util.UUID
++import org.json.JSONObject
++
++/**
++ * Whisper large-v3 on Groq's servers (the user's own API key): speech audio of one window is
++ * uploaded as a 16 kHz WAV and comes back as timed lines, translated to English or (for DeepL)
++ * written down in the spoken language. Blocking.
++ */
++internal class GroqWhisperClient(private val key: String) {
++    /** A line Groq heard, in seconds from the start of the uploaded audio. */
++    class Line(val startSec: Double, val endSec: Double, val text: String, val language: String)
++
++    class Failure(message: String, val permanent: Boolean, val retryAfterMs: Long = 0L) : Exception(message)
++
++    /** [translate]: English; else the spoken language ([language] hint, or detected when blank). */
++    fun recognize(samples: FloatArray, sampleRate: Int, translate: Boolean, language: String): List<Line> {
++        var attempt = 0
++        while (true) {
++            try {
++                return request(samples, sampleRate, translate, language)
++            } catch (failure: Failure) {
++                if (failure.permanent || ++attempt >= RETRIES) throw failure
++                Thread.sleep(maxOf(failure.retryAfterMs, RETRY_DELAY_MS * attempt))
++            }
++        }
++    }
++
++    private fun request(samples: FloatArray, sampleRate: Int, translate: Boolean, language: String): List<Line> {
++        val boundary = "nuvio-" + UUID.randomUUID().toString()
++        val body = ByteArrayOutputStream()
++        fun field(name: String, value: String) {
++            body.write("--$boundary\r\nContent-Disposition: form-data; name=\"$name\"\r\n\r\n$value\r\n".toByteArray())
++        }
++        field("model", MODEL)
++        field("response_format", "verbose_json")
++        field("temperature", "0")
++        if (!translate && language.isNotBlank()) field("language", language)
++        body.write(
++            ("--$boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"speech.wav\"\r\n" +
++                "Content-Type: audio/wav\r\n\r\n").toByteArray(),
++        )
++        body.write(wav(samples, sampleRate))
++        body.write("\r\n--$boundary--\r\n".toByteArray())
++        val endpoint = if (translate) TRANSLATIONS else TRANSCRIPTIONS
++        val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
++            requestMethod = "POST"
++            connectTimeout = 15_000
++            readTimeout = 60_000
++            doOutput = true
++            setRequestProperty("Authorization", "Bearer $key")
++            setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
++        }
++        try {
++            connection.outputStream.use { body.writeTo(it) }
++            val code = try {
++                connection.responseCode
++            } catch (error: Exception) {
++                throw Failure("Groq unreachable: ${error.message}", permanent = false)
++            }
++            when (code) {
++                200 -> Unit
++                401, 403 -> throw Failure("Groq key rejected", permanent = true)
++                413 -> throw Failure("Groq refused the audio size", permanent = false)
++                429 -> {
++                    val wait = connection.getHeaderField("retry-after")?.toDoubleOrNull()?.let { (it * 1_000).toLong() } ?: 20_000L
++                    throw Failure("Groq rate limit reached", permanent = false, retryAfterMs = wait.coerceAtMost(120_000L))
++                }
++                else -> throw Failure("Groq HTTP $code", permanent = code in 400..499)
++            }
++            val json = JSONObject(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
++            val language = json.optString("language").lowercase()
++            val segments = json.optJSONArray("segments") ?: return emptyList()
++            return List(segments.length()) { index -> segments.getJSONObject(index) }
++                .filter { it.optDouble("no_speech_prob", 0.0) < NO_SPEECH_LIMIT }
++                .map { Line(it.optDouble("start"), it.optDouble("end"), it.optString("text").trim(), language) }
++                .filter { it.text.isNotEmpty() }
++        } catch (failure: Failure) {
++            SyncLog.w("generated subtitles: ${failure.message}")
++            throw failure
++        } catch (error: Exception) {
++            SyncLog.w("generated subtitles: Groq failed: ${error.message}")
++            throw Failure("Groq failed: ${error.message}", permanent = false)
++        } finally {
++            connection.disconnect()
++        }
++    }
++
++    private fun wav(samples: FloatArray, sampleRate: Int): ByteArray {
++        val data = ByteBuffer.allocate(samples.size * 2).order(ByteOrder.LITTLE_ENDIAN)
++        for (sample in samples) data.putShort((sample.coerceIn(-1f, 1f) * 32_767f).toInt().toShort())
++        val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
++            put("RIFF".toByteArray()); putInt(36 + samples.size * 2); put("WAVE".toByteArray())
++            put("fmt ".toByteArray()); putInt(16); putShort(1); putShort(1); putInt(sampleRate)
++            putInt(sampleRate * 2); putShort(2); putShort(16)
++            put("data".toByteArray()); putInt(samples.size * 2)
++        }
++        return header.array() + data.array()
++    }
++
++    companion object {
++        private const val MODEL = "whisper-large-v3"
++        private const val TRANSLATIONS = "https://api.groq.com/openai/v1/audio/translations"
++        private const val TRANSCRIPTIONS = "https://api.groq.com/openai/v1/audio/transcriptions"
++        private const val RETRIES = 3
++        private const val RETRY_DELAY_MS = 3_000L
++        private const val NO_SPEECH_LIMIT = 0.6
++    }
++}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitles.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitles.kt
 new file mode 100644
-index 00000000..2800dc4f
+index 00000000..c7a19fb8
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitles.kt
-@@ -0,0 +1,178 @@
+@@ -0,0 +1,207 @@
 +package com.nuvio.app.features.player
 +
 +import kotlinx.coroutines.flow.MutableStateFlow
@@ -1738,6 +1959,8 @@ index 00000000..2800dc4f
 +object GeneratedSubtitles {
 +    /** Pseudo address of the generated subtitle; the ".srt" ending lets it use the sidecar path. */
 +    const val URL = "nuvio-generated://subtitles/english.srt"
++    /** The online variant: Whisper large-v3 on Groq (the user's key). */
++    const val ONLINE_URL = "nuvio-generated://groq/english.srt"
 +    private const val SCHEME = "nuvio-generated://"
 +
 +    /** Spoken languages the recogniser can be told to expect; [AUTO] follows the audio track's tag. */
@@ -1825,6 +2048,15 @@ index 00000000..2800dc4f
 +        save?.invoke(KEY_HIGH_QUALITY, value.toString())
 +    }
 +
++    private val _groqKey = MutableStateFlow("")
++    /** The user's Groq API key; when set, the subtitle list also offers the online generated subtitle. */
++    val groqKey: StateFlow<String> = _groqKey.asStateFlow()
++
++    fun setGroqKey(value: String) {
++        _groqKey.value = value.trim()
++        save?.invoke(KEY_GROQ, value.trim())
++    }
++
 +    private val _deeplKey = MutableStateFlow("")
 +    /** The user's DeepL API key; when set, Whisper writes the spoken language down and DeepL translates. */
 +    val deeplKey: StateFlow<String> = _deeplKey.asStateFlow()
@@ -1847,6 +2079,7 @@ index 00000000..2800dc4f
 +        _fastAsianModel.value = load(KEY_FAST_ASIAN) == "true"
 +        _highQuality.value = load(KEY_HIGH_QUALITY) != "false"
 +        _deeplKey.value = load(KEY_DEEPL).orEmpty()
++        _groqKey.value = load(KEY_GROQ).orEmpty()
 +        _spokenLanguage.value = load(KEY_LANGUAGE)?.takeIf { code -> spokenLanguages.any { it.first == code } } ?: AUTO
 +    }
 +
@@ -1887,9 +2120,25 @@ index 00000000..2800dc4f
 +            addonName = "Nuvio",
 +        )
 +
-+    /** [subtitles] plus the generated entry, last so a real subtitle always comes first. */
-+    fun withEntry(subtitles: List<AddonSubtitle>): List<AddonSubtitle> =
-+        if (!supported || subtitles.any { isGenerated(it.url) }) subtitles else subtitles + entry
++    val onlineEntry: AddonSubtitle
++        get() = AddonSubtitle(
++            id = "nuvio-generated-english-online",
++            url = ONLINE_URL,
++            language = "en",
++            display = "English · Generated online (Groq Whisper large-v3)",
++            addonName = "Nuvio",
++        )
++
++    /**
++     * [subtitles] plus the generated entries, last so a real subtitle always comes first; the
++     * online one (only with a Groq key) before the on-device one.
++     */
++    fun withEntry(subtitles: List<AddonSubtitle>): List<AddonSubtitle> {
++        if (!supported) return subtitles
++        val real = subtitles.filterNot { isGenerated(it.url) }
++        val online = if (_groqKey.value.isNotBlank()) listOf(onlineEntry) else emptyList()
++        return real + online + entry
++    }
 +
 +    private const val KEY_AUTO = "auto_generate"
 +    private const val KEY_MODE = "auto_mode"
@@ -1897,6 +2146,7 @@ index 00000000..2800dc4f
 +    private const val KEY_FAST_ASIAN = "fast_asian_model"
 +    private const val KEY_HIGH_QUALITY = "high_quality"
 +    private const val KEY_DEEPL = "deepl_key"
++    private const val KEY_GROQ = "groq_key"
 +}
 +
 +interface GeneratedSubtitleModelActions {
@@ -2015,10 +2265,10 @@ index 175782ab..ec6dd552 100644
  /** The audio sync fallback: it runs only after AutoSync, so it follows AutoSync's switch. */
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/GeneratedSubtitleSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/GeneratedSubtitleSettings.kt
 new file mode 100644
-index 00000000..92150e94
+index 00000000..d3f4225c
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/GeneratedSubtitleSettings.kt
-@@ -0,0 +1,156 @@
+@@ -0,0 +1,199 @@
 +package com.nuvio.app.features.settings
 +
 +import androidx.compose.foundation.clickable
@@ -2055,6 +2305,8 @@ index 00000000..92150e94
 +    val highQuality by GeneratedSubtitles.highQuality.collectAsStateWithLifecycle()
 +    val deeplKey by GeneratedSubtitles.deeplKey.collectAsStateWithLifecycle()
 +    var editKey by remember { mutableStateOf(false) }
++    val groqKey by GeneratedSubtitles.groqKey.collectAsStateWithLifecycle()
++    var editGroqKey by remember { mutableStateOf(false) }
 +
 +    SettingsGroupDivider(isTablet = isTablet)
 +    SettingsNavigationRow(
@@ -2096,6 +2348,19 @@ index 00000000..92150e94
 +        onClick = { editKey = true },
 +    )
 +    SettingsGroupDivider(isTablet = isTablet)
++    SettingsNavigationRow(
++        title = "Generate online with Groq",
++        description = if (groqKey.isBlank()) {
++            "Off. With your Groq API key the subtitle list also offers \"English · Generated online\": " +
++                "Whisper large-v3 on Groq, the most accurate. The speech audio is sent to Groq."
++        } else {
++            "On (key …${groqKey.takeLast(6)}). Pick \"English · Generated online (Groq Whisper large-v3)\" " +
++                "in the subtitle list. Speech audio is sent to Groq; with DeepL, DeepL translates."
++        },
++        isTablet = isTablet,
++        onClick = { editGroqKey = true },
++    )
++    SettingsGroupDivider(isTablet = isTablet)
 +    SettingsSwitchRow(
 +        title = "Faster models (lower quality)",
 +        description = "Off (recommended): Whisper for every language. On: Chinese, Cantonese, Japanese and " +
@@ -2113,6 +2378,34 @@ index 00000000..92150e94
 +            description = models,
 +            isTablet = isTablet,
 +            onClick = { GeneratedSubtitles.modelActions?.deleteModels() },
++        )
++    }
++    if (editGroqKey) {
++        var draft by remember { mutableStateOf(groqKey) }
++        AlertDialog(
++            onDismissRequest = { editGroqKey = false },
++            confirmButton = {
++                TextButton(onClick = {
++                    GeneratedSubtitles.setGroqKey(draft)
++                    editGroqKey = false
++                }) { Text("Save") }
++            },
++            dismissButton = {
++                TextButton(onClick = {
++                    GeneratedSubtitles.setGroqKey("")
++                    editGroqKey = false
++                }) { Text("Remove") }
++            },
++            title = { Text("Groq API key") },
++            text = {
++                OutlinedTextField(
++                    value = draft,
++                    onValueChange = { draft = it },
++                    singleLine = true,
++                    label = { Text("Key (starts with gsk_)") },
++                    modifier = Modifier.fillMaxWidth(),
++                )
++            },
 +        )
 +    }
 +    if (editKey) {
