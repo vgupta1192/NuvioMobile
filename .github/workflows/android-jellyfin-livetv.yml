@@ -19,7 +19,7 @@ permissions:
 # one LiveTV build at a time; separate group so it never races the main android.yml run
 concurrency:
   group: build-nuviomobile-jellyfin-livetv
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
