@@ -584,3 +584,4 @@ jobs:
 # round 4: canRequestPackageInstalls=true on iOS (skip Android permission dialog)
 # b38: banner test for b37 (permission dialog fix) 2026-10-06
 # b78: synced subtitles build 2026-10-14
+# b79: synced subtitles stable stream key 2026-10-14

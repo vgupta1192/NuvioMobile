@@ -430,10 +430,10 @@ index b3665232..2702619c 100644
          PlayerEpisodesPanel(
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
 new file mode 100644
-index 00000000..05983155
+index 00000000..ca0f5ff9
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
-@@ -0,0 +1,250 @@
+@@ -0,0 +1,256 @@
 +package com.nuvio.app.features.player
 +
 +import androidx.compose.runtime.compositionLocalOf
@@ -466,7 +466,8 @@ index 00000000..05983155
 + * playing it again selects that subtitle with the saved timing instead of running AutoSync.
 + *
 + * A stream is identified by its torrent (info hash + file index) when it plays as a torrent,
-+ * otherwise by addon + stream name + description, which stay the same when debrid links change.
++ * otherwise by addon + stream name + description (numbers left out), which stay the same when
++ * debrid links change.
 + */
 +object SyncedSubtitles {
 +    @Serializable
@@ -523,7 +524,10 @@ index 00000000..05983155
 +        val addon = addonId?.trim().orEmpty()
 +        val label = name?.trim().orEmpty()
 +        if (addon.isEmpty() && label.isEmpty()) return null
-+        return "s:" + fnv64("$addon\n$label\n${description?.trim().orEmpty()}")
++        // Numbers are left out of the description: addons put live values there (speed, start
++        // time, seeders) that change on every load of the same stream.
++        val details = description.orEmpty().replace(VOLATILE_NUMBER, "#").trim()
++        return "s:" + fnv64("$addon\n$label\n$details")
 +    }
 +
 +    /** Both keys a listed stream may have been saved under (as a torrent, or by its name). */
@@ -671,6 +675,8 @@ index 00000000..05983155
 +    private fun fileName(playback: Playback) = "s-" + fnv64(playback.videoId + "\n" + playback.streamKey) + ".json"
 +
 +    private fun indexName(videoId: String) = "i-" + fnv64(videoId) + ".txt"
++
++    private val VOLATILE_NUMBER = Regex("[0-9]+(?:[.,][0-9]+)?")
 +
 +    private fun fnv64(text: String): String {
 +        var hash = -0x340d631b7bdddcdbL
