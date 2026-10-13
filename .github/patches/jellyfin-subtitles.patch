@@ -1,0 +1,134 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+index b42d32fe..252e9e39 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+@@ -118,6 +118,7 @@ import com.nuvio.app.features.home.components.shouldBlurContinueWatchingArtwork
+ import com.nuvio.app.features.jellyfin.JELLYFIN_META_ID_PREFIX
+ import com.nuvio.app.features.jellyfin.JellyfinItem
+ import com.nuvio.app.features.jellyfin.JellyfinLauncher
++import com.nuvio.app.features.jellyfin.JellyfinClient
+ import com.nuvio.app.features.jellyfin.JellyfinRepository
+ import com.nuvio.app.features.jellyfin.JellyfinDetailScreen
+ import com.nuvio.app.features.jellyfin.JellyfinScreen
+@@ -914,31 +915,36 @@ internal fun MainAppContent(
+             val session = JellyfinRepository.uiState.value.session ?: return
+             val sourceUrl = JellyfinRepository.streamUrlFor(item) ?: return
+             val isEpisode = item.isEpisode
+-            val playerLaunch = PlayerLaunch(
+-                profileId = activePlaybackProfileId,
+-                title = if (isEpisode) item.seriesName ?: item.name else item.name,
+-                sourceUrl = sourceUrl,
+-                poster = JellyfinRepository.posterUrlFor(item, maxWidth = 720),
+-                background = JellyfinRepository.backdropUrlFor(item),
+-                seasonNumber = item.parentIndexNumber,
+-                episodeNumber = item.indexNumber,
+-                episodeTitle = if (isEpisode) item.name else null,
+-                episodeThumbnail = if (isEpisode) JellyfinRepository.posterUrlFor(item, maxWidth = 400) else null,
+-                streamTitle = "Jellyfin · " + session.serverName,
+-                providerName = "Jellyfin",
+-                contentType = item.stremioType,
+-                videoId = JELLYFIN_META_ID_PREFIX + item.id,
+-                parentMetaId = JELLYFIN_META_ID_PREFIX + (item.seriesId ?: item.id),
+-                parentMetaType = if (isEpisode) "series" else item.stremioType,
+-                initialPositionMs = item.resumePositionMs,
+-                initialProgressFraction = item.playedPercentage?.let { (it / 100.0).toFloat() },
+-            )
+-            if (playerSettingsUiState.externalPlayerEnabled) {
+-                coroutineScope.launch { openExternalPlayback(playerLaunch) }
+-                return
++            // External .srt/.ass files next to the video are not in the static stream.
++            coroutineScope.launch {
++                val externalSubtitles = JellyfinClient.externalSubtitles(session, item)
++                val playerLaunch = PlayerLaunch(
++                    profileId = activePlaybackProfileId,
++                    title = if (isEpisode) item.seriesName ?: item.name else item.name,
++                    sourceUrl = sourceUrl,
++                    externalSubtitles = externalSubtitles,
++                    poster = JellyfinRepository.posterUrlFor(item, maxWidth = 720),
++                    background = JellyfinRepository.backdropUrlFor(item),
++                    seasonNumber = item.parentIndexNumber,
++                    episodeNumber = item.indexNumber,
++                    episodeTitle = if (isEpisode) item.name else null,
++                    episodeThumbnail = if (isEpisode) JellyfinRepository.posterUrlFor(item, maxWidth = 400) else null,
++                    streamTitle = "Jellyfin · " + session.serverName,
++                    providerName = "Jellyfin",
++                    contentType = item.stremioType,
++                    videoId = JELLYFIN_META_ID_PREFIX + item.id,
++                    parentMetaId = JELLYFIN_META_ID_PREFIX + (item.seriesId ?: item.id),
++                    parentMetaType = if (isEpisode) "series" else item.stremioType,
++                    initialPositionMs = item.resumePositionMs,
++                    initialProgressFraction = item.playedPercentage?.let { (it / 100.0).toFloat() },
++                )
++                if (playerSettingsUiState.externalPlayerEnabled) {
++                    openExternalPlayback(playerLaunch)
++                    return@launch
++                }
++                val launchId = PlayerLaunchStore.put(playerLaunch)
++                navController.navigate(PlayerRoute(launchId = launchId, title = playerLaunch.title))
+             }
+-            val launchId = PlayerLaunchStore.put(playerLaunch)
+-            navController.navigate(PlayerRoute(launchId = launchId, title = playerLaunch.title))
+         }
+ 
+         fun openExternalStreamUrl(url: String): Boolean {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt
+index 5e8fd447..4d44bc06 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt
+@@ -1,8 +1,12 @@
+ package com.nuvio.app.features.jellyfin
+ 
++import com.nuvio.app.features.streams.StreamSubtitle
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.withTimeoutOrNull
+ import kotlinx.serialization.json.Json
+ import kotlinx.serialization.json.JsonArray
+ import kotlinx.serialization.json.JsonObject
++import kotlinx.serialization.json.booleanOrNull
+ import kotlinx.serialization.json.buildJsonObject
+ import kotlinx.serialization.json.contentOrNull
+ import kotlinx.serialization.json.doubleOrNull
+@@ -231,6 +235,43 @@ internal object JellyfinClient {
+         "${session.serverUrl}/Videos/${item.id}/stream" +
+             "?Static=true&api_key=${encodeQueryValue(session.accessToken)}"
+ 
++    /**
++     * External text subtitles Jellyfin found next to the file (e.g. `Movie.en.srt`). The static
++     * stream carries only the subtitles embedded in the container, so these go to the player as
++     * sidecar tracks. Image subtitles (PGS, VobSub) are skipped. Failures give an empty list.
++     */
++    suspend fun externalSubtitles(session: JellyfinSession, item: JellyfinItem): List<StreamSubtitle> = try {
++        withTimeoutOrNull(5_000L) {
++            val root = call(session, "/Users/${session.userId}/Items/${item.id}")
++            val source = root.array("MediaSources")?.firstOrNull() as? JsonObject
++            val sourceId = source?.string("Id") ?: item.id
++            source?.array("MediaStreams").orEmpty().mapNotNull { element ->
++                val stream = element as? JsonObject ?: return@mapNotNull null
++                if (stream.string("Type") != "Subtitle") return@mapNotNull null
++                if (stream["IsExternal"]?.jsonPrimitive?.booleanOrNull != true) return@mapNotNull null
++                val index = stream.int("Index") ?: return@mapNotNull null
++                val format = when (stream.string("Codec")?.lowercase()) {
++                    "srt", "subrip" -> "srt"
++                    "ass", "ssa" -> "ass"
++                    "vtt", "webvtt" -> "vtt"
++                    "ttml", "dfxp" -> "ttml"
++                    "pgs", "pgssub", "dvdsub", "dvbsub", "vobsub", "sub", "idx" -> return@mapNotNull null
++                    else -> "srt"
++                }
++                StreamSubtitle(
++                    url = "${session.serverUrl}/Videos/${item.id}/$sourceId/Subtitles/$index/0/Stream.$format" +
++                        "?api_key=${encodeQueryValue(session.accessToken)}",
++                    language = stream.string("Language")?.takeIf { it.isNotBlank() } ?: "und",
++                    name = stream.string("DisplayTitle") ?: stream.string("Title") ?: "Jellyfin",
++                )
++            }
++        }.orEmpty()
++    } catch (error: CancellationException) {
++        throw error
++    } catch (error: Throwable) {
++        emptyList()
++    }
++
+     private fun parseItem(obj: JsonObject): JellyfinItem? {
+         val id = obj.string("Id") ?: return null
+         val name = obj.string("Name") ?: return null
