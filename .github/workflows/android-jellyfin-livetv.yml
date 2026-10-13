@@ -136,7 +136,7 @@ jobs:
         if: steps.ver.outputs.should_build == 'true'
         run: |
           # optional-ports
-          for P in livetv-robustness custom-stretch jellyfin-subtitles audio-sync-hls generated-subtitles synced-subtitles; do
+          for P in livetv-robustness custom-stretch jellyfin-subtitles audio-sync-hls generated-subtitles synced-subtitles seek-previews; do
             if git apply "fork-src/.github/patches/$P.patch"; then
               echo "applied $P.patch"
             else
@@ -585,3 +585,4 @@ jobs:
 # b38: banner test for b37 (permission dialog fix) 2026-10-06
 # b78: synced subtitles build 2026-10-14
 # b79: synced subtitles stable stream key 2026-10-14
+# b80: seek previews (Reshaped on-device + Seekr, HLS/DASH filler) 2026-10-14
