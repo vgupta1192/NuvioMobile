@@ -1,0 +1,500 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
+index e303ae00..cd8ea8c0 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
+@@ -180,6 +180,8 @@ internal class AudioSubtitleSyncController(
+         val uri: Uri,
+         val dataSourceFactory: DataSource.Factory,
+         val extractorsFactory: ExtractorsFactory,
++        /** An HLS playlist: read segment by segment (see [HlsAudioSpotSampler]). */
++        val hls: Boolean = false,
+     )
+ 
+     @Volatile
+@@ -193,6 +195,10 @@ internal class AudioSubtitleSyncController(
+     @Volatile
+     private var spotUnavailable: Pair<String, String>? = null
+ 
++    /** Session key the audio could not be matched for in time (see [maybeGiveUp]). */
++    @Volatile
++    private var gaveUpKey: String? = null
++
+     @Volatile
+     private var model: SubtitleSyncModel? = null
+ 
+@@ -282,6 +288,7 @@ internal class AudioSubtitleSyncController(
+         asr?.onPlayhead(playbackPositionMs)
+         scheduleAlignment()
+         maybeSampleSpots()
++        maybeGiveUp()
+         val now = SystemClock.elapsedRealtime()
+         if (now - lastPublishAtMs >= DIAGNOSTICS_INTERVAL_MS) {
+             lastPublishAtMs = now
+@@ -305,7 +312,7 @@ internal class AudioSubtitleSyncController(
+         val phase = when {
+             synced != null && estimated -> SubtitleSyncDiagnostics.Phase.Estimated
+             synced != null -> SubtitleSyncDiagnostics.Phase.Synced
+-            decoderUnavailable -> SubtitleSyncDiagnostics.Phase.Unavailable
++            decoderUnavailable || gaveUpKey == current.key -> SubtitleSyncDiagnostics.Phase.Unavailable
+             else -> SubtitleSyncDiagnostics.Phase.Listening
+         }
+         val speechModel = SubtitleSyncStatus.speechModel.value
+@@ -339,7 +346,12 @@ internal class AudioSubtitleSyncController(
+                 ?.let { "subtitle stretched ×${"%.4f".format(java.util.Locale.US, it)}" },
+             sampling = spotStatus.ifEmpty { spotUnavailable?.takeIf { it.first == sourceKey }?.second.orEmpty() },
+             notice = switchNotice?.takeIf { it.first == current.key }?.second,
+-            problem = problem ?: if (decoderUnavailable) "Speech detector could not be loaded" else null,
++            problem = problem ?: when {
++                decoderUnavailable -> "Speech detector could not be loaded"
++                gaveUpKey == current.key && synced == null ->
++                    "No confident match with this audio; subtitle keeps its own timing (still listening)"
++                else -> null
++            },
+         )
+         SubtitleSyncStatus.publishDiagnostics(diagnostics)
+         logChange(diagnostics)
+@@ -380,6 +392,7 @@ internal class AudioSubtitleSyncController(
+         spotSamplingStarted.set(false)
+         spotDeclinedOnMobileData = false
+         spotStatus = ""
++        gaveUpKey = null
+         model = null
+         lockedAtElapsedMs = 0L
+         lastAlignVersion = -1L
+@@ -407,10 +420,11 @@ internal class AudioSubtitleSyncController(
+         val unavailable = when {
+             localEngine -> "not used for torrent streams (would slow playback)"
+             uri == null || (uri.scheme != "http" && uri.scheme != "https") -> "not available for this stream"
+-            path.endsWith(".m3u8") || path.endsWith(".mpd") -> "not available for playlist streams"
++            path.endsWith(".mpd") -> "not available for DASH streams"
+             else -> null
+         }
+-        spotSource = if (unavailable == null) SpotSource(forSourceKey, uri!!, dataSourceFactory, extractorsFactory) else null
++        val hls = path.endsWith(".m3u8")
++        spotSource = if (unavailable == null) SpotSource(forSourceKey, uri!!, dataSourceFactory, extractorsFactory, hls) else null
+         spotUnavailable = unavailable?.let { forSourceKey to it }
+     }
+ 
+@@ -472,19 +486,31 @@ internal class AudioSubtitleSyncController(
+             // On mobile data the target is also the cap; on other networks a high-bitrate file may
+             // use more so each spot still holds whole sentences.
+             val maxBytes = if (AsrModel.isUnmetered(appContext)) MAX_SPOT_BYTES else TARGET_SPOT_BYTES
+-            val sampler = AudioSpotSampler(source.uri, source.dataSourceFactory, TARGET_SPOT_BYTES, maxBytes, MIN_SPOT_AUDIO_MS)
+-            val result = sampler.run(
+-                spotsMs = spots,
+-                spotMs = SPOT_MS,
+-                workers = decoders.map { AudioSyncExtractorsFactory(source.extractorsFactory, SpotSink(it)) },
+-                isCancelled = {
+-                    released || !enabled || sourceKey != source.sourceKey || session == null ||
+-                        (model != null && !estimated)
+-                },
+-            ) { sampled, bytes ->
++            val isCancelled = {
++                released || !enabled || sourceKey != source.sourceKey || session == null ||
++                    (model != null && !estimated)
++            }
++            val onSpot = { sampled: Int, bytes: Long ->
+                 val seconds = (SystemClock.elapsedRealtime() - startedAt) / 1_000
+                 spotStatus = "sampled $sampled of ${spots.size} dialogue spots in ${seconds}s (${bytes / 1_000_000} MB)"
+             }
++            val result = if (source.hls) {
++                HlsAudioSpotSampler(source.uri, source.dataSourceFactory, maxBytes).run(
++                    spotsMs = spots,
++                    spotMs = SPOT_MS,
++                    sinks = decoders.map { SpotSink(it, anyAudio = true) },
++                    isCancelled = isCancelled,
++                    onSpot = onSpot,
++                )
++            } else {
++                AudioSpotSampler(source.uri, source.dataSourceFactory, TARGET_SPOT_BYTES, maxBytes, MIN_SPOT_AUDIO_MS).run(
++                    spotsMs = spots,
++                    spotMs = SPOT_MS,
++                    workers = decoders.map { AudioSyncExtractorsFactory(source.extractorsFactory, SpotSink(it)) },
++                    isCancelled = isCancelled,
++                    onSpot = onSpot,
++                )
++            }
+             SyncLog.i("sampled ${result.sampled} spots, ${result.bytes / 1_000_000} MB, failure=${result.failure}")
+             if (result.failure != null && result.sampled == 0) spotStatus = "not possible for this stream"
+             decoders.forEach { it.awaitDrained(DRAIN_TIMEOUT_MS) }
+@@ -497,10 +523,24 @@ internal class AudioSubtitleSyncController(
+         }
+     }
+ 
+-    /** Feeds sampled audio of the playing track to [decoder], waiting when it is busy. */
+-    private inner class SpotSink(private val decoder: AudioSyncDecoder) : AudioSampleSink {
++    /**
++     * Feeds sampled audio of the playing track to [decoder], waiting when it is busy. With
++     * [anyAudio] (HLS segments, whose track ids differ from the player's) the first audio track
++     * read is taken instead.
++     */
++    private inner class SpotSink(
++        private val decoder: AudioSyncDecoder,
++        private val anyAudio: Boolean = false,
++    ) : AudioSampleSink {
++        @Volatile
++        private var takenTrack: String? = null
++
+         override fun wantsSamples(format: Format): Boolean {
+             if (!enabled || released) return false
++            if (anyAudio) {
++                val track = format.id ?: format.sampleMimeType ?: return false
++                return track == (takenTrack ?: track.also { takenTrack = it })
++            }
+             val playing = selectedAudioFormat ?: provisionalAudioFormat ?: return false
+             return matches(format, playing)
+         }
+@@ -513,10 +553,28 @@ internal class AudioSubtitleSyncController(
+         }
+ 
+         override fun onDiscontinuity() {
++            // The previous spot's audio is still queued; a discontinuity would drop it.
++            if (anyAudio) decoder.awaitDrained(DRAIN_TIMEOUT_MS)
+             decoder.discontinuity()
+         }
+     }
+ 
++    /**
++     * Some audio can't be matched to the subtitle with confidence (music-heavy, another cut, live
++     * listening only). After [GIVE_UP_AFTER_MS] of heard audio without a mapping, says so once
++     * instead of "syncing" forever; listening goes on and a later lock still applies.
++     */
++    private fun maybeGiveUp() {
++        val current = session ?: return
++        if (!enabled || released || model != null || gaveUpKey == current.key || sessionStartedAtMs == 0L) return
++        if (SystemClock.elapsedRealtime() - sessionStartedAtMs < GIVE_UP_AFTER_MS) return
++        val heardMs = timeline.knownFrameCount() * SpeechTimeline.FRAME_DURATION_MS
++        if (heardMs < GIVE_UP_AFTER_MS) return
++        gaveUpKey = current.key
++        SyncLog.i("no audio match for ${current.key} after ${(heardMs / 1_000).toInt()}s of audio; keeping its own timing")
++        notify(AudioSyncStatus.Withdrawn)
++    }
++
+     fun onAudioTrackSelected(format: Format?) {
+         if (format == null || selectedAudioFormat?.let { matches(it, format) } == true) return
+         selectedAudioFormat = format
+@@ -552,6 +610,7 @@ internal class AudioSubtitleSyncController(
+         val handedOver = handover?.takeIf { it.key == key }
+         handover = null
+         if (switchNotice?.first != key) switchNotice = null
++        gaveUpKey = null
+         model = null
+         lockedAtElapsedMs = 0L
+         lockMethod = null
+@@ -1249,6 +1308,7 @@ internal class AudioSubtitleSyncController(
+         private const val RESUME_THRESHOLD_MS = 10 * 60_000L
+         private const val SPOT_BACKOFF_MS = 5L
+         private const val DRAIN_TIMEOUT_MS = 10_000L
++        private const val GIVE_UP_AFTER_MS = 6 * 60_000L
+ 
+         /** Playback has started and buffered this much before sampling competes for bandwidth. */
+         private val SAMPLE_AFTER_FRAMES = (5_000 / SpeechTimeline.FRAME_DURATION_MS).toInt()
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt
+new file mode 100644
+index 00000000..2a4232cd
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt
+@@ -0,0 +1,303 @@
++@file:OptIn(androidx.media3.common.util.UnstableApi::class)
++
++package com.nuvio.app.features.player.audiosync
++
++import android.net.Uri
++import android.os.Process
++import androidx.media3.common.C
++import androidx.media3.common.util.TimestampAdjuster
++import androidx.media3.common.util.UriUtil
++import androidx.media3.datasource.ByteArrayDataSource
++import androidx.media3.datasource.DataSource
++import androidx.media3.datasource.DataSourceUtil
++import androidx.media3.datasource.DataSpec
++import androidx.media3.extractor.DefaultExtractorInput
++import androidx.media3.extractor.Extractor
++import androidx.media3.extractor.ExtractorOutput
++import androidx.media3.extractor.ExtractorsFactory
++import androidx.media3.extractor.DiscardingTrackOutput
++import androidx.media3.extractor.PositionHolder
++import androidx.media3.extractor.SeekMap
++import androidx.media3.extractor.TrackOutput
++import androidx.media3.extractor.text.SubtitleParser
++import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
++import androidx.media3.extractor.ts.TsExtractor
++import java.util.concurrent.ConcurrentHashMap
++import java.util.concurrent.atomic.AtomicInteger
++import java.util.concurrent.atomic.AtomicLong
++import java.util.concurrent.atomic.AtomicReference
++import javax.crypto.Cipher
++import javax.crypto.spec.IvParameterSpec
++import javax.crypto.spec.SecretKeySpec
++
++/**
++ * [AudioSpotSampler] for HLS VOD streams (MPEG-TS segments, optionally AES-128): reads the
++ * playlist, downloads the segments that cover each spot and demuxes their audio to the workers'
++ * sinks, so a playlist stream gets the same look-ahead across the film as a single file.
++ *
++ * Sample times follow ExoPlayer's HLS timeline: per discontinuity sequence, the first segment read
++ * maps its first timestamp to the segment's start in the playlist. Blocking; run it on a
++ * background thread.
++ */
++internal class HlsAudioSpotSampler(
++    private val uri: Uri,
++    private val dataSourceFactory: DataSource.Factory,
++    private val maxBytes: Long,
++) {
++    private class Key(val uri: String, val iv: ByteArray?)
++
++    private class Segment(
++        val uri: String,
++        val startUs: Long,
++        val durationUs: Long,
++        val discontinuity: Int,
++        val mediaSequence: Long,
++        val key: Key?,
++        val byteOffset: Long,
++        val byteLength: Long,
++    )
++
++    private val bytes = AtomicLong()
++    private val keys = ConcurrentHashMap<String, ByteArray>()
++    private val adjusters = ConcurrentHashMap<Int, TimestampAdjuster>()
++
++    fun run(
++        spotsMs: List<Long>,
++        spotMs: Long,
++        sinks: List<AudioSampleSink>,
++        isCancelled: () -> Boolean,
++        onSpot: (sampled: Int, bytes: Long) -> Unit,
++    ): AudioSpotSampler.Result {
++        val segments = try {
++            loadSegments()
++        } catch (error: Exception) {
++            return AudioSpotSampler.Result(0, bytes.get(), error.message ?: error.javaClass.simpleName)
++        }
++        val next = AtomicInteger(0)
++        val sampled = AtomicInteger(0)
++        val failure = AtomicReference<String?>(null)
++        val stop = { isCancelled() || failure.get() != null || bytes.get() >= maxBytes }
++
++        fun work(sink: AudioSampleSink) {
++            try {
++                while (!stop()) {
++                    val index = next.getAndIncrement()
++                    if (index >= spotsMs.size) return
++                    val fromUs = spotsMs[index] * 1_000L
++                    val toUs = fromUs + spotMs * 1_000L
++                    val covering = segments.filter { it.startUs < toUs && it.startUs + it.durationUs > fromUs }
++                    if (covering.isEmpty()) continue
++                    sink.onDiscontinuity()
++                    for (segment in covering) {
++                        if (stop()) return
++                        demux(segment, sink)
++                    }
++                    onSpot(sampled.incrementAndGet(), bytes.get())
++                }
++            } catch (error: Exception) {
++                failure.compareAndSet(null, error.message ?: error.javaClass.simpleName)
++            }
++        }
++
++        val helpers = sinks.drop(1).map { sink ->
++            Thread({
++                Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
++                work(sink)
++            }, "NuvioAudioSyncHls").apply {
++                isDaemon = true
++                start()
++            }
++        }
++        sinks.firstOrNull()?.let(::work)
++        helpers.forEach(Thread::join)
++        return AudioSpotSampler.Result(sampled.get(), bytes.get(), failure.get())
++    }
++
++    /** The media playlist's segments; a master playlist is resolved to its cheapest variant. */
++    private fun loadSegments(): List<Segment> {
++        var (playlistUri, text) = fetchText(uri)
++        if (!text.trimStart().startsWith("#EXTM3U")) throw IllegalStateException("not an HLS playlist")
++        if (text.contains("#EXT-X-STREAM-INF")) {
++            val media = pickMediaPlaylist(playlistUri, text) ?: throw IllegalStateException("no variant in playlist")
++            val loaded = fetchText(Uri.parse(media))
++            playlistUri = loaded.first
++            text = loaded.second
++        }
++        if (!text.contains("#EXT-X-ENDLIST")) throw IllegalStateException("live playlist")
++        if (text.contains("#EXT-X-MAP")) throw IllegalStateException("fMP4 segments not supported")
++        val base = playlistUri.toString()
++        val segments = ArrayList<Segment>()
++        var mediaSequence = 0L
++        var startUs = 0L
++        var durationUs = C.TIME_UNSET
++        var discontinuity = 0
++        var key: Key? = null
++        var nextByteOffset = 0L
++        var byteRange: Pair<Long, Long>? = null
++        for (raw in text.lineSequence()) {
++            val line = raw.trim()
++            when {
++                line.isEmpty() -> Unit
++                line.startsWith("#EXT-X-MEDIA-SEQUENCE:") ->
++                    mediaSequence = line.substringAfter(':').trim().toLongOrNull() ?: 0L
++                line.startsWith("#EXTINF:") -> {
++                    val seconds = line.substringAfter(':').substringBefore(',').trim().toDoubleOrNull()
++                    durationUs = seconds?.let { (it * 1_000_000).toLong() } ?: C.TIME_UNSET
++                }
++                line == "#EXT-X-DISCONTINUITY" -> discontinuity++
++                line.startsWith("#EXT-X-KEY:") -> {
++                    val attributes = attributes(line)
++                    key = when (attributes["METHOD"]) {
++                        null, "NONE" -> null
++                        "AES-128" -> Key(
++                            UriUtil.resolve(base, attributes["URI"] ?: throw IllegalStateException("key without URI")),
++                            attributes["IV"]?.let(::parseIv),
++                        )
++                        else -> throw IllegalStateException("${attributes["METHOD"]} encryption not supported")
++                    }
++                }
++                line.startsWith("#EXT-X-BYTERANGE:") -> {
++                    val value = line.substringAfter(':').trim()
++                    val length = value.substringBefore('@').toLong()
++                    val offset = if ('@' in value) value.substringAfter('@').toLong() else nextByteOffset
++                    byteRange = length to offset
++                }
++                line.startsWith("#") -> Unit
++                else -> {
++                    if (durationUs == C.TIME_UNSET) throw IllegalStateException("segment without duration")
++                    val range = byteRange
++                    segments += Segment(
++                        uri = UriUtil.resolve(base, line),
++                        startUs = startUs,
++                        durationUs = durationUs,
++                        discontinuity = discontinuity,
++                        mediaSequence = mediaSequence + segments.size,
++                        key = key,
++                        byteOffset = range?.second ?: 0L,
++                        byteLength = range?.first ?: C.LENGTH_UNSET.toLong(),
++                    )
++                    nextByteOffset = range?.let { it.second + it.first } ?: 0L
++                    byteRange = null
++                    startUs += durationUs
++                    durationUs = C.TIME_UNSET
++                }
++            }
++        }
++        if (segments.isEmpty()) throw IllegalStateException("empty playlist")
++        return segments
++    }
++
++    /**
++     * The media playlist to read: a separate audio rendition when the stream has one (audio only, so
++     * cheap), otherwise the lowest-bandwidth variant (same audio as the others, least video).
++     */
++    private fun pickMediaPlaylist(masterUri: Uri, text: String): String? {
++        val base = masterUri.toString()
++        val lines = text.lines().map(String::trim)
++        val audio = lines.filter { it.startsWith("#EXT-X-MEDIA:") }
++            .map(::attributes)
++            .filter { it["TYPE"] == "AUDIO" && it["URI"] != null }
++        (audio.firstOrNull { it["DEFAULT"] == "YES" } ?: audio.firstOrNull())?.let { return UriUtil.resolve(base, it["URI"]!!) }
++        var best: Pair<Long, String>? = null
++        for ((index, line) in lines.withIndex()) {
++            if (!line.startsWith("#EXT-X-STREAM-INF:")) continue
++            val variant = lines.drop(index + 1).firstOrNull { it.isNotEmpty() && !it.startsWith("#") } ?: continue
++            val bandwidth = attributes(line)["BANDWIDTH"]?.toLongOrNull() ?: Long.MAX_VALUE
++            if (best == null || bandwidth < best.first) best = bandwidth to variant
++        }
++        return best?.let { UriUtil.resolve(base, it.second) }
++    }
++
++    /** Downloads [segment] and passes its audio, on the player's timeline, to [sink]. */
++    private fun demux(segment: Segment, sink: AudioSampleSink) {
++        var data = fetch(DataSpec.Builder()
++            .setUri(segment.uri)
++            .setPosition(segment.byteOffset)
++            .setLength(segment.byteLength)
++            .build())
++        segment.key?.let { key -> data = decrypt(data, key, segment.mediaSequence) }
++        if (data.isEmpty() || data[0] != TS_SYNC_BYTE) throw IllegalStateException("segments are not MPEG-TS")
++        val adjuster = adjusters.computeIfAbsent(segment.discontinuity) { TimestampAdjuster(segment.startUs) }
++        val tsFactory = ExtractorsFactory {
++            arrayOf(
++                TsExtractor(
++                    TsExtractor.MODE_HLS,
++                    TsExtractor.FLAG_EMIT_RAW_SUBTITLE_DATA,
++                    SubtitleParser.Factory.UNSUPPORTED,
++                    adjuster,
++                    DefaultTsPayloadReaderFactory(0),
++                    TsExtractor.DEFAULT_TIMESTAMP_SEARCH_BYTES,
++                ),
++            )
++        }
++        val extractor: Extractor = AudioSyncExtractorsFactory(tsFactory, sink).createExtractors()[0]
++        val source = ByteArrayDataSource(data)
++        try {
++            source.open(DataSpec(Uri.EMPTY))
++            val input = DefaultExtractorInput(source, 0L, data.size.toLong())
++            extractor.init(DiscardingOutput)
++            val position = PositionHolder()
++            while (extractor.read(input, position) == Extractor.RESULT_CONTINUE) Unit
++        } finally {
++            extractor.release()
++            source.close()
++        }
++    }
++
++    private fun decrypt(data: ByteArray, key: Key, mediaSequence: Long): ByteArray {
++        val secret = keys.getOrPut(key.uri) { fetch(DataSpec(Uri.parse(key.uri))) }
++        val iv = key.iv ?: ByteArray(16).also { iv ->
++            for (index in 0 until 8) iv[15 - index] = (mediaSequence ushr (8 * index)).toByte()
++        }
++        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
++        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(secret, "AES"), IvParameterSpec(iv))
++        return cipher.doFinal(data)
++    }
++
++    /** Text of [target] and the address it was finally served from (relative links resolve to it). */
++    private fun fetchText(target: Uri): Pair<Uri, String> {
++        val source = dataSourceFactory.createDataSource()
++        try {
++            source.open(DataSpec(target))
++            val text = String(DataSourceUtil.readToEnd(source), Charsets.UTF_8)
++            bytes.addAndGet(text.length.toLong())
++            return (source.uri ?: target) to text
++        } finally {
++            source.close()
++        }
++    }
++
++    private fun fetch(spec: DataSpec): ByteArray {
++        val source = dataSourceFactory.createDataSource()
++        try {
++            source.open(spec)
++            return DataSourceUtil.readToEnd(source).also { bytes.addAndGet(it.size.toLong()) }
++        } finally {
++            source.close()
++        }
++    }
++
++    /** Only audio is wanted; every track goes to a discarding output (the audio tap copies first). */
++    private object DiscardingOutput : ExtractorOutput {
++        override fun track(id: Int, type: Int): TrackOutput = DiscardingTrackOutput()
++
++        override fun endTracks() = Unit
++
++        override fun seekMap(seekMap: SeekMap) = Unit
++    }
++
++    private companion object {
++        const val TS_SYNC_BYTE: Byte = 0x47
++        val attribute = Regex("""([A-Z0-9-]+)=("[^"]*"|[^,]*)""")
++
++        fun attributes(line: String): Map<String, String> =
++            attribute.findAll(line.substringAfter(':')).associate { match ->
++                match.groupValues[1] to match.groupValues[2].removeSurrounding("\"")
++            }
++
++        fun parseIv(value: String): ByteArray {
++            val hex = value.removePrefix("0x").removePrefix("0X").padStart(32, '0')
++            return ByteArray(16) { index -> hex.substring(index * 2, index * 2 + 2).toInt(16).toByte() }
++        }
++    }
++}
