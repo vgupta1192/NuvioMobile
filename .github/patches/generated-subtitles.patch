@@ -765,10 +765,10 @@ index 00000000..39ec067c
 +private const val FILE_TOKENS = "tokens.txt"
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
 new file mode 100644
-index 00000000..0b786de7
+index 00000000..44bc35be
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
-@@ -0,0 +1,621 @@
+@@ -0,0 +1,667 @@
 +@file:OptIn(androidx.media3.common.util.UnstableApi::class)
 +
 +package com.nuvio.app.features.player.generated
@@ -950,9 +950,13 @@ index 00000000..0b786de7
 +                return
 +            }
 +            val language = spokenLanguage(current)
++            // Whisper translates from the audio itself, which reads far better than recognising
++            // first and translating text; the faster models are opt-in. English needs no translation.
++            val fast = GeneratedSubtitles.fastAsianModel.value
 +            val model = when {
-+                language in SENSE_VOICE_LANGUAGES -> GeneratedSpeechModel.SENSE_VOICE
-+                language in DOLPHIN_LANGUAGES && GeneratedSubtitles.fastAsianModel.value -> GeneratedSpeechModel.DOLPHIN
++                language == "en" -> GeneratedSpeechModel.SENSE_VOICE
++                fast && language in SENSE_VOICE_LANGUAGES -> GeneratedSpeechModel.SENSE_VOICE
++                fast && language in DOLPHIN_LANGUAGES -> GeneratedSpeechModel.DOLPHIN
 +                else -> GeneratedSpeechModel.WHISPER_SMALL
 +            }
 +            SyncLog.i("generated subtitles: spoken language=$language model=${model.label}")
@@ -1006,7 +1010,8 @@ index 00000000..0b786de7
 +                failures = 0
 +                addCovered(covered, fromMs, toMs)
 +                var lines = 0
-+                for ((startMs, samples) in segments) {
++                // Whole sentences recognise and translate better than the pieces between short pauses.
++                for ((startMs, samples) in mergeSentences(segments)) {
 +                    if (current.stopped) return
 +                    // Whisper invents words for very short sounds; such bits rarely carry a line.
 +                    if (asr.translatesToEnglish && samples.size < MIN_WHISPER_SAMPLES) continue
@@ -1230,6 +1235,8 @@ index 00000000..0b786de7
 +        private const val FIRST_WINDOW_MS = 20_000L
 +        private const val WINDOW_MS = 60_000L
 +        private const val SEEK_AWAY_MS = 60_000L
++        private const val MERGE_GAP_MS = 800L
++        private const val MERGE_MAX_MS = 12_000L
 +        /** Files with a sparse index seek well before the target; reading from there is fine. */
 +        private const val EARLY_SEEK_MS = 180_000L
 +        private const val MAX_WINDOW_BYTES = 400L * 1_000_000L
@@ -1281,6 +1288,45 @@ index 00000000..0b786de7
 +            startMs * 1_000L,
 +            (endMs - startMs).coerceAtLeast(1L) * 1_000L,
 +        )
++
++        /**
++         * Joins speech segments separated by short pauses (under [MERGE_GAP_MS]) into one, up to
++         * [MERGE_MAX_MS], with a little silence between them, so the recogniser hears sentences.
++         */
++        private fun mergeSentences(segments: List<Pair<Long, FloatArray>>): List<Pair<Long, FloatArray>> {
++            val rate = SileroVad.SAMPLE_RATE
++            val gapSamples = FloatArray(rate / 5)
++            val merged = ArrayList<Pair<Long, FloatArray>>()
++            var startMs = -1L
++            var endMs = 0L
++            val parts = ArrayList<FloatArray>()
++            fun close() {
++                if (parts.isEmpty()) return
++                val total = parts.sumOf { it.size } + gapSamples.size * (parts.size - 1)
++                val out = FloatArray(total)
++                var at = 0
++                parts.forEachIndexed { index, part ->
++                    if (index > 0) at += gapSamples.size
++                    part.copyInto(out, at)
++                    at += part.size
++                }
++                merged += startMs to out
++                parts.clear()
++            }
++            for ((segmentStartMs, samples) in segments) {
++                val segmentEndMs = segmentStartMs + samples.size * 1_000L / rate
++                val joins = parts.isNotEmpty() && segmentStartMs - endMs < MERGE_GAP_MS &&
++                    segmentEndMs - startMs <= MERGE_MAX_MS
++                if (!joins) {
++                    close()
++                    startMs = segmentStartMs
++                }
++                parts += samples
++                endMs = segmentEndMs
++            }
++            close()
++            return merged
++        }
 +
 +        /** Where the playhead's covered stretch ends, or (a little before) the playhead itself. */
 +        private fun nextUncovered(covered: List<LongArray>, positionMs: Long): Long {
@@ -1748,7 +1794,7 @@ index 175782ab..ec6dd552 100644
  /** The audio sync fallback: it runs only after AutoSync, so it follows AutoSync's switch. */
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/GeneratedSubtitleSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/GeneratedSubtitleSettings.kt
 new file mode 100644
-index 00000000..9dd88fc8
+index 00000000..1a5d08a3
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/GeneratedSubtitleSettings.kt
 @@ -0,0 +1,102 @@
@@ -1797,18 +1843,18 @@ index 00000000..9dd88fc8
 +    SettingsNavigationRow(
 +        title = "Spoken language for generated subtitles",
 +        description = GeneratedSubtitles.spokenLanguageLabel(spokenLanguage) +
-+            ". Chinese, Cantonese, Japanese, Korean and English use SenseVoice (237 MB). Audio without " +
-+            "a language tag, and languages below that Dolphin doesn't cover, use Whisper small " +
-+            "(375 MB), which detects the language and translates to English.",
++            ". Whisper small (375 MB) recognises and translates every language to English, and detects " +
++            "the language when the audio track has no tag. English audio uses SenseVoice (237 MB).",
 +        isTablet = isTablet,
 +        onClick = { pickLanguage = true },
 +    )
 +    SettingsGroupDivider(isTablet = isTablet)
 +    SettingsSwitchRow(
-+        title = "Faster model for Indian and South-East Asian languages (experimental)",
-+        description = "Off (recommended): Whisper. On: Hindi, Urdu, Bengali, Tamil, Telugu, Gujarati, " +
-+            "Marathi, Thai, Indonesian, Malay, Vietnamese, Tagalog, Arabic, Persian and Russian use " +
-+            "Dolphin (250 MB) plus on-device translation: faster, but often less accurate.",
++        title = "Faster models (lower quality)",
++        description = "Off (recommended): Whisper for every language. On: Chinese, Cantonese, Japanese and " +
++            "Korean use SenseVoice, and Hindi, Urdu, Bengali, Tamil, Telugu, Gujarati, Marathi, Thai, " +
++            "Indonesian, Malay, Vietnamese, Tagalog, Arabic, Persian and Russian use Dolphin (250 MB), " +
++            "each followed by on-device translation (about 30 MB per language): faster, often worse.",
 +        checked = fastAsianModel,
 +        isTablet = isTablet,
 +        onCheckedChange = GeneratedSubtitles::setFastAsianModel,
