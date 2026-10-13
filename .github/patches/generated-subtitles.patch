@@ -644,10 +644,10 @@ index 00000000..39ec067c
 +private const val FILE_TOKENS = "tokens.txt"
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
 new file mode 100644
-index 00000000..ba5a464f
+index 00000000..20ac287a
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
-@@ -0,0 +1,552 @@
+@@ -0,0 +1,614 @@
 +@file:OptIn(androidx.media3.common.util.UnstableApi::class)
 +
 +package com.nuvio.app.features.player.generated
@@ -862,8 +862,10 @@ index 00000000..ba5a464f
 +                    current.status = "Generating subtitles from the audio…"
 +                }
 +                val startedAt = System.currentTimeMillis()
++                cancelledWindow = false
 +                val segments = readWindow(current, source, hlsSampler, weights, fromMs, toMs)
 +                if (current.stopped) return
++                if (cancelledWindow) continue
 +                if (segments == null) {
 +                    failures++
 +                    if (failures >= MAX_FAILURES) {
@@ -886,7 +888,8 @@ index 00000000..ba5a464f
 +                    val english = if (asr.translatesToEnglish || heard.language == "en") {
 +                        text
 +                    } else {
-+                        val from = heard.language.ifEmpty { language }
++                        // The script tells the written language apart (Hindi vs Urdu, etc.).
++                        val from = languageOfScript(text, heard.language.ifEmpty { language })
 +                        translator.translate(text, from) { message -> current.status = message } ?: run {
 +                            // No translation here at all: Whisper translates by itself.
 +                            if (translator.unavailable(from) && !switchedToWhisper) {
@@ -900,6 +903,11 @@ index 00000000..ba5a464f
 +                            }
 +                            null
 +                        } ?: continue
++                    }
++                    // Untranslated or garbled output is not English: leave the line out.
++                    if (!looksEnglish(english)) {
++                        SyncLog.d("generated subtitles: dropped a line that is not English after translation")
++                        continue
 +                    }
 +                    val endMs = startMs + samples.size * 1_000L / SileroVad.SAMPLE_RATE
 +                    addLine(current, startMs, endMs, english)
@@ -989,10 +997,7 @@ index 00000000..ba5a464f
 +        analyzer.chunkListener = segmenter
 +        val decoder = AudioSyncDecoder(analyzer, analyzer, allowVendorDecoders = false)
 +        val sink = WindowSink(current, decoder, anyAudio = hlsSampler != null)
-+        // Give up on the window when the user seeks far away from it.
-+        val isCancelled = {
-+            current.stopped || current.positionMs + SEEK_AWAY_MS < fromMs || current.positionMs > toMs + SEEK_AWAY_MS
-+        }
++        val isCancelled = { current.stopped || seekedAway(current, fromMs, toMs) }
 +        try {
 +            val result = if (hlsSampler != null) {
 +                hlsSampler.run(listOf(fromMs), toMs - fromMs, listOf(sink), isCancelled) { _, _ -> }
@@ -1003,6 +1008,9 @@ index 00000000..ba5a464f
 +                    workers = listOf(AudioSyncExtractorsFactory(DefaultExtractorsFactory(), sink)),
 +                    isCancelled = isCancelled,
 +                ) { _, _ -> }
++            }
++            if (result.sampled == 0 && result.failure == null && seekedAway(current, fromMs, toMs)) {
++                return emptyList<Pair<Long, FloatArray>>().also { cancelledWindow = true }
 +            }
 +            if (result.sampled == 0) {
 +                SyncLog.w("generated subtitles: reading ${fromMs / 1_000}-${toMs / 1_000}s failed: ${result.failure}")
@@ -1015,6 +1023,16 @@ index 00000000..ba5a464f
 +            decoder.release()
 +        }
 +        return synchronized(segments) { segments.sortedBy { it.first } }
++    }
++
++    /** Set when the last window was dropped because the user seeked away (not a failure). */
++    @Volatile
++    private var cancelledWindow = false
++
++    /** The playhead moved so far that [fromMs]..[toMs] is no longer worth reading now. */
++    private fun seekedAway(current: Run, fromMs: Long, toMs: Long): Boolean {
++        val positionMs = current.positionMs
++        return fromMs > positionMs + LOOKAHEAD_MS + WINDOW_MS || positionMs > toMs + SEEK_AWAY_MS
 +    }
 +
 +    /** Feeds the playing audio track (or, for HLS segments, the first audio track) to [decoder]. */
@@ -1172,6 +1190,50 @@ index 00000000..ba5a464f
 +            val bId = b.id?.replace(periodPrefix, "")
 +            if (!aId.isNullOrEmpty() && !bId.isNullOrEmpty()) return aId == bId
 +            return a.language == b.language && a.channelCount == b.channelCount && a.sampleRate == b.sampleRate
++        }
++
++        /**
++         * The language to translate [text] from, judged by its script; [expected] when the script
++         * doesn't decide (Latin, or a script used by several languages the user didn't pick).
++         */
++        private fun languageOfScript(text: String, expected: String): String {
++            val counts = HashMap<Character.UnicodeScript, Int>()
++            for (char in text) {
++                if (!char.isLetter()) continue
++                val script = runCatching { Character.UnicodeScript.of(char.code) }.getOrNull() ?: continue
++                counts[script] = (counts[script] ?: 0) + 1
++            }
++            val script = counts.maxByOrNull { it.value }?.key ?: return expected
++            return when (script) {
++                Character.UnicodeScript.DEVANAGARI -> if (expected == "mr") "mr" else "hi"
++                Character.UnicodeScript.ARABIC -> when (expected) {
++                    "ar", "fa", "ur" -> expected
++                    "hi" -> "ur"
++                    else -> expected.takeIf { it == "ar" } ?: "ar"
++                }
++                Character.UnicodeScript.BENGALI -> "bn"
++                Character.UnicodeScript.TAMIL -> "ta"
++                Character.UnicodeScript.TELUGU -> "te"
++                Character.UnicodeScript.GUJARATI -> "gu"
++                Character.UnicodeScript.THAI -> "th"
++                Character.UnicodeScript.HANGUL -> "ko"
++                Character.UnicodeScript.HIRAGANA, Character.UnicodeScript.KATAKANA -> "ja"
++                Character.UnicodeScript.HAN -> if (expected == "ja" || expected == "yue") expected else "zh"
++                Character.UnicodeScript.CYRILLIC -> if (expected == "uk") "uk" else "ru"
++                else -> expected
++            }
++        }
++
++        /** Mostly Latin letters: what an English line looks like. */
++        private fun looksEnglish(text: String): Boolean {
++            var letters = 0
++            var latin = 0
++            for (char in text) {
++                if (!char.isLetter()) continue
++                letters++
++                if (char.code < 0x250) latin++
++            }
++            return letters > 0 && latin * 10 >= letters * 8
 +        }
 +
 +        /** Drops empty or punctuation-only results (music, sighs). */
