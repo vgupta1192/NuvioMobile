@@ -28,7 +28,7 @@ index 6d067fc7..6281caba 100644
      init {
          EmbeddedSubtitleCueStore.reset(sourceKey)
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt
-index 2006071e..282e7d76 100644
+index 3ca8b963..baf0527d 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt
 @@ -86,6 +86,9 @@ internal class AutoSyncPlayerCoordinator(

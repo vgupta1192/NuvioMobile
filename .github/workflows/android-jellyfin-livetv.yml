@@ -586,3 +586,4 @@ jobs:
 # b78: synced subtitles build 2026-10-14
 # b79: synced subtitles stable stream key 2026-10-14
 # b80: seek previews (Reshaped on-device + Seekr, HLS/DASH filler) 2026-10-14
+# b81: synced subtitles keep every synced subtitle per stream 2026-10-14

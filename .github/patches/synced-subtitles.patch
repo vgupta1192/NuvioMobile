@@ -11,7 +11,7 @@ index c42a2b56..341429c4 100644
          SubtitleFileCache.initialize(applicationContext)
          ProfileStorage.initialize(applicationContext)
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt
-index 297a157f..2006071e 100644
+index 297a157f..3ca8b963 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt
 @@ -86,6 +86,8 @@ internal class AutoSyncPlayerCoordinator(
@@ -33,9 +33,9 @@ index 297a157f..2006071e 100644
 +     */
 +    fun restoreSynced(url: String, srt: String): Boolean {
 +        cancel()
-+        com.nuvio.app.features.player.SyncedSubtitles.restoredUrl = url
++        com.nuvio.app.features.player.SyncedSubtitles.restoredUrls += url
 +        if (!sidecar.startSidecarAddonSubtitle(url = url, useLibass = false, rawBodyLoader = { srt })) {
-+            com.nuvio.app.features.player.SyncedSubtitles.restoredUrl = null
++            com.nuvio.app.features.player.SyncedSubtitles.restoredUrls -= url
 +            return false
 +        }
 +        player.trackSelectionParameters = player.trackSelectionParameters
@@ -299,7 +299,7 @@ index 698f387f..43f1a28c 100644
  
      fun clear() {
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerRuntimeAutoSync.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerRuntimeAutoSync.kt
-index 564ac5f9..03896552 100644
+index 564ac5f9..0968c6b2 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerRuntimeAutoSync.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerRuntimeAutoSync.kt
 @@ -3,6 +3,8 @@ package com.nuvio.app.features.player
@@ -346,36 +346,42 @@ index 564ac5f9..03896552 100644
      LaunchedEffect(playerController, externalSubtitles) {
          val controller = playerController ?: return@LaunchedEffect
          SubtitleRepository.addonSubtitles.collect { repositorySubtitles ->
-@@ -85,6 +108,28 @@ internal fun PlayerScreenRuntime.BindAutoSyncRuntimeEffects() {
+@@ -85,6 +108,34 @@ internal fun PlayerScreenRuntime.BindAutoSyncRuntimeEffects() {
      }
  }
  
 +/**
-+ * Selects the subtitle saved as synced for this title + stream, once per playback. The player
-+ * controller shows it with its saved timing (AutoSync does not run again). A subtitle the user
-+ * already picked by hand in this playback is kept.
++ * Selects a subtitle saved as synced for this title + stream, once per playback: the one already
++ * selected when it is among them, else the latest synced one. The player controller shows it
++ * with its saved timing (AutoSync does not run again). A subtitle the user already picked by hand
++ * in this playback is kept. Any other saved subtitle keeps its timing when the user picks it.
 + */
-+private fun PlayerScreenRuntime.selectSavedSyncedSubtitle(saved: Pair<SyncedSubtitles.Playback, SyncedSubtitles.Saved>?) {
++private fun PlayerScreenRuntime.selectSavedSyncedSubtitle(
++    saved: Pair<SyncedSubtitles.Playback, Map<String, SyncedSubtitles.Saved>>?,
++) {
 +    val controller = playerController ?: return
-+    val (playback, subtitle) = saved ?: return
-+    if (playback != SyncedSubtitles.playback.value) return
-+    val entry = addonSubtitles.firstOrNull { it.url == subtitle.subtitleUrl } ?: return
-+    if (!SyncedSubtitles.claimAutoSelect(playback)) return
++    val (playback, subtitles) = saved ?: return
++    if (playback != SyncedSubtitles.playback.value || subtitles.isEmpty()) return
 +    val selected = addonSubtitles.firstOrNull { it.selectionKey == selectedAddonSubtitleId }
-+    if (SyncedSubtitles.userPicked && selected?.url != entry.url) return
-+    if (selected?.url == entry.url && SyncedSubtitles.restoredUrl == entry.url) return
-+    selectedAddonSubtitleId = entry.selectionKey
++    val target = selected?.takeIf { it.url in subtitles }
++        ?: subtitles.values.sortedByDescending { it.savedAtMs }
++            .firstNotNullOfOrNull { savedSubtitle -> addonSubtitles.firstOrNull { it.url == savedSubtitle.subtitleUrl } }
++        ?: return
++    if (!SyncedSubtitles.claimAutoSelect(playback)) return
++    if (SyncedSubtitles.userPicked && selected?.url != target.url) return
++    if (selected?.url == target.url && target.url in SyncedSubtitles.restoredUrls) return
++    selectedAddonSubtitleId = target.selectionKey
 +    selectedSubtitleIndex = -1
 +    useCustomSubtitles = true
 +    preferredSubtitleSelectionApplied = true
 +    isUserExplicitSubtitleSelection = true
-+    controller.setSubtitleUri(entry.url)
++    controller.setSubtitleUri(target.url)
 +}
 +
  /**
   * Nuvio's automatic subtitle pick can finish before the addon subtitles arrive: with no built-in
   * match it marks the pick done with nothing selected, and nothing runs it again until the
-@@ -102,6 +147,7 @@ private fun PlayerScreenRuntime.retryPreferredSubtitleAfterAddonsLoaded() {
+@@ -102,6 +153,7 @@ private fun PlayerScreenRuntime.retryPreferredSubtitleAfterAddonsLoaded() {
  
  /** The user picked an addon subtitle: start from its own timing and let AutoSync check it. */
  internal fun PlayerScreenRuntime.attachSelectedAddonSubtitleWithAutoSync(url: String) {
@@ -430,10 +436,10 @@ index b3665232..2702619c 100644
          PlayerEpisodesPanel(
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
 new file mode 100644
-index 00000000..ca0f5ff9
+index 00000000..94e9b375
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
-@@ -0,0 +1,256 @@
+@@ -0,0 +1,285 @@
 +package com.nuvio.app.features.player
 +
 +import androidx.compose.runtime.compositionLocalOf
@@ -450,6 +456,7 @@ index 00000000..ca0f5ff9
 +import kotlinx.coroutines.flow.update
 +import kotlinx.coroutines.launch
 +import kotlinx.serialization.Serializable
++import kotlinx.serialization.builtins.ListSerializer
 +import kotlinx.serialization.json.Json
 +import kotlinx.serialization.json.JsonArray
 +import kotlinx.serialization.json.buildJsonObject
@@ -498,9 +505,9 @@ index 00000000..ca0f5ff9
 +    /** The title + stream playing now, set by the player. */
 +    val playback: StateFlow<Playback?> = _playback.asStateFlow()
 +
-+    private val _saved = MutableStateFlow<Pair<Playback, Saved>?>(null)
-+    /** The synced subtitle saved for [playback], once looked up; null when there is none. */
-+    val saved: StateFlow<Pair<Playback, Saved>?> = _saved.asStateFlow()
++    private val _saved = MutableStateFlow<Pair<Playback, Map<String, Saved>>?>(null)
++    /** Every synced subtitle saved for [playback] (by subtitle URL), once looked up. */
++    val saved: StateFlow<Pair<Playback, Map<String, Saved>>?> = _saved.asStateFlow()
 +
 +    private val _marks = MutableStateFlow<Map<String, Set<String>>>(emptyMap())
 +    /** Stream keys with a synced subtitle, per video id, for the stream lists. */
@@ -509,8 +516,8 @@ index 00000000..ca0f5ff9
 +    /** Looks up the subtitle list entry for a URL (language and name), set by the player. */
 +    var describeSubtitle: (url: String) -> AddonSubtitle? = { null }
 +
-+    /** The subtitle restored from [saved] in this playback; its "synced" state is not saved again. */
-+    var restoredUrl: String? = null
++    /** Subtitles restored from [saved] in this playback; their "synced" state is not saved again. */
++    val restoredUrls: MutableSet<String> = mutableSetOf()
 +
 +    fun streamKey(
 +        addonId: String?,
@@ -560,60 +567,81 @@ index 00000000..ca0f5ff9
 +        }
 +    }
 +
-+    /** The player moved to [videoId] + stream: look up a saved synced subtitle for it. */
++    /** The player moved to [videoId] + stream: look up the synced subtitles saved for it. */
 +    fun setPlayback(videoId: String?, streamKey: String?) {
 +        val next = if (videoId.isNullOrBlank() || streamKey == null) null else Playback(videoId, streamKey)
 +        if (next == _playback.value) return
 +        _playback.value = next
 +        _saved.value = null
-+        restoredUrl = null
++        restoredUrls.clear()
 +        autoSelected = null
 +        userPicked = false
 +        next ?: return
 +        requestMarks(next.videoId)
 +        scope.launch {
-+            val local = localLoad?.invoke(fileName(next))?.let(::decode)
-+            if (local != null && _playback.value == next) _saved.value = next to local
++            val local = localLoad?.invoke(fileName(next))?.let(::decodeList).orEmpty()
++            if (local.isNotEmpty() && _playback.value == next) merge(next, local, store = false)
 +            val remote = runCatching {
 +                val result = SupabaseProvider.client.postgrest.rpc(
-+                    "synced_subtitles_pull",
++                    "synced_subtitles_pull_all",
 +                    buildJsonObject {
 +                        put("p_video_id", next.videoId)
 +                        put("p_stream_key", next.streamKey)
 +                    },
 +                )
-+                result.data.trim().takeUnless { it.isEmpty() || it == "null" }?.let(::decode)
-+            }.getOrNull() ?: return@launch
-+            if (_playback.value != next) return@launch
-+            if (local == null || remote.savedAtMs > local.savedAtMs) {
-+                _saved.value = next to remote
-+                localSave?.invoke(fileName(next), json.encodeToString(Saved.serializer(), remote))
-+                addLocalMark(next)
++                decodeList(result.data)
++            }.getOrNull().orEmpty()
++            if (remote.isNotEmpty() && _playback.value == next) merge(next, remote, store = true)
++        }
++    }
++
++    /** Adds [incoming] to the saved subtitles of [playback]; the newer copy of a subtitle wins. */
++    private fun merge(playback: Playback, incoming: List<Saved>, store: Boolean) {
++        var changed = false
++        _saved.update { current ->
++            val map = current?.takeIf { it.first == playback }?.second.orEmpty().toMutableMap()
++            for (saved in incoming) {
++                val existing = map[saved.subtitleUrl]
++                if (existing == null || saved.savedAtMs > existing.savedAtMs) {
++                    map[saved.subtitleUrl] = saved
++                    changed = true
++                }
 +            }
++            playback to map
++        }
++        if (store && changed) {
++            _saved.value?.second?.values?.toList()?.let { all ->
++                localSave?.invoke(fileName(playback), json.encodeToString(ListSerializer(Saved.serializer()), all))
++            }
++            addLocalMark(playback)
 +        }
 +    }
 +
 +    /**
-+     * [subtitles] plus the saved synced subtitle when this device's addons don't list its URL
-+     * (other addon settings on another device). Added only once the addon subtitles have loaded.
++     * [subtitles] plus the saved synced subtitles this device's addons don't list (other addon
++     * settings on another device). Added only once the addon subtitles have loaded.
 +     */
 +    fun withEntry(
 +        subtitles: List<AddonSubtitle>,
-+        saved: Pair<Playback, Saved>?,
++        saved: Pair<Playback, Map<String, Saved>>?,
 +        loading: Boolean,
 +    ): List<AddonSubtitle> {
 +        val current = saved?.takeIf { it.first == _playback.value }?.second ?: return subtitles
-+        if (loading || subtitles.any { it.url == current.subtitleUrl }) return subtitles
-+        return subtitles + AddonSubtitle(
-+            id = "nuvio-synced-subtitle",
-+            url = current.subtitleUrl,
-+            language = current.language,
-+            display = current.name.ifBlank { "Synced subtitle" },
-+            addonName = "Synced subtitles",
-+        )
++        if (loading) return subtitles
++        val missing = current.values.filter { entry -> subtitles.none { it.url == entry.subtitleUrl } }
++        if (missing.isEmpty()) return subtitles
++        return subtitles + missing.mapIndexed { index, entry ->
++            AddonSubtitle(
++                id = "nuvio-synced-subtitle-$index",
++                url = entry.subtitleUrl,
++                language = entry.language,
++                display = entry.name.ifBlank { "Synced subtitle" },
++                addonName = "Synced subtitles",
++            )
++        }
 +    }
 +
-+    /** True once the saved subtitle was selected for [playback]; it is selected at most once. */
++    /** True once a saved subtitle was selected for [playback]; that happens at most once. */
 +    fun claimAutoSelect(playback: Playback): Boolean {
 +        if (autoSelected == playback) return false
 +        autoSelected = playback
@@ -622,19 +650,19 @@ index 00000000..ca0f5ff9
 +
 +    private var autoSelected: Playback? = null
 +
-+    /** The user picked a subtitle by hand in this playback; the saved one doesn't replace it. */
++    /** The user picked a subtitle by hand in this playback; a saved one doesn't replace it. */
 +    var userPicked: Boolean = false
 +
 +    /** The saved synced subtitle for [url] in this playback, if any. */
 +    fun savedFor(url: String): Saved? {
 +        val (playback, saved) = _saved.value ?: return null
-+        return saved.takeIf { playback == _playback.value && it.subtitleUrl == url }
++        return saved[url]?.takeIf { playback == _playback.value }
 +    }
 +
 +    /** AutoSync or the audio sync synced [url] to [srt] in this playback: keep it for next time. */
 +    fun save(url: String, srt: String, method: String, nowMs: Long) {
 +        val playback = _playback.value ?: return
-+        if (srt.isBlank() || url == restoredUrl || GeneratedSubtitles.isGenerated(url)) return
++        if (srt.isBlank() || url in restoredUrls || GeneratedSubtitles.isGenerated(url)) return
 +        val subtitle = describeSubtitle(url)
 +        val saved = Saved(
 +            subtitleUrl = url,
@@ -644,17 +672,16 @@ index 00000000..ca0f5ff9
 +            srt = srt,
 +            savedAtMs = nowMs,
 +        )
-+        _saved.value = playback to saved
++        merge(playback, listOf(saved), store = true)
 +        val encoded = json.encodeToString(Saved.serializer(), saved)
-+        localSave?.invoke(fileName(playback), encoded)
-+        addLocalMark(playback)
 +        scope.launch {
 +            runCatching {
 +                SupabaseProvider.client.postgrest.rpc(
-+                    "synced_subtitles_push",
++                    "synced_subtitles_push_one",
 +                    buildJsonObject {
 +                        put("p_video_id", playback.videoId)
 +                        put("p_stream_key", playback.streamKey)
++                        put("p_subtitle_key", fnv64(url))
 +                        put("p_payload", Json.parseToJsonElement(encoded))
 +                    },
 +                )
@@ -669,8 +696,16 @@ index 00000000..ca0f5ff9
 +        if (playback.streamKey !in keys) localSave?.invoke(name, (keys + playback.streamKey).joinToString("\n"))
 +    }
 +
-+    private fun decode(text: String): Saved? = runCatching { json.decodeFromString(Saved.serializer(), text) }
-+        .getOrNull()?.takeIf { it.srt.isNotBlank() && it.subtitleUrl.isNotBlank() }
++    /** A JSON list of saved subtitles, or one saved subtitle (files written by older builds). */
++    private fun decodeList(text: String): List<Saved> = runCatching {
++        when (val element = Json.parseToJsonElement(text.trim())) {
++            is JsonArray -> element.mapNotNull { item ->
++                runCatching { json.decodeFromJsonElement(Saved.serializer(), item) }.getOrNull()
++            }
++            is kotlinx.serialization.json.JsonObject -> listOf(json.decodeFromJsonElement(Saved.serializer(), element))
++            else -> emptyList()
++        }
++    }.getOrDefault(emptyList()).filter { it.srt.isNotBlank() && it.subtitleUrl.isNotBlank() }
 +
 +    private fun fileName(playback: Playback) = "s-" + fnv64(playback.videoId + "\n" + playback.streamKey) + ".json"
 +
