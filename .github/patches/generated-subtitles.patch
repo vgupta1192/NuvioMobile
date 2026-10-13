@@ -10,6 +10,21 @@ index 77af931f..777538fe 100644
                  if (androidDistribution == "full") {
                      implementation(files("libs/quickjs-kt-android-1.0.5-nuvio.aar"))
                      implementation(libs.ksoup)
+diff --git a/composeApp/proguard-rules.pro b/composeApp/proguard-rules.pro
+index 6ccc9360..8b3ce35b 100644
+--- a/composeApp/proguard-rules.pro
++++ b/composeApp/proguard-rules.pro
+@@ -66,3 +66,10 @@
+ # sherpa-onnx (audio subtitle sync speech recognition): JNI reads config fields by name.
+ -keep class com.k2fsa.sherpa.onnx.** { *; }
+ -keep interface com.k2fsa.sherpa.onnx.** { *; }
++
++# Generated subtitles: ML Kit translation finds its components by reflection.
++-keep class com.google.mlkit.** { *; }
++-keep class com.google.android.gms.internal.mlkit_** { *; }
++-keep class com.google.firebase.components.** { *; }
++-keep class * implements com.google.firebase.components.ComponentRegistrar { *; }
++-dontwarn com.google.mlkit.**
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 index 3ba68f3b..c42a2b56 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
@@ -441,10 +456,10 @@ index 00000000..e980fb68
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleModels.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleModels.kt
 new file mode 100644
-index 00000000..ff17d6be
+index 00000000..39ec067c
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleModels.kt
-@@ -0,0 +1,179 @@
+@@ -0,0 +1,182 @@
 +package com.nuvio.app.features.player.generated
 +
 +import android.content.Context
@@ -549,6 +564,9 @@ index 00000000..ff17d6be
 +                    publish(appContext)
 +                }
 +            }
++            // ML Kit normally starts from its own provider; make sure it is up before translating.
++            runCatching { com.google.mlkit.common.MlKit.initialize(appContext) }
++                .onFailure { SyncLog.w("generated subtitles: ML Kit init failed: ${it.message}") }
 +            GeneratedSubtitles.supported = true
 +            publish(appContext)
 +        }
@@ -626,10 +644,10 @@ index 00000000..ff17d6be
 +private const val FILE_TOKENS = "tokens.txt"
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
 new file mode 100644
-index 00000000..0689998b
+index 00000000..ba5a464f
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
-@@ -0,0 +1,533 @@
+@@ -0,0 +1,552 @@
 +@file:OptIn(androidx.media3.common.util.UnstableApi::class)
 +
 +package com.nuvio.app.features.player.generated
@@ -818,31 +836,8 @@ index 00000000..0689998b
 +                else -> GeneratedSpeechModel.WHISPER_SMALL
 +            }
 +            SyncLog.i("generated subtitles: spoken language=$language model=${model.label}")
-+            if (!model.isReady(appContext)) {
-+                while (!current.stopped && !AsrModel.isUnmetered(appContext)) {
-+                    current.status = "Connect to Wi-Fi to download the ${model.sizeMb} MB speech model for generated subtitles"
-+                    Thread.sleep(3_000L)
-+                }
-+                if (current.stopped) return
-+                val failure = model.download(appContext, isCancelled = { current.stopped }) { progress ->
-+                    current.status = "Downloading speech model ${(progress * 100).toInt()}% (${model.sizeMb} MB, once)"
-+                }
-+                GeneratedSpeechModel.publish(appContext)
-+                if (failure != null) {
-+                    if (!current.stopped) current.status = "Speech model download failed: $failure"
-+                    return
-+                }
-+            }
-+            current.status = "Loading speech model…"
-+            recognizer = when (model) {
-+                GeneratedSpeechModel.WHISPER_SMALL -> GeneratedRecognizer.whisper(
-+                    appContext,
-+                    language.takeUnless { it == GeneratedSubtitles.AUTO }.orEmpty(),
-+                    WHISPER_THREADS,
-+                )
-+                GeneratedSpeechModel.SENSE_VOICE -> GeneratedRecognizer.senseVoice(appContext, language, THREADS)
-+                GeneratedSpeechModel.DOLPHIN -> GeneratedRecognizer.dolphin(appContext, language, THREADS)
-+            }
++            var asr: GeneratedRecognizer = prepareRecognizer(current, model, language) ?: return
++            recognizer = asr
 +            val weights = appContext.resources.openRawResource(R.raw.silero_vad_v5_16k).use { SileroVadWeights.read(it) }
 +            // Some playlists hide behind addresses without ".m3u8": the first bytes tell.
 +            val hls = hlsByAddress || HlsAudioSpotSampler.looksLikePlaylist(source, dataSourceFactory)
@@ -850,6 +845,7 @@ index 00000000..0689998b
 +            val hlsSampler = if (hls) HlsAudioSpotSampler(source, dataSourceFactory, MAX_WINDOW_BYTES) else null
 +            current.status = "Generating subtitles from the audio…"
 +            val covered = ArrayList<LongArray>()
++            var switchedToWhisper = false
 +            var failures = 0
 +            while (!current.stopped) {
 +                val positionMs = current.positionMs
@@ -883,15 +879,27 @@ index 00000000..0689998b
 +                for ((startMs, samples) in segments) {
 +                    if (current.stopped) return
 +                    // Whisper invents words for very short sounds; such bits rarely carry a line.
-+                    if (recognizer.translatesToEnglish && samples.size < MIN_WHISPER_SAMPLES) continue
-+                    val heard = recognizer.recognize(samples)
++                    if (asr.translatesToEnglish && samples.size < MIN_WHISPER_SAMPLES) continue
++                    val heard = asr.recognize(samples)
 +                    val text = cleanText(heard.text) ?: continue
-+                    if (recognizer.translatesToEnglish && isWhisperFiller(text)) continue
-+                    val english = if (recognizer.translatesToEnglish || heard.language == "en") {
++                    if (asr.translatesToEnglish && isWhisperFiller(text)) continue
++                    val english = if (asr.translatesToEnglish || heard.language == "en") {
 +                        text
 +                    } else {
-+                        translator.translate(text, heard.language.ifEmpty { language }) { message -> current.status = message }
-+                            ?: continue
++                        val from = heard.language.ifEmpty { language }
++                        translator.translate(text, from) { message -> current.status = message } ?: run {
++                            // No translation here at all: Whisper translates by itself.
++                            if (translator.unavailable(from) && !switchedToWhisper) {
++                                switchedToWhisper = true
++                                SyncLog.w("generated subtitles: no translation for $from, switching to Whisper")
++                                current.status = "Translation unavailable, switching to Whisper…"
++                                asr.close()
++                                recognizer = null
++                                asr = prepareRecognizer(current, GeneratedSpeechModel.WHISPER_SMALL, from) ?: return
++                                recognizer = asr
++                            }
++                            null
++                        } ?: continue
 +                    }
 +                    val endMs = startMs + samples.size * 1_000L / SileroVad.SAMPLE_RATE
 +                    addLine(current, startMs, endMs, english)
@@ -912,6 +920,35 @@ index 00000000..0689998b
 +        } finally {
 +            recognizer?.close()
 +            translator.close()
++        }
++    }
++
++    /** Downloads [model] if needed (Wi-Fi only) and loads it; null when it can't be used. */
++    private fun prepareRecognizer(current: Run, model: GeneratedSpeechModel, language: String): GeneratedRecognizer? {
++        if (!model.isReady(appContext)) {
++            while (!current.stopped && !AsrModel.isUnmetered(appContext)) {
++                current.status = "Connect to Wi-Fi to download the ${model.sizeMb} MB speech model for generated subtitles"
++                Thread.sleep(3_000L)
++            }
++            if (current.stopped) return null
++            val failure = model.download(appContext, isCancelled = { current.stopped }) { progress ->
++                current.status = "Downloading speech model ${(progress * 100).toInt()}% (${model.sizeMb} MB, once)"
++            }
++            GeneratedSpeechModel.publish(appContext)
++            if (failure != null) {
++                if (!current.stopped) current.status = "Speech model download failed: $failure"
++                return null
++            }
++        }
++        current.status = "Loading speech model…"
++        return when (model) {
++            GeneratedSpeechModel.WHISPER_SMALL -> GeneratedRecognizer.whisper(
++                appContext,
++                language.takeUnless { it == GeneratedSubtitles.AUTO }.orEmpty(),
++                WHISPER_THREADS,
++            )
++            GeneratedSpeechModel.SENSE_VOICE -> GeneratedRecognizer.senseVoice(appContext, language, THREADS)
++            GeneratedSpeechModel.DOLPHIN -> GeneratedRecognizer.dolphin(appContext, language, THREADS)
 +        }
 +    }
 +
@@ -1165,10 +1202,10 @@ index 00000000..0689998b
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedTranslator.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedTranslator.kt
 new file mode 100644
-index 00000000..29bb72c2
+index 00000000..97c85c25
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedTranslator.kt
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,77 @@
 +package com.nuvio.app.features.player.generated
 +
 +import com.google.android.gms.tasks.Tasks
@@ -1188,25 +1225,35 @@ index 00000000..29bb72c2
 +    private val ready = HashSet<String>()
 +    private val failed = HashSet<String>()
 +
++    /** Whether [language] can't be translated here at all (no ML Kit model, or ML Kit broken). */
++    fun unavailable(language: String): Boolean {
++        val source = mlKitLanguage(language) ?: return true
++        return source in failed
++    }
++
 +    /** English text of [text] spoken in [language], or null when it can't be translated. */
 +    fun translate(text: String, language: String, onStatus: (String) -> Unit): String? {
 +        val source = mlKitLanguage(language) ?: return null
 +        if (source == TranslateLanguage.ENGLISH) return text
 +        if (source in failed) return null
-+        val translator = translators.getOrPut(source) {
++        val translator = translators[source] ?: try {
 +            Translation.getClient(
 +                TranslatorOptions.Builder()
 +                    .setSourceLanguage(source)
 +                    .setTargetLanguage(TranslateLanguage.ENGLISH)
 +                    .build(),
-+            )
++            ).also { translators[source] = it }
++        } catch (error: Throwable) {
++            SyncLog.w("generated subtitles: ML Kit translator for $source unavailable: ${error.message}")
++            failed += source
++            return null
 +        }
 +        if (source !in ready) {
 +            onStatus("Downloading translation model (about 30 MB, once)…")
 +            try {
 +                Tasks.await(translator.downloadModelIfNeeded(), 10, TimeUnit.MINUTES)
 +                ready += source
-+            } catch (error: Exception) {
++            } catch (error: Throwable) {
 +                SyncLog.w("generated subtitles: translation model for $source failed: ${error.message}")
 +                failed += source
 +                onStatus("Translation model download failed")
@@ -1215,7 +1262,7 @@ index 00000000..29bb72c2
 +        }
 +        return try {
 +            Tasks.await(translator.translate(text), 30, TimeUnit.SECONDS)?.trim()?.takeIf { it.isNotEmpty() }
-+        } catch (error: Exception) {
++        } catch (error: Throwable) {
 +            SyncLog.w("generated subtitles: translation failed: ${error.message}")
 +            null
 +        }
