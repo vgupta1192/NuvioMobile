@@ -1,0 +1,652 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/CustomStretch.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/CustomStretch.android.kt
+new file mode 100644
+index 00000000..c027ae97
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/CustomStretch.android.kt
+@@ -0,0 +1,96 @@
++package com.nuvio.app.features.player
++
++import android.graphics.Bitmap
++import android.os.Handler
++import android.os.Looper
++import android.view.PixelCopy
++import android.view.SurfaceView
++import android.view.TextureView
++import android.view.View
++import androidx.media3.common.util.UnstableApi
++import androidx.media3.ui.PlayerView
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.suspendCancellableCoroutine
++import kotlinx.coroutines.withContext
++import kotlin.coroutines.resume
++import kotlin.math.max
++import kotlin.math.roundToInt
++
++/** Luma picture of a decoded or captured frame, downscaled with the bitmap's own aspect. */
++internal fun Bitmap.toLumaFrame(): LumaFrame {
++    val pixels = IntArray(width * height)
++    getPixels(pixels, 0, width, 0, 0, width, height)
++    return LumaFrame(BlackBarDetector.lumaFromArgb(pixels, width, height), width, height)
++}
++
++/**
++ * Capture what the video surface shows (SurfaceView through PixelCopy, TextureView through
++ * getBitmap). View transforms (scale, translation) are not part of the capture.
++ */
++internal suspend fun View.captureVideoLuma(
++    maxDimension: Int = BlackBarTracker.SAMPLE_MAX_DIMENSION,
++): LumaFrame? = withContext(Dispatchers.Main) {
++    if (!isAttachedToWindow || width <= 0 || height <= 0) return@withContext null
++    val scale = maxDimension.toFloat() / max(width, height)
++    val captureWidth = (width * scale).roundToInt().coerceAtLeast(8)
++    val captureHeight = (height * scale).roundToInt().coerceAtLeast(8)
++    when (val view = this@captureVideoLuma) {
++        is TextureView -> {
++            if (!view.isAvailable) return@withContext null
++            val bitmap = runCatching { view.getBitmap(captureWidth, captureHeight) }.getOrNull()
++                ?: return@withContext null
++            bitmap.toLumaFrame().also { bitmap.recycle() }
++        }
++
++        is SurfaceView -> {
++            if (view.holder.surface?.isValid != true) return@withContext null
++            val bitmap = Bitmap.createBitmap(captureWidth, captureHeight, Bitmap.Config.ARGB_8888)
++            suspendCancellableCoroutine { continuation ->
++                runCatching {
++                    PixelCopy.request(
++                        view,
++                        bitmap,
++                        { result ->
++                            val frame = if (result == PixelCopy.SUCCESS) bitmap.toLumaFrame() else null
++                            bitmap.recycle()
++                            if (continuation.isActive) continuation.resume(frame)
++                        },
++                        Handler(Looper.getMainLooper()),
++                    )
++                }.onFailure {
++                    bitmap.recycle()
++                    if (continuation.isActive) continuation.resume(null)
++                }
++            }
++        }
++
++        else -> null
++    }
++}
++
++/**
++ * Custom Stretch for ExoPlayer: the content frame already fills the player (RESIZE_MODE_FILL),
++ * so scale it once more so only the picture area covers the player. PlayerView clips its
++ * children, and the subtitle view is a sibling, so subtitles keep their place.
++ */
++@androidx.annotation.OptIn(UnstableApi::class)
++internal fun PlayerView.applyCustomStretchTransform(rect: VideoContentRect?) {
++    val frame = findViewById<View>(androidx.media3.ui.R.id.exo_content_frame) ?: return
++    val frameWidth = frame.width
++    val frameHeight = frame.height
++    if (rect == null || frameWidth <= 0 || frameHeight <= 0 || rect.width <= 0f || rect.height <= 0f) {
++        frame.scaleX = 1f
++        frame.scaleY = 1f
++        frame.translationX = 0f
++        frame.translationY = 0f
++        return
++    }
++    val scaleX = 1f / rect.width
++    val scaleY = 1f / rect.height
++    frame.pivotX = frameWidth / 2f
++    frame.pivotY = frameHeight / 2f
++    frame.scaleX = scaleX
++    frame.scaleY = scaleY
++    frame.translationX = -((rect.left + rect.right) / 2f - 0.5f) * frameWidth * scaleX
++    frame.translationY = -((rect.top + rect.bottom) / 2f - 0.5f) * frameHeight * scaleY
++}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+index 38e113f8..c993f1d1 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+@@ -1048,6 +1048,30 @@ private fun ExoPlayerSurface(
+         }
+     }
+ 
++    var customStretchRect by remember { mutableStateOf<VideoContentRect?>(null) }
++    val latestCustomStretchRect = rememberUpdatedState(
++        customStretchRect.takeIf { resizeMode == PlayerResizeMode.CustomStretch },
++    )
++    CustomStretchSamplingEffect(
++        enabled = resizeMode == PlayerResizeMode.CustomStretch,
++        sourceKey = playerSourceKey,
++        sample = { playerViewRef?.videoSurfaceView?.captureVideoLuma()?.detectContent() },
++        onContentRect = { customStretchRect = it },
++    )
++    LaunchedEffect(playerViewRef, latestCustomStretchRect.value) {
++        playerViewRef?.applyCustomStretchTransform(latestCustomStretchRect.value)
++    }
++    DisposableEffect(playerViewRef) {
++        val view = playerViewRef
++        val listener = android.view.View.OnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
++            if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
++                view?.post { view.applyCustomStretchTransform(latestCustomStretchRect.value) }
++            }
++        }
++        view?.addOnLayoutChangeListener(listener)
++        onDispose { view?.removeOnLayoutChangeListener(listener) }
++    }
++
+     AndroidView(
+         modifier = modifier,
+         factory = { viewContext ->
+@@ -1325,6 +1349,13 @@ private fun LibmpvPlayerSurface(
+         playerViewRef?.applyResizeMode(resizeMode)
+     }
+ 
++    CustomStretchSamplingEffect(
++        enabled = resizeMode == PlayerResizeMode.CustomStretch,
++        sourceKey = listOf(sourceUrl, sourceAudioUrl.orEmpty(), playerViewRef),
++        sample = { playerViewRef?.sampleCustomStretchContent() },
++        onContentRect = { rect -> playerViewRef?.setCustomStretchContent(rect) },
++    )
++
+     LaunchedEffect(playerViewRef, sourceUrl, sourceAudioUrl, sanitizedSourceHeaders, externalSubtitles) {
+         val view = playerViewRef ?: return@LaunchedEffect
+         onControllerReady(view.controller(context, nowPlayingController))
+@@ -1555,9 +1586,49 @@ private class NuvioLibmpvView(
+         )
+     }
+ 
++    @Volatile
++    private var customStretchActive = false
++    @Volatile
++    private var customStretchTransform = MpvStretchTransform.Identity
++
++    /** Picture area for Custom Stretch (null = stretch the whole frame). */
++    fun setCustomStretchContent(rect: VideoContentRect?) {
++        customStretchTransform = rect?.toMpvStretchTransform() ?: MpvStretchTransform.Identity
++        executeMpv { applyStretchTransformNow() }
++    }
++
++    private fun applyStretchTransformNow() {
++        val transform = if (customStretchActive) customStretchTransform else MpvStretchTransform.Identity
++        mpv.setPropertyString("keepaspect", if (customStretchActive) "no" else "yes")
++        mpv.setPropertyDouble("video-scale-x", transform.scaleX)
++        mpv.setPropertyDouble("video-scale-y", transform.scaleY)
++        mpv.setPropertyDouble("video-pan-x", transform.panX)
++        mpv.setPropertyDouble("video-pan-y", transform.panY)
++    }
++
++    /**
++     * Picture area of the current frame, from a capture of the rendered surface. The capture
++     * shows the current stretch and mpv's subtitles, so it is mapped back to frame fractions and
++     * made symmetric (a subtitle drawn inside the bottom bar must not count as picture).
++     * The surface is captured instead of mpv's decoded frame because direct hardware decoding
++     * cannot hand frames out.
++     */
++    suspend fun sampleCustomStretchContent(): VideoContentRect? {
++        if (released.get()) return null
++        val transform = customStretchTransform
++        return captureVideoLuma()?.detectContent()?.symmetric()?.mapFromScreen(transform)
++    }
++
+     fun applyResizeMode(resizeMode: PlayerResizeMode) {
+         executeMpv {
++            val wasCustomStretch = customStretchActive
++            customStretchActive = resizeMode == PlayerResizeMode.CustomStretch
++            if (wasCustomStretch || customStretchActive) applyStretchTransformNow()
+             when (resizeMode) {
++                PlayerResizeMode.CustomStretch -> {
++                    mpv.setPropertyDouble("panscan", 0.0)
++                    mpv.setPropertyString("video-aspect-override", "no")
++                }
+                 PlayerResizeMode.Fit -> {
+                     mpv.setPropertyDouble("panscan", 0.0)
+                     mpv.setPropertyString("video-aspect-override", "no")
+@@ -2002,6 +2073,7 @@ private fun PlayerResizeMode.toExoResizeMode(): Int =
+         PlayerResizeMode.Fit -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+         PlayerResizeMode.Fill -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+         PlayerResizeMode.Zoom -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
++        PlayerResizeMode.CustomStretch -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+     }
+ 
+ private fun PlayerView.syncLibassOverlay(
+diff --git a/composeApp/src/commonMain/composeResources/values/strings.xml b/composeApp/src/commonMain/composeResources/values/strings.xml
+index 3136ec62..7c64c233 100644
+--- a/composeApp/src/commonMain/composeResources/values/strings.xml
++++ b/composeApp/src/commonMain/composeResources/values/strings.xml
+@@ -458,6 +458,7 @@
+     <string name="compose_player_resize_fill">Fill</string>
+     <string name="compose_player_resize_fit">Fit</string>
+     <string name="compose_player_resize_zoom">Zoom</string>
++    <string name="compose_player_resize_custom_stretch">Custom Stretch</string>
+     <string name="compose_player_seek_back_10">Seek backward 10 seconds</string>
+     <string name="compose_player_seek_delta_backward">-%1$ds</string>
+     <string name="compose_player_seek_delta_forward">+%1$ds</string>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
+new file mode 100644
+index 00000000..1abf4e26
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
+@@ -0,0 +1,256 @@
++package com.nuvio.app.features.player
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.rememberUpdatedState
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.isActive
++import kotlin.math.abs
++import kotlin.math.max
++import kotlin.math.min
++
++/**
++ * Custom Stretch: find the black bars that are baked into the video frame (letterbox,
++ * pillarbox or both) and stretch only the picture area over the whole screen.
++ *
++ * Plain "Stretch" scales the decoded frame to the screen, so bars inside the file stay
++ * visible. Custom Stretch samples frames, measures the area that holds picture and maps
++ * that area to the full player size. Nothing inside the picture area is cropped: the
++ * detected area only grows (union of all samples), so a dark scene can never make the
++ * picture smaller.
++ */
++
++/** Picture area inside the decoded frame, as fractions (0..1) of the frame size. */
++data class VideoContentRect(
++    val left: Float,
++    val top: Float,
++    val right: Float,
++    val bottom: Float,
++) {
++    val width: Float get() = right - left
++    val height: Float get() = bottom - top
++
++    fun union(other: VideoContentRect): VideoContentRect = VideoContentRect(
++        left = min(left, other.left),
++        top = min(top, other.top),
++        right = max(right, other.right),
++        bottom = max(bottom, other.bottom),
++    )
++
++    fun isCloseTo(other: VideoContentRect, tolerance: Float = 0.004f): Boolean =
++        abs(left - other.left) <= tolerance &&
++            abs(top - other.top) <= tolerance &&
++            abs(right - other.right) <= tolerance &&
++            abs(bottom - other.bottom) <= tolerance
++
++    companion object {
++        val Full = VideoContentRect(0f, 0f, 1f, 1f)
++    }
++}
++
++/**
++ * mpv geometry for a picture area, used with `keepaspect=no`: `video-scale-x/y` enlarge the
++ * frame so the picture area covers the window and `video-pan-x/y` move the picture area to the
++ * window center. mpv clips the result to the window, so subtitles stay on screen.
++ */
++data class MpvStretchTransform(
++    val scaleX: Double,
++    val scaleY: Double,
++    val panX: Double,
++    val panY: Double,
++) {
++    companion object {
++        val Identity = MpvStretchTransform(1.0, 1.0, 0.0, 0.0)
++    }
++}
++
++/**
++ * Map a picture area measured on the rendered output (what is on screen while [transform] is
++ * active with `keepaspect=no`) back to frame fractions, clipped to the frame.
++ */
++fun VideoContentRect.mapFromScreen(transform: MpvStretchTransform): VideoContentRect {
++    fun frameX(x: Float) = ((x - 0.5) / transform.scaleX + 0.5 - transform.panX).toFloat().coerceIn(0f, 1f)
++    fun frameY(y: Float) = ((y - 0.5) / transform.scaleY + 0.5 - transform.panY).toFloat().coerceIn(0f, 1f)
++    return VideoContentRect(frameX(left), frameY(top), frameX(right), frameY(bottom))
++}
++
++/** Bars of letterboxed and pillarboxed video are centered. Use the thicker bar on both sides. */
++fun VideoContentRect.symmetric(): VideoContentRect {
++    val horizontal = max(left, 1f - right)
++    val vertical = max(top, 1f - bottom)
++    return VideoContentRect(horizontal, vertical, 1f - horizontal, 1f - vertical)
++}
++
++/** A downscaled luma (0..255) picture of one video frame. */
++class LumaFrame(val luma: ByteArray, val width: Int, val height: Int) {
++    fun detectContent(): VideoContentRect? = BlackBarDetector.detect(luma, width, height)
++}
++
++fun VideoContentRect.toMpvStretchTransform(): MpvStretchTransform {
++    if (width <= 0f || height <= 0f) return MpvStretchTransform.Identity
++    return MpvStretchTransform(
++        scaleX = 1.0 / width,
++        scaleY = 1.0 / height,
++        panX = 0.5 - (left + right) / 2.0,
++        panY = 0.5 - (top + bottom) / 2.0,
++    )
++}
++
++object BlackBarDetector {
++    /** Luma (0..255) above this value counts as picture. Limited-range black is 16. */
++    private const val LUMA_LIMIT = 30
++
++    /** A row or column holds picture when this fraction of its pixels is above [LUMA_LIMIT]. */
++    private const val LINE_CONTENT_FRACTION = 0.02f
++
++    /** Bars thinner than this fraction of the frame are ignored (no visible gain, avoids jitter). */
++    private const val MIN_BAR_FRACTION = 0.006f
++
++    /** A sample whose picture is smaller than this is a dark scene or a logo, not the picture area. */
++    private const val MIN_CONTENT_WIDTH = 0.45f
++    private const val MIN_CONTENT_HEIGHT = 0.35f
++
++    /**
++     * Measure the picture area in one luma sample ([width] x [height], row stride [stride]).
++     * Returns null when the sample is too dark to tell (black frame, fade, dark scene).
++     */
++    fun detect(luma: ByteArray, width: Int, height: Int, stride: Int = width): VideoContentRect? {
++        if (width < 8 || height < 8 || luma.size < stride * (height - 1) + width) return null
++
++        val rowThreshold = max(2, (width * LINE_CONTENT_FRACTION).toInt())
++        var top = -1
++        var bottom = -1
++        for (y in 0 until height) {
++            if (countBright(luma, y * stride, 1, width) >= rowThreshold) {
++                if (top < 0) top = y
++                bottom = y
++            }
++        }
++        if (top < 0) return null
++
++        val rows = bottom - top + 1
++        val columnThreshold = max(2, (rows * LINE_CONTENT_FRACTION).toInt())
++        var left = -1
++        var right = -1
++        for (x in 0 until width) {
++            if (countBright(luma, top * stride + x, stride, rows) >= columnThreshold) {
++                if (left < 0) left = x
++                right = x
++            }
++        }
++        if (left < 0) return null
++
++        var rect = VideoContentRect(
++            left = left.toFloat() / width,
++            top = top.toFloat() / height,
++            right = (right + 1).toFloat() / width,
++            bottom = (bottom + 1).toFloat() / height,
++        )
++        rect = rect.copy(
++            left = if (rect.left < MIN_BAR_FRACTION) 0f else rect.left,
++            top = if (rect.top < MIN_BAR_FRACTION) 0f else rect.top,
++            right = if (1f - rect.right < MIN_BAR_FRACTION) 1f else rect.right,
++            bottom = if (1f - rect.bottom < MIN_BAR_FRACTION) 1f else rect.bottom,
++        )
++        if (rect.width < MIN_CONTENT_WIDTH || rect.height < MIN_CONTENT_HEIGHT) return null
++        return rect
++    }
++
++    /** Luma of packed 0xAARRGGBB pixels (Android Bitmap), BT.601 weights. */
++    fun lumaFromArgb(pixels: IntArray, width: Int, height: Int): ByteArray {
++        val out = ByteArray(width * height)
++        for (i in 0 until min(pixels.size, out.size)) {
++            val c = pixels[i]
++            val r = (c shr 16) and 0xFF
++            val g = (c shr 8) and 0xFF
++            val b = c and 0xFF
++            out[i] = ((r * 77 + g * 150 + b * 29) shr 8).toByte()
++        }
++        return out
++    }
++
++    private fun countBright(luma: ByteArray, start: Int, step: Int, count: Int): Int {
++        var bright = 0
++        var index = start
++        repeat(count) {
++            if ((luma[index].toInt() and 0xFF) > LUMA_LIMIT) bright++
++            index += step
++        }
++        return bright
++    }
++}
++
++/**
++ * Collects samples for one title and decides when the stretch geometry changes.
++ * The picture area is the union of all valid samples, so it only grows.
++ */
++class BlackBarTracker {
++    private var union: VideoContentRect? = null
++    private var validSamples = 0
++    private var committed: VideoContentRect? = null
++
++    /** Sample faster until the first few valid samples are in. */
++    val isCalibrating: Boolean get() = validSamples < CALIBRATION_SAMPLES
++
++    val current: VideoContentRect? get() = committed
++
++    fun reset() {
++        union = null
++        validSamples = 0
++        committed = null
++    }
++
++    /** Feed one sample. Returns the new picture area when it changed, else null. */
++    fun offer(sample: VideoContentRect?): VideoContentRect? {
++        if (sample == null) return null
++        validSamples++
++        val merged = union?.union(sample) ?: sample
++        union = merged
++        if (validSamples < CALIBRATION_SAMPLES) return null
++        val previous = committed
++        if (previous != null && previous.isCloseTo(merged)) return null
++        committed = merged
++        return merged
++    }
++
++    companion object {
++        const val CALIBRATION_SAMPLES = 3
++        const val CALIBRATION_INTERVAL_MS = 1_200L
++        const val STEADY_INTERVAL_MS = 8_000L
++        const val FIRST_SAMPLE_DELAY_MS = 800L
++
++        /** Longest side of the sampled frame. Enough to place bar edges within ~0.3%. */
++        const val SAMPLE_MAX_DIMENSION = 320
++    }
++}
++
++/**
++ * Runs the Custom Stretch sampling loop while [enabled]. [sample] returns the picture area of
++ * the current frame (null when it cannot tell). [onContentRect] receives null when sampling
++ * starts (plain stretch of the whole frame) and then every new picture area.
++ * The loop restarts, with a fresh tracker, when [sourceKey] changes.
++ */
++@Composable
++fun CustomStretchSamplingEffect(
++    enabled: Boolean,
++    sourceKey: Any?,
++    sample: suspend () -> VideoContentRect?,
++    onContentRect: (VideoContentRect?) -> Unit,
++) {
++    val latestSample = rememberUpdatedState(sample)
++    val latestOnContentRect = rememberUpdatedState(onContentRect)
++    LaunchedEffect(enabled, sourceKey) {
++        latestOnContentRect.value(null)
++        if (!enabled) return@LaunchedEffect
++        val tracker = BlackBarTracker()
++        delay(BlackBarTracker.FIRST_SAMPLE_DELAY_MS)
++        while (isActive) {
++            val rect = runCatching { latestSample.value() }.getOrNull()
++            tracker.offer(rect)?.let { latestOnContentRect.value(it) }
++            delay(
++                if (tracker.isCalibrating) BlackBarTracker.CALIBRATION_INTERVAL_MS
++                else BlackBarTracker.STEADY_INTERVAL_MS,
++            )
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerLayout.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerLayout.kt
+index a6993f7a..b9519ab4 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerLayout.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerLayout.kt
+@@ -18,6 +18,7 @@ import nuvio.composeapp.generated.resources.Res
+ import nuvio.composeapp.generated.resources.compose_player_resize_fill
+ import nuvio.composeapp.generated.resources.compose_player_resize_fit
+ import nuvio.composeapp.generated.resources.compose_player_resize_zoom
++import nuvio.composeapp.generated.resources.compose_player_resize_custom_stretch
+ import org.jetbrains.compose.resources.StringResource
+ import kotlin.math.max
+ 
+@@ -138,7 +139,8 @@ internal fun PlayerResizeMode.next(): PlayerResizeMode =
+     when (this) {
+         PlayerResizeMode.Fit -> PlayerResizeMode.Fill
+         PlayerResizeMode.Fill -> PlayerResizeMode.Zoom
+-        PlayerResizeMode.Zoom -> PlayerResizeMode.Fit
++        PlayerResizeMode.Zoom -> PlayerResizeMode.CustomStretch
++        PlayerResizeMode.CustomStretch -> PlayerResizeMode.Fit
+     }
+ 
+ internal val PlayerResizeMode.labelRes: StringResource
+@@ -146,6 +148,7 @@ internal val PlayerResizeMode.labelRes: StringResource
+         PlayerResizeMode.Fit -> Res.string.compose_player_resize_fit
+         PlayerResizeMode.Fill -> Res.string.compose_player_resize_fill
+         PlayerResizeMode.Zoom -> Res.string.compose_player_resize_zoom
++        PlayerResizeMode.CustomStretch -> Res.string.compose_player_resize_custom_stretch
+     }
+ 
+ internal fun formatPlaybackTime(positionMs: Long): String {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerModels.kt
+index 40ab3ab6..38cc2533 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerModels.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerModels.kt
+@@ -79,6 +79,7 @@ enum class PlayerResizeMode {
+     Fit,
+     Fill,
+     Zoom,
++    CustomStretch,
+ }
+ 
+ enum class AndroidPlaybackEngine(
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt
+index 606cab52..40e92b22 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt
+@@ -28,6 +28,7 @@ import nuvio.composeapp.generated.resources.compose_player_downloaded
+ import nuvio.composeapp.generated.resources.compose_player_resize_fill
+ import nuvio.composeapp.generated.resources.compose_player_resize_fit
+ import nuvio.composeapp.generated.resources.compose_player_resize_zoom
++import nuvio.composeapp.generated.resources.compose_player_resize_custom_stretch
+ import nuvio.composeapp.generated.resources.generic_unknown
+ import nuvio.composeapp.generated.resources.parental_alcohol
+ import nuvio.composeapp.generated.resources.parental_frightening
+@@ -114,6 +115,7 @@ internal fun PlayerScreenContent(args: PlayerScreenArgs) {
+         runtime.resizeModeFitLabel = stringResource(Res.string.compose_player_resize_fit)
+         runtime.resizeModeFillLabel = stringResource(Res.string.compose_player_resize_fill)
+         runtime.resizeModeZoomLabel = stringResource(Res.string.compose_player_resize_zoom)
++        runtime.resizeModeCustomStretchLabel = stringResource(Res.string.compose_player_resize_custom_stretch)
+         runtime.downloadedLabel = stringResource(Res.string.compose_player_downloaded)
+         runtime.airsPrefix = stringResource(Res.string.compose_player_airs_prefix)
+         runtime.tbaLabel = stringResource(Res.string.compose_player_tba)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
+index d54bb1ee..8b86b9b0 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
+@@ -226,6 +226,7 @@ internal fun PlayerScreenRuntime.cycleResizeMode() {
+             PlayerResizeMode.Fit -> resizeModeFitLabel
+             PlayerResizeMode.Fill -> resizeModeFillLabel
+             PlayerResizeMode.Zoom -> resizeModeZoomLabel
++            PlayerResizeMode.CustomStretch -> resizeModeCustomStretchLabel
+         },
+     )
+     controlsVisible = true
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
+index 650f1f31..4486c122 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
+@@ -85,6 +85,7 @@ internal class PlayerScreenRuntime(
+     var resizeModeFitLabel: String = ""
+     var resizeModeFillLabel: String = ""
+     var resizeModeZoomLabel: String = ""
++    var resizeModeCustomStretchLabel: String = ""
+     var downloadedLabel: String = ""
+     var airsPrefix: String = ""
+     var tbaLabel: String = ""
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerBridge.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerBridge.kt
+index 92907fdd..9c1021ad 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerBridge.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerBridge.kt
+@@ -1,5 +1,6 @@
+ package com.nuvio.app.features.player
+ 
++import platform.Foundation.NSData
+ import platform.UIKit.UIViewController
+ 
+ /**
+@@ -44,7 +45,15 @@ interface NuvioPlayerBridge {
+     fun configureAudioOutput(audioOutput: String)
+     fun setPlaybackSpeed(speed: Float)
+     fun setMuted(muted: Boolean)
+-    fun setResizeMode(mode: Int) // 0=Fit, 1=Fill, 2=Zoom
++    fun setResizeMode(mode: Int) // 0=Fit, 1=Fill, 2=Zoom, 3=Custom Stretch
++    /** Custom Stretch geometry: mpv video-scale-x/y and video-pan-x/y (used with keepaspect=no). */
++    fun setVideoTransform(scaleX: Double, scaleY: Double, panX: Double, panY: Double)
++    /**
++     * Downscaled luma of the current decoded frame (screenshot-raw "video"), at most
++     * [maxDimension] on the longest side. Layout: width and height as little-endian UInt16,
++     * then width * height luma bytes. Null when no frame is available.
++     */
++    fun sampleVideoLuma(maxDimension: Int): NSData?
+     fun syncVideoSurfaceLayout(width: Double, height: Double)
+     fun getAudioTrackCount(): Int
+     fun getAudioTrackIndex(at: Int): Int
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerEngine.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerEngine.ios.kt
+index 03a4a239..a33864c8 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerEngine.ios.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerEngine.ios.kt
+@@ -26,6 +26,10 @@ import androidx.compose.ui.platform.LocalDensity
+ import androidx.lifecycle.compose.collectAsStateWithLifecycle
+ import co.touchlab.kermit.Logger
+ import kotlinx.cinterop.ExperimentalForeignApi
++import kotlinx.cinterop.addressOf
++import kotlinx.cinterop.usePinned
++import platform.Foundation.NSData
++import platform.posix.memcpy
+ import kotlinx.cinterop.useContents
+ import kotlinx.coroutines.delay
+ import kotlinx.coroutines.isActive
+@@ -315,10 +319,23 @@ actual fun PlatformPlayerSurface(
+                 PlayerResizeMode.Fit -> 0
+                 PlayerResizeMode.Fill -> 1
+                 PlayerResizeMode.Zoom -> 2
++                PlayerResizeMode.CustomStretch -> 3
+             }
+         )
+     }
+ 
++    CustomStretchSamplingEffect(
++        enabled = resizeMode == PlayerResizeMode.CustomStretch,
++        sourceKey = listOf(sourceUrl, sourceAudioUrl.orEmpty()),
++        sample = {
++            bridge.sampleVideoLuma(BlackBarTracker.SAMPLE_MAX_DIMENSION)?.toLumaFrame()?.detectContent()
++        },
++        onContentRect = { rect ->
++            val transform = rect?.toMpvStretchTransform() ?: MpvStretchTransform.Identity
++            bridge.setVideoTransform(transform.scaleX, transform.scaleY, transform.panX, transform.panY)
++        },
++    )
++
+     LaunchedEffect(bridge, playerSettings) {
+         bridge.applyIosVideoOutputSettings(playerSettings)
+     }
+@@ -474,3 +491,15 @@ private fun encodePlaybackHeadersForBridge(headers: Map<String, String>): String
+         Json.encodeToString(sanitized)
+     }.getOrNull()
+ }
++
++@OptIn(ExperimentalForeignApi::class)
++private fun NSData.toLumaFrame(): LumaFrame? {
++    val size = length.toInt()
++    if (size <= 4) return null
++    val raw = ByteArray(size)
++    raw.usePinned { pinned -> memcpy(pinned.addressOf(0), bytes, length) }
++    val width = (raw[0].toInt() and 0xFF) or ((raw[1].toInt() and 0xFF) shl 8)
++    val height = (raw[2].toInt() and 0xFF) or ((raw[3].toInt() and 0xFF) shl 8)
++    if (width <= 0 || height <= 0 || size < 4 + width * height) return null
++    return LumaFrame(raw.copyOfRange(4, 4 + width * height), width, height)
++}

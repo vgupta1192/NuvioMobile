@@ -1,0 +1,123 @@
+diff --git a/iosApp/iosApp/Player/MPVPlayerBridge.swift b/iosApp/iosApp/Player/MPVPlayerBridge.swift
+index 08149862..b9c0cf31 100644
+--- a/iosApp/iosApp/Player/MPVPlayerBridge.swift
++++ b/iosApp/iosApp/Player/MPVPlayerBridge.swift
+@@ -104,6 +104,12 @@ final class MPVPlayerBridgeImpl: NSObject, NuvioPlayerBridge {
+     func setPlaybackSpeed(speed: Float) { playerVC?.setSpeed(speed) }
+     func setMuted(muted: Bool) { playerVC?.setMuted(muted) }
+     func setResizeMode(mode: Int32) { playerVC?.setResize(Int(mode)) }
++    func setVideoTransform(scaleX: Double, scaleY: Double, panX: Double, panY: Double) {
++        playerVC?.setVideoTransform(scaleX: scaleX, scaleY: scaleY, panX: panX, panY: panY)
++    }
++    func sampleVideoLuma(maxDimension: Int32) -> Data? {
++        playerVC?.sampleVideoLuma(maxDimension: Int(maxDimension))
++    }
+     func syncVideoSurfaceLayout(width: Double, height: Double) {
+         playerVC?.syncVideoSurfaceLayout(size: CGSize(width: width, height: height))
+     }
+@@ -747,7 +753,13 @@ final class MPVPlayerViewController: UIViewController {
+ 
+     func setResize(_ mode: Int) {
+         guard mpv != nil else { return }
++        let wasCustomStretch = customStretchActive
++        customStretchActive = mode == 3
++        if wasCustomStretch || customStretchActive { applyCustomStretchTransform() }
+         switch mode {
++        case 3: // Custom Stretch: stretch the picture area over the whole view
++            setStringProperty("panscan", "0.0")
++            setStringProperty("video-unscaled", "no")
+         case 1: // Fill
+             setStringProperty("panscan", "1.0")
+             setStringProperty("video-unscaled", "no")
+@@ -760,6 +772,91 @@ final class MPVPlayerViewController: UIViewController {
+         }
+     }
+ 
++    // MARK: - Custom Stretch
++
++    private var customStretchActive = false
++    private var customStretchTransform: (scaleX: Double, scaleY: Double, panX: Double, panY: Double) = (1, 1, 0, 0)
++
++    func setVideoTransform(scaleX: Double, scaleY: Double, panX: Double, panY: Double) {
++        customStretchTransform = (scaleX, scaleY, panX, panY)
++        applyCustomStretchTransform()
++    }
++
++    private func applyCustomStretchTransform() {
++        guard mpv != nil else { return }
++        let transform = customStretchActive ? customStretchTransform : (scaleX: 1, scaleY: 1, panX: 0, panY: 0)
++        setStringProperty("keepaspect", customStretchActive ? "no" : "yes")
++        var scaleX = transform.scaleX
++        var scaleY = transform.scaleY
++        var panX = transform.panX
++        var panY = transform.panY
++        checkError(mpv_set_property(mpv, "video-scale-x", MPV_FORMAT_DOUBLE, &scaleX))
++        checkError(mpv_set_property(mpv, "video-scale-y", MPV_FORMAT_DOUBLE, &scaleY))
++        checkError(mpv_set_property(mpv, "video-pan-x", MPV_FORMAT_DOUBLE, &panX))
++        checkError(mpv_set_property(mpv, "video-pan-y", MPV_FORMAT_DOUBLE, &panY))
++    }
++
++    /// Downscaled luma of the current decoded frame: UInt16 LE width, UInt16 LE height, then luma bytes.
++    func sampleVideoLuma(maxDimension: Int) -> Data? {
++        guard mpv != nil, maxDimension > 0 else { return nil }
++        var result = mpv_node()
++        var cargs = makeCArgs("screenshot-raw", ["video"]).map { $0.flatMap { UnsafePointer<CChar>(strdup($0)) } }
++        defer { for ptr in cargs where ptr != nil { free(UnsafeMutablePointer(mutating: ptr!)) } }
++        guard mpv_command_ret(mpv, &cargs, &result) >= 0 else { return nil }
++        defer { mpv_free_node_contents(&result) }
++        guard result.format == MPV_FORMAT_NODE_MAP, let list = result.u.list else { return nil }
++
++        var width = 0
++        var height = 0
++        var stride = 0
++        var format = "bgr0"
++        var pixels: UnsafeMutableRawPointer?
++        var pixelBytes = 0
++        for index in 0..<Int(list.pointee.num) {
++            guard let keyPointer = list.pointee.keys?[index] else { continue }
++            let value = list.pointee.values[index]
++            switch String(cString: keyPointer) {
++            case "w": width = Int(value.u.int64)
++            case "h": height = Int(value.u.int64)
++            case "stride": stride = Int(value.u.int64)
++            case "format":
++                if value.format == MPV_FORMAT_STRING, let string = value.u.string { format = String(cString: string) }
++            case "data":
++                if value.format == MPV_FORMAT_BYTE_ARRAY, let byteArray = value.u.ba {
++                    pixels = byteArray.pointee.data
++                    pixelBytes = Int(byteArray.pointee.size)
++                }
++            default: break
++            }
++        }
++        guard format == "bgr0", width > 0, height > 0, stride >= width * 4,
++              let pixels, pixelBytes >= stride * height else { return nil }
++
++        let scale = min(1.0, Double(maxDimension) / Double(max(width, height)))
++        let outWidth = max(8, Int((Double(width) * scale).rounded()))
++        let outHeight = max(8, Int((Double(height) * scale).rounded()))
++        var output = Data(count: 4 + outWidth * outHeight)
++        output.withUnsafeMutableBytes { (buffer: UnsafeMutableRawBufferPointer) in
++            let out = buffer.bindMemory(to: UInt8.self)
++            out[0] = UInt8(outWidth & 0xFF)
++            out[1] = UInt8((outWidth >> 8) & 0xFF)
++            out[2] = UInt8(outHeight & 0xFF)
++            out[3] = UInt8((outHeight >> 8) & 0xFF)
++            let source = pixels.assumingMemoryBound(to: UInt8.self)
++            for y in 0..<outHeight {
++                let sourceY = min(height - 1, (y * height + height / 2) / outHeight)
++                let row = source + sourceY * stride
++                for x in 0..<outWidth {
++                    let sourceX = min(width - 1, (x * width + width / 2) / outWidth)
++                    let pixel = row + sourceX * 4
++                    let luma = (Int(pixel[2]) * 77 + Int(pixel[1]) * 150 + Int(pixel[0]) * 29) >> 8
++                    out[4 + y * outWidth + x] = UInt8(luma)
++                }
++            }
++        }
++        return output
++    }
++
+     // MARK: - Track selection
+ 
+     func selectAudio(_ trackId: Int) {

@@ -136,7 +136,7 @@ jobs:
         if: steps.ver.outputs.should_build == 'true'
         run: |
           # optional-ports
-          for P in livetv-robustness; do
+          for P in livetv-robustness custom-stretch; do
             if git apply "fork-src/.github/patches/$P.patch"; then
               echo "applied $P.patch"
             else
@@ -411,6 +411,24 @@ jobs:
             fi
           done
           git diff --stat
+
+      # Custom Stretch (optional): the shared Kotlin patch plus its Swift half for the MPVKit
+      # bridge. Applied together or not at all, since the Kotlin bridge interface needs the
+      # Swift side to compile.
+      - name: Apply optional Custom Stretch patches (iOS)
+        if: steps.ver.outputs.should_build == 'true'
+        run: |
+          if git apply --check fork-src/.github/patches/custom-stretch.patch \
+             && git apply fork-src/.github/patches/custom-stretch.patch; then
+            if git apply fork-src/.github/patches/custom-stretch-ios.patch; then
+              echo "applied custom-stretch.patch and custom-stretch-ios.patch"
+            else
+              git apply -R fork-src/.github/patches/custom-stretch.patch
+              echo "::warning::custom-stretch-ios.patch no longer applies; building without Custom Stretch"
+            fi
+          else
+            echo "::warning::custom-stretch.patch no longer applies to upstream; building without it"
+          fi
 
       - name: Create local.properties (self-hosted backend)
         if: steps.ver.outputs.should_build == 'true'
