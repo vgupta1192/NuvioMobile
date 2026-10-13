@@ -887,10 +887,10 @@ index 00000000..f4e0a5ef
 +private const val FILE_TOKENS = "tokens.txt"
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
 new file mode 100644
-index 00000000..13ae425a
+index 00000000..e3ec255b
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
-@@ -0,0 +1,843 @@
+@@ -0,0 +1,927 @@
 +@file:OptIn(androidx.media3.common.util.UnstableApi::class)
 +
 +package com.nuvio.app.features.player.generated
@@ -921,7 +921,11 @@ index 00000000..13ae425a
 +import com.nuvio.app.features.player.audiosync.asr.AsrModel
 +import com.nuvio.app.features.player.audiosync.asr.SpeechSegmenter
 +import com.nuvio.app.features.player.audiosync.selectedAudioFormat
++import java.io.File
++import java.security.MessageDigest
 +import kotlinx.coroutines.CoroutineScope
++import org.json.JSONArray
++import org.json.JSONObject
 +import kotlinx.coroutines.Job
 +import kotlinx.coroutines.delay
 +import kotlinx.coroutines.isActive
@@ -1072,6 +1076,15 @@ index 00000000..13ae425a
 +                return
 +            }
 +            val language = spokenLanguage(current)
++            // Lines made earlier for this title and stream come back at once; only the rest is
++            // generated (and, online, paid for).
++            repeat(40) {
++                if (current.durationMs > 0 || current.stopped) return@repeat
++                Thread.sleep(250L)
++            }
++            val covered = ArrayList<LongArray>()
++            val cache = cacheFile(current, language)
++            cache?.let { loadCache(it, current, covered) }
 +            // Whisper translates from the audio itself, which reads far better than recognising
 +            // first and translating text; the faster models are opt-in. English needs no translation.
 +            val fast = GeneratedSubtitles.fastAsianModel.value
@@ -1120,7 +1133,6 @@ index 00000000..13ae425a
 +                )
 +            }
 +            current.status = "Generating subtitles from the audio…"
-+            val covered = ArrayList<LongArray>()
 +            var switchedToWhisper = false
 +            var deeplFailures = 0
 +            var failures = 0
@@ -1251,6 +1263,7 @@ index 00000000..13ae425a
 +                    "generated subtitles: ${fromMs / 1_000}-${toMs / 1_000}s → $lines lines from ${segments.size} " +
 +                        "speech segments in ${(System.currentTimeMillis() - startedAt) / 1_000}s",
 +                )
++                cache?.let { saveCache(it, current, covered) }
 +            }
 +        } catch (_: InterruptedException) {
 +        } catch (error: Throwable) {
@@ -1361,6 +1374,75 @@ index 00000000..13ae425a
 +            decoder.release()
 +        }
 +        return synchronized(segments) { segments.sortedBy { it.first } }
++    }
++
++    /**
++     * Where this title's generated lines are kept: one file per title/episode (or stream address),
++     * stream duration (different releases are timed differently), online or on-device, and spoken
++     * language. Null until the duration is known.
++     */
++    private fun cacheFile(current: Run, language: String): File? {
++        val durationSec = current.durationMs.takeIf { it > 0 }?.div(1_000L) ?: return null
++        val content = GeneratedSubtitles.contentId?.takeIf { it.isNotBlank() } ?: audioUrl.substringBefore('?')
++        val engine = if (current.url == GeneratedSubtitles.ONLINE_URL) "online" else "device"
++        val key = "$content|$durationSec|$engine|$language"
++        val digest = MessageDigest.getInstance("SHA-1").digest(key.toByteArray())
++            .joinToString("") { "%02x".format(it) }
++        return File(appContext.filesDir, "$CACHE_DIR/$digest.json")
++    }
++
++    private fun loadCache(file: File, current: Run, covered: MutableList<LongArray>) {
++        if (!file.isFile) return
++        try {
++            val json = JSONObject(file.readText())
++            val lines = json.getJSONArray("cues")
++            val loaded = ArrayList<CuesWithTiming>(lines.length())
++            for (index in 0 until lines.length()) {
++                val line = lines.getJSONArray(index)
++                loaded += cue(line.getLong(0), line.getLong(1), line.getString(2))
++            }
++            val ranges = json.getJSONArray("covered")
++            for (index in 0 until ranges.length()) {
++                val range = ranges.getJSONArray(index)
++                addCovered(covered, range.getLong(0), range.getLong(1))
++            }
++            synchronized(current.cues) {
++                current.cues += loaded
++                current.cues.sortBy { it.startTimeUs }
++                current.cuesVersion++
++            }
++            file.setLastModified(System.currentTimeMillis())
++            SyncLog.i("generated subtitles: ${loaded.size} saved lines reused, ${covered.sumOf { it[1] - it[0] } / 1_000}s already done")
++        } catch (error: Exception) {
++            SyncLog.w("generated subtitles: saved lines unreadable: ${error.message}")
++            file.delete()
++        }
++    }
++
++    private fun saveCache(file: File, current: Run, covered: List<LongArray>) {
++        try {
++            val cues = JSONArray()
++            synchronized(current.cues) {
++                for (entry in current.cues) {
++                    val text = entry.cues.joinToString("\n") { it.text?.toString().orEmpty() }
++                    val startMs = entry.startTimeUs / 1_000L
++                    cues.put(JSONArray().put(startMs).put(startMs + entry.durationUs / 1_000L).put(text))
++                }
++            }
++            val ranges = JSONArray()
++            covered.forEach { ranges.put(JSONArray().put(it[0]).put(it[1])) }
++            file.parentFile?.mkdirs()
++            val partial = File(file.parentFile, file.name + ".part")
++            partial.writeText(JSONObject().put("cues", cues).put("covered", ranges).toString())
++            partial.renameTo(file)
++            // Keep the newest titles only.
++            file.parentFile?.listFiles { candidate -> candidate.name.endsWith(".json") }
++                ?.sortedByDescending { it.lastModified() }
++                ?.drop(MAX_CACHED_TITLES)
++                ?.forEach { it.delete() }
++        } catch (error: Exception) {
++            SyncLog.w("generated subtitles: couldn't save lines: ${error.message}")
++        }
 +    }
 +
 +    /** The previous lines sent to DeepL, as context for the next request. */
@@ -1505,6 +1587,8 @@ index 00000000..13ae425a
 +        private const val SEEK_AWAY_MS = 60_000L
 +        private const val MERGE_GAP_MS = 800L
 +        private const val DEEPL_CONTEXT_LINES = 4
++        private const val CACHE_DIR = "generated-subtitles/cache"
++        private const val MAX_CACHED_TITLES = 200
 +        private const val MERGE_MAX_MS = 12_000L
 +        /** Files with a sparse index seek well before the target; reading from there is fine. */
 +        private const val EARLY_SEEK_MS = 180_000L
@@ -1941,10 +2025,10 @@ index 00000000..c74c81c3
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitles.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitles.kt
 new file mode 100644
-index 00000000..c7a19fb8
+index 00000000..6426f118
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitles.kt
-@@ -0,0 +1,207 @@
+@@ -0,0 +1,210 @@
 +package com.nuvio.app.features.player
 +
 +import kotlinx.coroutines.flow.MutableStateFlow
@@ -2013,6 +2097,9 @@ index 00000000..c7a19fb8
 +        MODE_MISSING to "When no subtitle in your language is found",
 +        MODE_ALWAYS to "Always, even when subtitles exist",
 +    )
++
++    /** The playing title/episode (e.g. "tt2907640:1:3"); generated lines are saved per title. */
++    var contentId: String? = null
 +
 +    /** Set by a platform that can generate subtitles (Android). */
 +    var supported: Boolean = false
@@ -2153,7 +2240,7 @@ index 00000000..c7a19fb8
 +    fun deleteModels()
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerRuntimeAutoSync.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerRuntimeAutoSync.kt
-index 292c21e6..3720fbc0 100644
+index 292c21e6..564ac5f9 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerRuntimeAutoSync.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerRuntimeAutoSync.kt
 @@ -10,7 +10,7 @@ import com.nuvio.app.features.autosync.AutoSyncSubtitleCandidate
@@ -2165,6 +2252,14 @@ index 292c21e6..3720fbc0 100644
          AutoSyncSubtitleCandidate(
              url = subtitle.url,
              language = subtitle.language,
+@@ -67,6 +67,7 @@ internal fun PlayerScreenRuntime.BindAutoSyncRuntimeEffects() {
+     LaunchedEffect(playerController, activeAddonSubtitleType, activeVideoId) {
+         val videoId = activeVideoId ?: return@LaunchedEffect
+         (playerController as? AutoSyncPlayerController)?.setAutoSyncContent(activeAddonSubtitleType, videoId)
++        GeneratedSubtitles.contentId = videoId // Generated subtitles hook: lines are saved per title
+     }
+     LaunchedEffect(playerController, isLoadingAddonSubtitles, addonSubtitles) {
+         retryPreferredSubtitleAfterAddonsLoaded()
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt
 index 40e92b22..9e849554 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt
