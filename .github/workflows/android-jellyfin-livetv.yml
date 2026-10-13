@@ -3,7 +3,7 @@ name: Build NuvioMobile Jellyfin+LiveTV (upstream release sync)
 
 on:
   push:
-    branches: [jellyfin-livetv]
+    branches: [master]
     paths: ['.github/**']
   workflow_dispatch:
     # Builds are triggered by the local watcher on vgupta1192's box
@@ -292,7 +292,7 @@ jobs:
           done
           MSG="📺📱 NuvioMobile Jellyfin+LiveTV ${VER} is ready
           Upstream release: ${VER}
-          Release build (R8-minified), arm64-v8a APK. Installs alongside the other Nuvio apps as \"Nuvio Jellyfin TV\" (own login/settings; Live TV + Jellyfin)
+          Release build (R8-minified), arm64-v8a APK. Installs alongside official Nuvio as \"Nuvio\" (own login/settings; Live TV + Jellyfin)
           ${HOW}
           ${HASH}
           Download: https://github.com/vgupta1192/NuvioMobile/releases/tag/${REL_TAG}"

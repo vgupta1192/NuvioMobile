@@ -19,5 +19,5 @@ index 8bc40b6..a163e41 100644
  <?xml version="1.0" encoding="utf-8"?>
  <resources>
 -    <string name="app_name">Nuvio Live TV</string>
-+    <string name="app_name">Nuvio Jellyfin TV</string>
++    <string name="app_name">Nuvio</string>
  </resources>
