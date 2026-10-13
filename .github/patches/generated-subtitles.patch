@@ -887,10 +887,10 @@ index 00000000..f4e0a5ef
 +private const val FILE_TOKENS = "tokens.txt"
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
 new file mode 100644
-index 00000000..e3ec255b
+index 00000000..8ea125fa
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
-@@ -0,0 +1,927 @@
+@@ -0,0 +1,953 @@
 +@file:OptIn(androidx.media3.common.util.UnstableApi::class)
 +
 +package com.nuvio.app.features.player.generated
@@ -923,7 +923,10 @@ index 00000000..e3ec255b
 +import com.nuvio.app.features.player.audiosync.selectedAudioFormat
 +import java.io.File
 +import java.security.MessageDigest
++import com.nuvio.app.features.player.GeneratedSubtitleSync
 +import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.runBlocking
++import kotlinx.coroutines.withTimeoutOrNull
 +import org.json.JSONArray
 +import org.json.JSONObject
 +import kotlinx.coroutines.Job
@@ -1083,8 +1086,8 @@ index 00000000..e3ec255b
 +                Thread.sleep(250L)
 +            }
 +            val covered = ArrayList<LongArray>()
-+            val cache = cacheFile(current, language)
-+            cache?.let { loadCache(it, current, covered) }
++            val cache = cacheKey(current, language, online = current.url == GeneratedSubtitles.ONLINE_URL)
++            cache?.let { loadCache(it, current, covered, otherKey = cacheKey(current, language, online = current.url != GeneratedSubtitles.ONLINE_URL)) }
 +            // Whisper translates from the audio itself, which reads far better than recognising
 +            // first and translating text; the faster models are opt-in. English needs no translation.
 +            val fast = GeneratedSubtitles.fastAsianModel.value
@@ -1377,24 +1380,40 @@ index 00000000..e3ec255b
 +    }
 +
 +    /**
-+     * Where this title's generated lines are kept: one file per title/episode (or stream address),
-+     * stream duration (different releases are timed differently), online or on-device, and spoken
-+     * language. Null until the duration is known.
++     * The key of this title's generated lines, the same on every device: title/episode (or stream
++     * address), stream duration (different releases are timed differently), online or on-device,
++     * and spoken language. Null until the duration is known.
 +     */
-+    private fun cacheFile(current: Run, language: String): File? {
-+        val durationSec = current.durationMs.takeIf { it > 0 }?.div(1_000L) ?: return null
++    private fun cacheKey(current: Run, language: String, online: Boolean): String? {
++        val durationSec = current.durationMs.takeIf { it > 0 }?.let { (it + 500L) / 1_000L } ?: return null
 +        val content = GeneratedSubtitles.contentId?.takeIf { it.isNotBlank() } ?: audioUrl.substringBefore('?')
-+        val engine = if (current.url == GeneratedSubtitles.ONLINE_URL) "online" else "device"
-+        val key = "$content|$durationSec|$engine|$language"
-+        val digest = MessageDigest.getInstance("SHA-1").digest(key.toByteArray())
-+            .joinToString("") { "%02x".format(it) }
-+        return File(appContext.filesDir, "$CACHE_DIR/$digest.json")
++        val key = "$content|$durationSec|${if (online) "online" else "device"}|$language"
++        return MessageDigest.getInstance("SHA-1").digest(key.toByteArray()).joinToString("") { "%02x".format(it) }
 +    }
 +
-+    private fun loadCache(file: File, current: Run, covered: MutableList<LongArray>) {
-+        if (!file.isFile) return
++    private fun cacheFile(key: String): File = File(appContext.filesDir, "$CACHE_DIR/$key.json")
++
++    /**
++     * Loads saved lines: this device's copy, merged with the copy in the Nuvio account (made on any
++     * device). With neither, lines made the other way (online / on this device) are reused.
++     */
++    private fun loadCache(key: String, current: Run, covered: MutableList<LongArray>, otherKey: String?) {
++        val local = cacheFile(key).takeIf { it.isFile }?.let { runCatching { it.readText() }.getOrNull() }
++        val remote = runBlocking { withTimeoutOrNull(SYNC_TIMEOUT_MS) { GeneratedSubtitleSync.pull(key) } }
++        var payloads = listOfNotNull(local, remote)
++        if (payloads.isEmpty() && otherKey != null) {
++            payloads = listOfNotNull(
++                cacheFile(otherKey).takeIf { it.isFile }?.let { runCatching { it.readText() }.getOrNull() },
++                runBlocking { withTimeoutOrNull(SYNC_TIMEOUT_MS) { GeneratedSubtitleSync.pull(otherKey) } },
++            )
++        }
++        payloads.forEach { applyPayload(it, current, covered) }
++        if (remote != null) SyncLog.i("generated subtitles: lines from your Nuvio account found")
++    }
++
++    private fun applyPayload(payload: String, current: Run, covered: MutableList<LongArray>) {
 +        try {
-+            val json = JSONObject(file.readText())
++            val json = JSONObject(payload)
 +            val lines = json.getJSONArray("cues")
 +            val loaded = ArrayList<CuesWithTiming>(lines.length())
 +            for (index in 0 until lines.length()) {
@@ -1407,19 +1426,19 @@ index 00000000..e3ec255b
 +                addCovered(covered, range.getLong(0), range.getLong(1))
 +            }
 +            synchronized(current.cues) {
-+                current.cues += loaded
++                val known = current.cues.mapTo(HashSet()) { it.startTimeUs }
++                current.cues += loaded.filter { it.startTimeUs !in known }
 +                current.cues.sortBy { it.startTimeUs }
 +                current.cuesVersion++
 +            }
-+            file.setLastModified(System.currentTimeMillis())
 +            SyncLog.i("generated subtitles: ${loaded.size} saved lines reused, ${covered.sumOf { it[1] - it[0] } / 1_000}s already done")
 +        } catch (error: Exception) {
 +            SyncLog.w("generated subtitles: saved lines unreadable: ${error.message}")
-+            file.delete()
 +        }
 +    }
 +
-+    private fun saveCache(file: File, current: Run, covered: List<LongArray>) {
++    private fun saveCache(key: String, current: Run, covered: List<LongArray>) {
++        val file = cacheFile(key)
 +        try {
 +            val cues = JSONArray()
 +            synchronized(current.cues) {
@@ -1433,8 +1452,14 @@ index 00000000..e3ec255b
 +            covered.forEach { ranges.put(JSONArray().put(it[0]).put(it[1])) }
 +            file.parentFile?.mkdirs()
 +            val partial = File(file.parentFile, file.name + ".part")
-+            partial.writeText(JSONObject().put("cues", cues).put("covered", ranges).toString())
++            val payload = JSONObject().put("cues", cues).put("covered", ranges).toString()
++            partial.writeText(payload)
 +            partial.renameTo(file)
++            // The Nuvio account copy, for the other devices.
++            val pushed = runBlocking {
++                withTimeoutOrNull(SYNC_TIMEOUT_MS) { GeneratedSubtitleSync.push(key, GeneratedSubtitles.contentId, payload) }
++            }
++            if (pushed != true) SyncLog.d("generated subtitles: not saved to the Nuvio account (signed out or offline)")
 +            // Keep the newest titles only.
 +            file.parentFile?.listFiles { candidate -> candidate.name.endsWith(".json") }
 +                ?.sortedByDescending { it.lastModified() }
@@ -1589,6 +1614,7 @@ index 00000000..e3ec255b
 +        private const val DEEPL_CONTEXT_LINES = 4
 +        private const val CACHE_DIR = "generated-subtitles/cache"
 +        private const val MAX_CACHED_TITLES = 200
++        private const val SYNC_TIMEOUT_MS = 10_000L
 +        private const val MERGE_MAX_MS = 12_000L
 +        /** Files with a sparse index seek well before the target; reading from there is fine. */
 +        private const val EARLY_SEEK_MS = 180_000L
@@ -2022,6 +2048,48 @@ index 00000000..c74c81c3
 +        private const val RETRY_DELAY_MS = 3_000L
 +        private const val NO_SPEECH_LIMIT = 0.6
 +    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitleSync.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitleSync.kt
+new file mode 100644
+index 00000000..0f71bce1
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitleSync.kt
+@@ -0,0 +1,36 @@
++package com.nuvio.app.features.player
++
++import com.nuvio.app.core.network.SupabaseProvider
++import io.github.jan.supabase.postgrest.postgrest
++import io.github.jan.supabase.postgrest.rpc
++import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.buildJsonObject
++import kotlinx.serialization.json.put
++
++/**
++ * Generated subtitles saved to the user's Nuvio account (table generated_subtitles on the
++ * self-hosted backend, one row per title key), so every device signed in to the account reuses
++ * them. Payloads are the same JSON the device keeps locally. Failures (signed out, offline)
++ * return null / false; the local copy still works.
++ */
++object GeneratedSubtitleSync {
++    suspend fun pull(key: String): String? = runCatching {
++        val result = SupabaseProvider.client.postgrest.rpc(
++            "generated_subtitles_pull",
++            buildJsonObject { put("p_key", key) },
++        )
++        result.data.trim().takeUnless { it.isEmpty() || it == "null" }
++    }.getOrNull()
++
++    suspend fun push(key: String, contentId: String?, payload: String): Boolean = runCatching {
++        SupabaseProvider.client.postgrest.rpc(
++            "generated_subtitles_push",
++            buildJsonObject {
++                put("p_key", key)
++                put("p_content_id", contentId)
++                put("p_payload", Json.parseToJsonElement(payload))
++            },
++        )
++        true
++    }.getOrDefault(false)
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitles.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitles.kt
 new file mode 100644
