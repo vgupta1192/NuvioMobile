@@ -103,21 +103,79 @@ index bd6eb8c6..92509300 100644
                      if (sidecarController.canAttachAddonSubtitleViaSidecar(url, useLibass)) {
                          Log.d(TAG, "setSubtitleUri: using buffer-preserving sidecar for url=${url.redactedForLogs()}")
                          val headers = externalSubtitles.firstOrNull { it.url == url }?.headers.orEmpty()
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSpotSampler.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSpotSampler.kt
+index a95a3d3d..99ad2b04 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSpotSampler.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSpotSampler.kt
+@@ -13,7 +13,6 @@ import androidx.media3.extractor.ExtractorsFactory
+ import java.util.concurrent.atomic.AtomicInteger
+ import java.util.concurrent.atomic.AtomicLong
+ import java.util.concurrent.atomic.AtomicReference
+-import kotlin.math.abs
+ 
+ /**
+  * Reads a few short stretches of a film's audio far from the playhead, over its own connection, so
+@@ -33,6 +32,8 @@ internal class AudioSpotSampler(
+     private val targetBytes: Long,
+     private val maxBytes: Long,
+     private val minSpotMs: Long,
++    /** How far before its target a seek may land and still be read from there (sparse indexes). */
++    private val maxEarlySeekMs: Long = MAX_SEEK_MISS_MS,
+ ) {
+     class Result(val sampled: Int, val bytes: Long, val failure: String?)
+ 
+@@ -88,7 +89,8 @@ internal class AudioSpotSampler(
+                     val spotStartBytes = connectionBytes.get()
+                     extractor.seekTo(spotStartMs * 1_000L, MediaExtractorCompat.SEEK_TO_PREVIOUS_SYNC)
+                     val firstUs = extractor.sampleTime
+-                    if (firstUs < 0 || abs(firstUs / 1_000L - spotStartMs) > MAX_SEEK_MISS_MS) {
++                    val missMs = firstUs / 1_000L - spotStartMs
++                    if (firstUs < 0 || missMs > MAX_SEEK_MISS_MS || -missMs > maxEarlySeekMs) {
+                         failure.compareAndSet(null, "stream cannot seek")
+                         return
+                     }
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt
-index 2a4232cd..b1d49e65 100644
+index 2a4232cd..018e2675 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt
-@@ -58,6 +58,9 @@ internal class HlsAudioSpotSampler(
+@@ -20,6 +20,7 @@ import androidx.media3.extractor.PositionHolder
+ import androidx.media3.extractor.SeekMap
+ import androidx.media3.extractor.TrackOutput
+ import androidx.media3.extractor.text.SubtitleParser
++import androidx.media3.extractor.mp4.FragmentedMp4Extractor
+ import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
+ import androidx.media3.extractor.ts.TsExtractor
+ import java.util.concurrent.ConcurrentHashMap
+@@ -31,7 +32,7 @@ import javax.crypto.spec.IvParameterSpec
+ import javax.crypto.spec.SecretKeySpec
+ 
+ /**
+- * [AudioSpotSampler] for HLS VOD streams (MPEG-TS segments, optionally AES-128): reads the
++ * [AudioSpotSampler] for HLS VOD streams (MPEG-TS or fMP4 segments, optionally AES-128): reads the
+  * playlist, downloads the segments that cover each spot and demuxes their audio to the workers'
+  * sinks, so a playlist stream gets the same look-ahead across the film as a single file.
+  *
+@@ -55,11 +56,19 @@ internal class HlsAudioSpotSampler(
+         val key: Key?,
+         val byteOffset: Long,
+         val byteLength: Long,
++        /** fMP4 initialization section (EXT-X-MAP), prepended to the segment for demuxing. */
++        val init: InitSection? = null,
      )
  
++    private data class InitSection(val uri: String, val offset: Long, val length: Long)
++
      private val bytes = AtomicLong()
 +
 +    @Volatile
 +    private var cachedSegments: List<Segment>? = null
      private val keys = ConcurrentHashMap<String, ByteArray>()
      private val adjusters = ConcurrentHashMap<Int, TimestampAdjuster>()
++    private val inits = ConcurrentHashMap<InitSection, ByteArray>()
  
-@@ -68,8 +71,10 @@ internal class HlsAudioSpotSampler(
+     fun run(
+         spotsMs: List<Long>,
+@@ -68,8 +77,10 @@ internal class HlsAudioSpotSampler(
          isCancelled: () -> Boolean,
          onSpot: (sampled: Int, bytes: Long) -> Unit,
      ): AudioSpotSampler.Result {
@@ -129,6 +187,69 @@ index 2a4232cd..b1d49e65 100644
          } catch (error: Exception) {
              return AudioSpotSampler.Result(0, bytes.get(), error.message ?: error.javaClass.simpleName)
          }
+@@ -124,7 +135,6 @@ internal class HlsAudioSpotSampler(
+             text = loaded.second
+         }
+         if (!text.contains("#EXT-X-ENDLIST")) throw IllegalStateException("live playlist")
+-        if (text.contains("#EXT-X-MAP")) throw IllegalStateException("fMP4 segments not supported")
+         val base = playlistUri.toString()
+         val segments = ArrayList<Segment>()
+         var mediaSequence = 0L
+@@ -134,6 +144,7 @@ internal class HlsAudioSpotSampler(
+         var key: Key? = null
+         var nextByteOffset = 0L
+         var byteRange: Pair<Long, Long>? = null
++        var init: InitSection? = null
+         for (raw in text.lineSequence()) {
+             val line = raw.trim()
+             when {
+@@ -156,6 +167,15 @@ internal class HlsAudioSpotSampler(
+                         else -> throw IllegalStateException("${attributes["METHOD"]} encryption not supported")
+                     }
+                 }
++                line.startsWith("#EXT-X-MAP:") -> {
++                    val attributes = attributes(line)
++                    val range = attributes["BYTERANGE"]
++                    init = InitSection(
++                        uri = UriUtil.resolve(base, attributes["URI"] ?: throw IllegalStateException("map without URI")),
++                        offset = range?.takeIf { '@' in it }?.substringAfter('@')?.toLongOrNull() ?: 0L,
++                        length = range?.substringBefore('@')?.toLongOrNull() ?: C.LENGTH_UNSET.toLong(),
++                    )
++                }
+                 line.startsWith("#EXT-X-BYTERANGE:") -> {
+                     val value = line.substringAfter(':').trim()
+                     val length = value.substringBefore('@').toLong()
+@@ -175,6 +195,7 @@ internal class HlsAudioSpotSampler(
+                         key = key,
+                         byteOffset = range?.second ?: 0L,
+                         byteLength = range?.first ?: C.LENGTH_UNSET.toLong(),
++                        init = init,
+                     )
+                     nextByteOffset = range?.let { it.second + it.first } ?: 0L
+                     byteRange = null
+@@ -216,9 +237,20 @@ internal class HlsAudioSpotSampler(
+             .setLength(segment.byteLength)
+             .build())
+         segment.key?.let { key -> data = decrypt(data, key, segment.mediaSequence) }
+-        if (data.isEmpty() || data[0] != TS_SYNC_BYTE) throw IllegalStateException("segments are not MPEG-TS")
+         val adjuster = adjusters.computeIfAbsent(segment.discontinuity) { TimestampAdjuster(segment.startUs) }
+-        val tsFactory = ExtractorsFactory {
++        val fragmented = segment.init != null
++        if (fragmented) {
++            val init = segment.init!!
++            val header = inits.getOrPut(init) {
++                fetch(DataSpec.Builder().setUri(init.uri).setPosition(init.offset).setLength(init.length).build())
++            }
++            data = header + data
++        } else if (data.isEmpty() || data[0] != TS_SYNC_BYTE) {
++            throw IllegalStateException("segments are neither MPEG-TS nor fMP4")
++        }
++        val tsFactory = if (fragmented) {
++            ExtractorsFactory { arrayOf(FragmentedMp4Extractor(0, adjuster)) }
++        } else ExtractorsFactory {
+             arrayOf(
+                 TsExtractor(
+                     TsExtractor.MODE_HLS,
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedRecognizer.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedRecognizer.kt
 new file mode 100644
 index 00000000..eb8f4816
@@ -396,10 +517,10 @@ index 00000000..13427fda
 +private const val FILE_TOKENS = "tokens.txt"
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
 new file mode 100644
-index 00000000..4f4ad790
+index 00000000..82034e21
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
-@@ -0,0 +1,486 @@
+@@ -0,0 +1,519 @@
 +@file:OptIn(androidx.media3.common.util.UnstableApi::class)
 +
 +package com.nuvio.app.features.player.generated
@@ -582,7 +703,7 @@ index 00000000..4f4ad790
 +                return
 +            }
 +            val language = spokenLanguage(current)
-+            val model = if (language == "hi") GeneratedSpeechModel.WHISPER_SMALL else GeneratedSpeechModel.SENSE_VOICE
++            val model = if (language in SENSE_VOICE_LANGUAGES) GeneratedSpeechModel.SENSE_VOICE else GeneratedSpeechModel.WHISPER_SMALL
 +            SyncLog.i("generated subtitles: spoken language=$language model=${model.label}")
 +            if (!model.isReady(appContext)) {
 +                while (!current.stopped && !AsrModel.isUnmetered(appContext)) {
@@ -601,7 +722,11 @@ index 00000000..4f4ad790
 +            }
 +            current.status = "Loading speech model…"
 +            recognizer = when (model) {
-+                GeneratedSpeechModel.WHISPER_SMALL -> GeneratedRecognizer.whisper(appContext, language, THREADS)
++                GeneratedSpeechModel.WHISPER_SMALL -> GeneratedRecognizer.whisper(
++                    appContext,
++                    language.takeUnless { it == GeneratedSubtitles.AUTO }.orEmpty(),
++                    WHISPER_THREADS,
++                )
 +                GeneratedSpeechModel.SENSE_VOICE -> GeneratedRecognizer.senseVoice(appContext, language, THREADS)
 +            }
 +            val weights = appContext.resources.openRawResource(R.raw.silero_vad_v5_16k).use { SileroVadWeights.read(it) }
@@ -640,8 +765,11 @@ index 00000000..4f4ad790
 +                var lines = 0
 +                for ((startMs, samples) in segments) {
 +                    if (current.stopped) return
++                    // Whisper invents words for very short sounds; such bits rarely carry a line.
++                    if (recognizer.translatesToEnglish && samples.size < MIN_WHISPER_SAMPLES) continue
 +                    val heard = recognizer.recognize(samples)
 +                    val text = cleanText(heard.text) ?: continue
++                    if (recognizer.translatesToEnglish && isWhisperFiller(text)) continue
 +                    val english = if (recognizer.translatesToEnglish || heard.language == "en") {
 +                        text
 +                    } else {
@@ -670,7 +798,7 @@ index 00000000..4f4ad790
 +        }
 +    }
 +
-+    /** The language to recognise: the user's choice, else the audio track's tag (Chinese if unknown). */
++    /** The language to recognise: the user's choice, else the audio track's tag ([GeneratedSubtitles.AUTO] if none). */
 +    private fun spokenLanguage(current: Run): String {
 +        val chosen = GeneratedSubtitles.spokenLanguage.value
 +        if (chosen != GeneratedSubtitles.AUTO) return chosen
@@ -679,16 +807,10 @@ index 00000000..4f4ad790
 +            if (current.audioFormat != null || current.stopped) return@repeat
 +            Thread.sleep(100L)
 +        }
-+        val tag = current.audioFormat?.language?.lowercase()?.substringBefore('-').orEmpty()
-+        return when (tag) {
-+            "hi", "hin" -> "hi"
-+            "ja", "jpn" -> "ja"
-+            "ko", "kor" -> "ko"
-+            "yue" -> "yue"
-+            "en", "eng" -> "en"
-+            "zh", "zho", "chi", "cmn" -> "zh"
-+            else -> GeneratedSubtitles.AUTO
-+        }
++        val tag = current.audioFormat?.language?.lowercase()?.substringBefore('-')?.substringBefore('_').orEmpty()
++        val code = THREE_LETTER_CODES[tag] ?: tag
++        return code.takeIf { known -> GeneratedSubtitles.spokenLanguages.any { it.first == known } }
++            ?: GeneratedSubtitles.AUTO
 +    }
 +
 +    /**
@@ -721,7 +843,7 @@ index 00000000..4f4ad790
 +            val result = if (hlsSampler != null) {
 +                hlsSampler.run(listOf(fromMs), toMs - fromMs, listOf(sink), isCancelled) { _, _ -> }
 +            } else {
-+                AudioSpotSampler(source, dataSourceFactory, MAX_WINDOW_BYTES, MAX_WINDOW_BYTES, 0L).run(
++                AudioSpotSampler(source, dataSourceFactory, MAX_WINDOW_BYTES, MAX_WINDOW_BYTES, 0L, EARLY_SEEK_MS).run(
 +                    spotsMs = listOf(fromMs),
 +                    spotMs = toMs - fromMs,
 +                    workers = listOf(AudioSyncExtractorsFactory(DefaultExtractorsFactory(), sink)),
@@ -808,6 +930,8 @@ index 00000000..4f4ad790
 +        private const val FIRST_WINDOW_MS = 20_000L
 +        private const val WINDOW_MS = 60_000L
 +        private const val SEEK_AWAY_MS = 60_000L
++        /** Files with a sparse index seek well before the target; reading from there is fine. */
++        private const val EARLY_SEEK_MS = 180_000L
 +        private const val MAX_WINDOW_BYTES = 400L * 1_000_000L
 +        private const val MAX_FAILURES = 4
 +        private const val DRAIN_TIMEOUT_MS = 15_000L
@@ -816,6 +940,36 @@ index 00000000..4f4ad790
 +        private const val LINGER_MS = 400L
 +        private const val MAX_LINE_CHARS = 42
 +        private const val THREADS = 2
++        private val WHISPER_THREADS = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, 4)
++        private const val MIN_WHISPER_SAMPLES = SileroVad.SAMPLE_RATE * 6 / 10
++        private val SENSE_VOICE_LANGUAGES = setOf("zh", "yue", "ja", "ko", "en")
++
++        /** ISO 639-2 audio tags (as in Matroska) to the codes in [GeneratedSubtitles.spokenLanguages]. */
++        private val THREE_LETTER_CODES = mapOf(
++            "zho" to "zh", "chi" to "zh", "cmn" to "zh", "jpn" to "ja", "kor" to "ko", "eng" to "en",
++            "hin" to "hi", "urd" to "ur", "ben" to "bn", "tam" to "ta", "tel" to "te", "mal" to "ml",
++            "kan" to "kn", "mar" to "mr", "guj" to "gu", "pan" to "pa", "tha" to "th", "ind" to "id",
++            "msa" to "ms", "may" to "ms", "tgl" to "tl", "fil" to "tl", "vie" to "vi", "tur" to "tr",
++            "ara" to "ar", "fas" to "fa", "per" to "fa", "rus" to "ru", "ukr" to "uk", "pol" to "pl",
++            "spa" to "es", "por" to "pt", "fra" to "fr", "fre" to "fr", "deu" to "de", "ger" to "de",
++            "ita" to "it", "nld" to "nl", "dut" to "nl", "swe" to "sv", "ell" to "el", "gre" to "el",
++            "heb" to "he", "iw" to "he", "in" to "id",
++        )
++
++        /** Lines Whisper is known to produce from music, noise or silence. */
++        private val WHISPER_FILLERS = setOf(
++            "thank you", "thanks", "thank you very much", "thanks for watching", "thank you for watching",
++            "you", "bye", "okay", "ok", "please subscribe", "subscribe", "music", "applause", "laughter",
++            "subtitles by the amara.org community", "so", "oh", "hmm", "uh", "um",
++        )
++
++        private fun isWhisperFiller(text: String): Boolean {
++            val plain = text.lowercase().replace(Regex("[^\\p{L}\\p{N} ]"), "").trim().replace(Regex("\\s+"), " ")
++            return plain.isEmpty() || plain in WHISPER_FILLERS ||
++                (text.trim().startsWith("[") && text.trim().endsWith("]")) ||
++                (text.trim().startsWith("(") && text.trim().endsWith(")")) ||
++                text.contains('♪')
++        }
 +
 +        private fun cue(startMs: Long, endMs: Long, text: String) = CuesWithTiming(
 +            listOf(Cue.Builder().setText(text).build()),
@@ -960,10 +1114,10 @@ index 00000000..e93763b4
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitles.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitles.kt
 new file mode 100644
-index 00000000..2947117b
+index 00000000..1e4a88c6
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitles.kt
-@@ -0,0 +1,98 @@
+@@ -0,0 +1,142 @@
 +package com.nuvio.app.features.player
 +
 +import kotlinx.coroutines.flow.MutableStateFlow
@@ -983,13 +1137,52 @@ index 00000000..2947117b
 +    /** Spoken languages the recogniser can be told to expect; [AUTO] follows the audio track's tag. */
 +    const val AUTO = "auto"
 +    val spokenLanguages: List<Pair<String, String>> = listOf(
-+        AUTO to "Auto (from the audio track)",
++        AUTO to "Auto (audio track tag, else detected)",
 +        "zh" to "Chinese",
 +        "yue" to "Cantonese",
 +        "ja" to "Japanese",
 +        "ko" to "Korean",
-+        "hi" to "Hindi",
 +        "en" to "English",
++        "hi" to "Hindi",
++        "ur" to "Urdu",
++        "bn" to "Bengali",
++        "ta" to "Tamil",
++        "te" to "Telugu",
++        "ml" to "Malayalam",
++        "kn" to "Kannada",
++        "mr" to "Marathi",
++        "gu" to "Gujarati",
++        "pa" to "Punjabi",
++        "th" to "Thai",
++        "id" to "Indonesian",
++        "ms" to "Malay",
++        "tl" to "Filipino (Tagalog)",
++        "vi" to "Vietnamese",
++        "tr" to "Turkish",
++        "ar" to "Arabic",
++        "fa" to "Persian",
++        "ru" to "Russian",
++        "uk" to "Ukrainian",
++        "pl" to "Polish",
++        "es" to "Spanish",
++        "pt" to "Portuguese",
++        "fr" to "French",
++        "de" to "German",
++        "it" to "Italian",
++        "nl" to "Dutch",
++        "sv" to "Swedish",
++        "el" to "Greek",
++        "he" to "Hebrew",
++    )
++
++    /** When Nuvio picks the generated subtitle by itself. */
++    const val MODE_OFF = "off"
++    const val MODE_MISSING = "missing"
++    const val MODE_ALWAYS = "always"
++    val modes: List<Pair<String, String>> = listOf(
++        MODE_OFF to "Never (pick it by hand from the subtitle list)",
++        MODE_MISSING to "When no subtitle in your language is found",
++        MODE_ALWAYS to "Always, even when subtitles exist",
 +    )
 +
 +    /** Set by a platform that can generate subtitles (Android). */
@@ -998,9 +1191,9 @@ index 00000000..2947117b
 +    /** Model download/delete, registered by the platform. */
 +    var modelActions: GeneratedSubtitleModelActions? = null
 +
-+    private val _autoGenerate = MutableStateFlow(false)
-+    /** Pick the generated subtitle automatically when no subtitle in the preferred language exists. */
-+    val autoGenerate: StateFlow<Boolean> = _autoGenerate.asStateFlow()
++    private val _mode = MutableStateFlow(MODE_OFF)
++    /** When the generated subtitle is picked automatically (see [modes]). */
++    val mode: StateFlow<String> = _mode.asStateFlow()
 +
 +    private val _spokenLanguage = MutableStateFlow(AUTO)
 +    val spokenLanguage: StateFlow<String> = _spokenLanguage.asStateFlow()
@@ -1013,14 +1206,18 @@ index 00000000..2947117b
 +
 +    fun installPersistence(load: (key: String) -> String?, save: (key: String, value: String) -> Unit) {
 +        this.save = save
-+        _autoGenerate.value = load(KEY_AUTO) == "true"
++        _mode.value = load(KEY_MODE)?.takeIf { code -> modes.any { it.first == code } }
++            ?: if (load(KEY_AUTO) == "true") MODE_MISSING else MODE_OFF
 +        _spokenLanguage.value = load(KEY_LANGUAGE)?.takeIf { code -> spokenLanguages.any { it.first == code } } ?: AUTO
 +    }
 +
-+    fun setAutoGenerate(value: Boolean) {
-+        _autoGenerate.value = value
-+        save?.invoke(KEY_AUTO, value.toString())
++    fun cycleMode() {
++        val index = modes.indexOfFirst { it.first == _mode.value }
++        _mode.value = modes[(index + 1) % modes.size].first
++        save?.invoke(KEY_MODE, _mode.value)
 +    }
++
++    fun modeLabel(code: String = _mode.value): String = modes.firstOrNull { it.first == code }?.second ?: code
 +
 +    fun setSpokenLanguage(code: String) {
 +        _spokenLanguage.value = code
@@ -1056,6 +1253,7 @@ index 00000000..2947117b
 +        if (!supported || subtitles.any { isGenerated(it.url) }) subtitles else subtitles + entry
 +
 +    private const val KEY_AUTO = "auto_generate"
++    private const val KEY_MODE = "auto_mode"
 +    private const val KEY_LANGUAGE = "spoken_language"
 +}
 +
@@ -1091,10 +1289,10 @@ index 40e92b22..9e849554 100644
          runtime.horizontalSafePadding = horizontalSafePadding
          runtime.metrics = metrics
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeTrackActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeTrackActions.kt
-index f8e90c81..ddaf6359 100644
+index f8e90c81..47bac957 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeTrackActions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeTrackActions.kt
-@@ -18,13 +18,25 @@ internal val PlayerScreenRuntime.visibleAddonSubtitles: List<AddonSubtitle>
+@@ -18,13 +18,29 @@ internal val PlayerScreenRuntime.visibleAddonSubtitles: List<AddonSubtitle>
          val filtered = filterAddonSubtitlesForSettings(
              subtitles = addonSubtitles,
              settings = playerSettingsUiState,
@@ -1107,21 +1305,25 @@ index f8e90c81..ddaf6359 100644
      }
  
 +/**
-+ * The addon subtitles Nuvio may pick on its own. The generated subtitle joins them only when the
-+ * user asked for it to be used automatically, and only once the real ones have loaded (it is
-+ * last, so any real subtitle in the language wins).
++ * The addon subtitles Nuvio may pick on its own. The generated subtitle joins them as the user
++ * chose: "always" puts it first; "when none found" keeps it last (any real subtitle in the
++ * language wins) and only once the real ones have loaded; otherwise it is left out.
 + */
 +private val PlayerScreenRuntime.addonSubtitlesForAutoPick: List<AddonSubtitle>
-+    get() = if (GeneratedSubtitles.autoGenerate.value && !isLoadingAddonSubtitles) {
-+        addonSubtitles
-+    } else {
-+        addonSubtitles.filterNot { GeneratedSubtitles.isGenerated(it.url) }
++    get() = when (GeneratedSubtitles.mode.value) {
++        GeneratedSubtitles.MODE_ALWAYS -> addonSubtitles.sortedBy { !GeneratedSubtitles.isGenerated(it.url) }
++        GeneratedSubtitles.MODE_MISSING -> if (isLoadingAddonSubtitles) {
++            addonSubtitles.filterNot { GeneratedSubtitles.isGenerated(it.url) }
++        } else {
++            addonSubtitles
++        }
++        else -> addonSubtitles.filterNot { GeneratedSubtitles.isGenerated(it.url) }
 +    }
 +
  internal val PlayerScreenRuntime.selectedAddonSubtitle: AddonSubtitle?
      get() {
          val selectedId = selectedAddonSubtitleId ?: return null
-@@ -215,7 +227,7 @@ private fun PlayerScreenRuntime.tryAutoSelectPreferredSubtitleFromAvailableTrack
+@@ -215,7 +231,7 @@ private fun PlayerScreenRuntime.tryAutoSelectPreferredSubtitleFromAvailableTrack
          val isPrimarySatisfied = primaryTarget != null && currentSelectedLang != null &&
              SubtitleLanguageMatching.matchesLanguageCode(currentSelectedLang, primaryTarget)
          val hasBetterAddonMatch = !isPrimarySatisfied && primaryTarget != null &&
@@ -1130,7 +1332,7 @@ index f8e90c81..ddaf6359 100644
          if (!hasBetterAddonMatch) return
      }
  
-@@ -259,7 +271,7 @@ private fun PlayerScreenRuntime.tryAutoSelectPreferredSubtitleFromAvailableTrack
+@@ -259,7 +275,7 @@ private fun PlayerScreenRuntime.tryAutoSelectPreferredSubtitleFromAvailableTrack
              return
          }
          if (matchedTargetPosition > 0 && !isLoadingAddonSubtitles) {
@@ -1139,7 +1341,7 @@ index f8e90c81..ddaf6359 100644
                  SubtitleLanguageMatching.matchesLanguageCode(subtitle.language, selectionPlan.targets.first())
              }
              if (primaryAddonMatch != null) {
-@@ -298,7 +310,7 @@ private fun PlayerScreenRuntime.tryAutoSelectPreferredSubtitleFromAvailableTrack
+@@ -298,7 +314,7 @@ private fun PlayerScreenRuntime.tryAutoSelectPreferredSubtitleFromAvailableTrack
              return
          }
          val forcedAddonMatch = if (selectedAudioTrack != null) {
@@ -1148,7 +1350,7 @@ index f8e90c81..ddaf6359 100644
                  addonSubtitleIsForced(subtitle) &&
                      addonSubtitleMatchesLanguage(subtitle, requiredForcedTarget) &&
                      addonSubtitleMatchesSelectedAudioLanguage(subtitle, selectedAudioTrack)
-@@ -340,7 +352,7 @@ private fun PlayerScreenRuntime.tryAutoSelectPreferredSubtitleFromAvailableTrack
+@@ -340,7 +356,7 @@ private fun PlayerScreenRuntime.tryAutoSelectPreferredSubtitleFromAvailableTrack
      if (playbackSnapshot.isLoading) return
  
      val addonMatch = selectionPlan.targets.firstNotNullOfOrNull { target ->
@@ -1171,14 +1373,30 @@ index 175782ab..ec6dd552 100644
  /** The audio sync fallback: it runs only after AutoSync, so it follows AutoSync's switch. */
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/GeneratedSubtitleSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/GeneratedSubtitleSettings.kt
 new file mode 100644
-index 00000000..927f39ba
+index 00000000..859c7aa2
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/GeneratedSubtitleSettings.kt
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,91 @@
 +package com.nuvio.app.features.settings
 +
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.heightIn
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.foundation.lazy.items
++import androidx.compose.material3.AlertDialog
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.material3.TextButton
 +import androidx.compose.runtime.Composable
 +import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.unit.dp
 +import androidx.lifecycle.compose.collectAsStateWithLifecycle
 +import com.nuvio.app.features.player.GeneratedSubtitles
 +
@@ -1186,28 +1404,28 @@ index 00000000..927f39ba
 +@Composable
 +internal fun GeneratedSubtitleSettingsRows(isTablet: Boolean) {
 +    if (!GeneratedSubtitles.supported) return
-+    val autoGenerate by GeneratedSubtitles.autoGenerate.collectAsStateWithLifecycle()
++    val mode by GeneratedSubtitles.mode.collectAsStateWithLifecycle()
 +    val spokenLanguage by GeneratedSubtitles.spokenLanguage.collectAsStateWithLifecycle()
 +    val models by GeneratedSubtitles.models.collectAsStateWithLifecycle()
++    var pickLanguage by remember { mutableStateOf(false) }
 +
 +    SettingsGroupDivider(isTablet = isTablet)
-+    SettingsSwitchRow(
-+        title = "Generate subtitles when none are found",
-+        description = "Pick \"English · Generated from the audio\" by itself when no subtitle in your " +
-+            "language exists. It is always in the subtitle list to pick by hand. Speech is recognised " +
-+            "and translated on this device; models download once on Wi-Fi.",
-+        checked = autoGenerate,
++    SettingsNavigationRow(
++        title = "Use generated subtitles automatically",
++        description = GeneratedSubtitles.modeLabel(mode) + ". \"English · Generated from the audio\" is " +
++            "always in the subtitle list (under English) to pick by hand. Tap to change.",
 +        isTablet = isTablet,
-+        onCheckedChange = GeneratedSubtitles::setAutoGenerate,
++        onClick = GeneratedSubtitles::cycleMode,
 +    )
 +    SettingsGroupDivider(isTablet = isTablet)
 +    SettingsNavigationRow(
 +        title = "Spoken language for generated subtitles",
 +        description = GeneratedSubtitles.spokenLanguageLabel(spokenLanguage) +
-+            " · Chinese, Cantonese, Japanese, Korean and English use SenseVoice (237 MB); " +
-+            "Hindi uses Whisper small (375 MB). Tap to change.",
++            ". Chinese, Cantonese, Japanese, Korean and English use SenseVoice (237 MB); all other " +
++            "languages, and audio without a language tag, use Whisper small (375 MB), which detects " +
++            "the language and translates to English.",
 +        isTablet = isTablet,
-+        onClick = GeneratedSubtitles::cycleSpokenLanguage,
++        onClick = { pickLanguage = true },
 +    )
 +    if (models.isNotEmpty()) {
 +        SettingsGroupDivider(isTablet = isTablet)
@@ -1216,6 +1434,37 @@ index 00000000..927f39ba
 +            description = models,
 +            isTablet = isTablet,
 +            onClick = { GeneratedSubtitles.modelActions?.deleteModels() },
++        )
++    }
++    if (pickLanguage) {
++        AlertDialog(
++            onDismissRequest = { pickLanguage = false },
++            confirmButton = {
++                TextButton(onClick = { pickLanguage = false }) { Text("Close") }
++            },
++            title = { Text("Spoken language") },
++            text = {
++                LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
++                    items(GeneratedSubtitles.spokenLanguages) { (code, label) ->
++                        Text(
++                            text = label,
++                            fontWeight = if (code == spokenLanguage) FontWeight.Bold else FontWeight.Normal,
++                            color = if (code == spokenLanguage) {
++                                MaterialTheme.colorScheme.primary
++                            } else {
++                                MaterialTheme.colorScheme.onSurface
++                            },
++                            modifier = Modifier
++                                .fillMaxWidth()
++                                .clickable {
++                                    GeneratedSubtitles.setSpokenLanguage(code)
++                                    pickLanguage = false
++                                }
++                                .padding(vertical = 12.dp),
++                        )
++                    }
++                }
++            },
 +        )
 +    }
 +}
