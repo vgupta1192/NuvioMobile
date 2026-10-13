@@ -101,7 +101,7 @@ index 00000000..c027ae97
 +    frame.translationY = -((rect.top + rect.bottom) / 2f - 0.5f) * frameHeight * scaleY
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index 38e113f8..e2ff88a5 100644
+index 38e113f8..c575f25f 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 @@ -1048,6 +1048,30 @@ private fun ExoPlayerSurface(
@@ -196,7 +196,7 @@ index 38e113f8..e2ff88a5 100644
 +     * The surface is captured instead of mpv's decoded frame because direct hardware decoding
 +     * cannot hand frames out.
 +     */
-+    suspend fun sampleCustomStretchContent(): VideoContentRect? {
++    suspend fun sampleCustomStretchContent(): BarSample? {
 +        if (released.get()) return null
 +        executeMpv { applyCustomStretchNow() }
 +        val crop = appliedCustomStretchRect
@@ -237,10 +237,10 @@ index 3136ec62..7c64c233 100644
      <string name="compose_player_seek_delta_forward">+%1$ds</string>
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
 new file mode 100644
-index 00000000..4ecaf40e
+index 00000000..7a27408a
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
-@@ -0,0 +1,281 @@
+@@ -0,0 +1,409 @@
 +package com.nuvio.app.features.player
 +
 +import androidx.compose.runtime.Composable
@@ -260,9 +260,9 @@ index 00000000..4ecaf40e
 + *
 + * Plain "Stretch" scales the decoded frame to the screen, so bars inside the file stay
 + * visible. Custom Stretch samples frames, measures the area that holds picture and maps
-+ * that area to the full player size. Nothing inside the picture area is cropped: the
-+ * detected area only grows (union of all samples), so a dark scene can never make the
-+ * picture smaller.
++ * that area to the full player size. Nothing inside the picture area is cropped: only bar
++ * edges that meet clearly brighter picture are trusted, and each edge keeps the thinnest
++ * trusted bar, so a dark scene or a vignette can never make the picture smaller.
 + */
 +
 +/** Picture area inside the decoded frame, as fractions (0..1) of the frame size. */
@@ -325,11 +325,55 @@ index 00000000..4ecaf40e
 +    )
 +}
 +
-+/** Bars of letterboxed and pillarboxed video are centered. Use the thicker bar on both sides. */
-+fun VideoContentRect.symmetric(): VideoContentRect {
-+    val horizontal = max(left, 1f - right)
-+    val vertical = max(top, 1f - bottom)
-+    return VideoContentRect(horizontal, vertical, 1f - horizontal, 1f - vertical)
++/**
++ * One frame's measurement: the picture area plus, per edge (left, top, right, bottom), whether
++ * that edge can be trusted. A bar edge is trusted only when a near-black bar meets clearly
++ * brighter picture; a dark scene or a vignette fading to black is not trusted.
++ */
++class BarSample(
++    val rect: VideoContentRect,
++    val confident: BooleanArray,
++    /** Coarse 4x4 grid of mean luma, to tell whether two samples show different frames. */
++    val signature: IntArray = IntArray(0),
++) {
++    /** Thickness of the bar at each edge (left, top, right, bottom) as frame fractions. */
++    val thickness: FloatArray
++        get() = floatArrayOf(rect.left, rect.top, 1f - rect.right, 1f - rect.bottom)
++
++    /**
++     * Bars are centered, so use the thicker bar (and its confidence) on both sides of each axis.
++     * For captures that include rendered subtitles: a subtitle inside the bottom bar must not
++     * count as picture.
++     */
++    fun symmetric(): BarSample {
++        val t = thickness
++        val horizontalLeft = t[0] >= t[2]
++        val verticalTop = t[1] >= t[3]
++        val horizontal = if (horizontalLeft) t[0] else t[2]
++        val vertical = if (verticalTop) t[1] else t[3]
++        val horizontalConfident = if (horizontalLeft) confident[0] else confident[2]
++        val verticalConfident = if (verticalTop) confident[1] else confident[3]
++        return BarSample(
++            VideoContentRect(horizontal, vertical, 1f - horizontal, 1f - vertical),
++            booleanArrayOf(horizontalConfident, verticalConfident, horizontalConfident, verticalConfident),
++            signature,
++        )
++    }
++
++    /** See [VideoContentRect.mapFromCrop]. */
++    fun mapFromCrop(crop: VideoContentRect?): BarSample = BarSample(rect.mapFromCrop(crop), confident, signature)
++
++    /** True when [other] shows a clearly different frame (not the same paused or static shot). */
++    fun differsFrom(other: IntArray?): Boolean {
++        if (other == null || other.size != signature.size || signature.isEmpty()) return true
++        var difference = 0
++        for (i in signature.indices) difference += abs(signature[i] - other[i])
++        return difference >= SIGNATURE_MIN_DIFFERENCE
++    }
++
++    companion object {
++        private const val SIGNATURE_MIN_DIFFERENCE = 64
++    }
 +}
 +
 +/** A downscaled luma (0..255) picture of one video frame. */
@@ -340,7 +384,7 @@ index 00000000..4ecaf40e
 +    /** True when the image is only the current mpv video-crop region, not the whole frame. */
 +    val cropped: Boolean = false,
 +) {
-+    fun detectContent(): VideoContentRect? = BlackBarDetector.detect(luma, width, height)
++    fun detectContent(): BarSample? = BlackBarDetector.detect(luma, width, height)
 +
 +    companion object {
 +        /**
@@ -378,11 +422,17 @@ index 00000000..4ecaf40e
 +    private const val MIN_CONTENT_WIDTH = 0.45f
 +    private const val MIN_CONTENT_HEIGHT = 0.35f
 +
++    /** A trusted bar is near black (baked bars are flat black; dark picture is noisier) ... */
++    private const val BAR_MAX_MEAN = 12
++    /** ... and the picture lines right next to it are clearly brighter (a sharp edge). */
++    private const val EDGE_MIN_CONTRAST = 24
++    private const val EDGE_BAND_LINES = 2
++
 +    /**
 +     * Measure the picture area in one luma sample ([width] x [height], row stride [stride]).
 +     * Returns null when the sample is too dark to tell (black frame, fade, dark scene).
 +     */
-+    fun detect(luma: ByteArray, width: Int, height: Int, stride: Int = width): VideoContentRect? {
++    fun detect(luma: ByteArray, width: Int, height: Int, stride: Int = width): BarSample? {
 +        if (width < 8 || height < 8 || luma.size < stride * (height - 1) + width) return null
 +
 +        val rowThreshold = max(2, (width * LINE_CONTENT_FRACTION).toInt())
@@ -408,20 +458,70 @@ index 00000000..4ecaf40e
 +        }
 +        if (left < 0) return null
 +
-+        var rect = VideoContentRect(
++        // Edges in sample pixels; a bar thinner than MIN_BAR_FRACTION counts as no bar.
++        if (left < width * MIN_BAR_FRACTION) left = 0
++        if (top < height * MIN_BAR_FRACTION) top = 0
++        if (width - 1 - right < width * MIN_BAR_FRACTION) right = width - 1
++        if (height - 1 - bottom < height * MIN_BAR_FRACTION) bottom = height - 1
++        val pictureWidth = right - left + 1
++        val pictureHeight = bottom - top + 1
++        if (pictureWidth < width * MIN_CONTENT_WIDTH || pictureHeight < height * MIN_CONTENT_HEIGHT) return null
++
++        fun rowsMean(from: Int, toExclusive: Int): Int {
++            var sum = 0L
++            var count = 0
++            for (y in from until toExclusive) {
++                for (x in left..right) sum += luma[y * stride + x].toInt() and 0xFF
++                count += pictureWidth
++            }
++            return if (count == 0) 0 else (sum / count).toInt()
++        }
++        fun columnsMean(from: Int, toExclusive: Int): Int {
++            var sum = 0L
++            var count = 0
++            for (x in from until toExclusive) {
++                for (y in top..bottom) sum += luma[y * stride + x].toInt() and 0xFF
++                count += pictureHeight
++            }
++            return if (count == 0) 0 else (sum / count).toInt()
++        }
++        fun trusted(barMean: Int, edgeMean: Int) = barMean <= BAR_MAX_MEAN && edgeMean - barMean >= EDGE_MIN_CONTRAST
++
++        val band = EDGE_BAND_LINES
++        val confident = booleanArrayOf(
++            left == 0 || trusted(columnsMean(0, left), columnsMean(left, min(right + 1, left + band))),
++            top == 0 || trusted(rowsMean(0, top), rowsMean(top, min(bottom + 1, top + band))),
++            right == width - 1 ||
++                trusted(columnsMean(right + 1, width), columnsMean(max(left, right + 1 - band), right + 1)),
++            bottom == height - 1 ||
++                trusted(rowsMean(bottom + 1, height), rowsMean(max(top, bottom + 1 - band), bottom + 1)),
++        )
++        val rect = VideoContentRect(
 +            left = left.toFloat() / width,
 +            top = top.toFloat() / height,
 +            right = (right + 1).toFloat() / width,
 +            bottom = (bottom + 1).toFloat() / height,
 +        )
-+        rect = rect.copy(
-+            left = if (rect.left < MIN_BAR_FRACTION) 0f else rect.left,
-+            top = if (rect.top < MIN_BAR_FRACTION) 0f else rect.top,
-+            right = if (1f - rect.right < MIN_BAR_FRACTION) 1f else rect.right,
-+            bottom = if (1f - rect.bottom < MIN_BAR_FRACTION) 1f else rect.bottom,
-+        )
-+        if (rect.width < MIN_CONTENT_WIDTH || rect.height < MIN_CONTENT_HEIGHT) return null
-+        return rect
++        return BarSample(rect, confident, signature(luma, width, height, stride))
++    }
++
++    private fun signature(luma: ByteArray, width: Int, height: Int, stride: Int): IntArray {
++        val grid = 4
++        val out = IntArray(grid * grid)
++        for (gy in 0 until grid) {
++            for (gx in 0 until grid) {
++                var sum = 0L
++                var count = 0
++                for (y in gy * height / grid until (gy + 1) * height / grid step 2) {
++                    for (x in gx * width / grid until (gx + 1) * width / grid step 2) {
++                        sum += luma[y * stride + x].toInt() and 0xFF
++                        count++
++                    }
++                }
++                out[gy * grid + gx] = if (count == 0) 0 else (sum / count).toInt()
++            }
++        }
++        return out
 +    }
 +
 +    /** Luma of packed 0xAARRGGBB pixels (Android Bitmap), BT.601 weights. */
@@ -450,39 +550,67 @@ index 00000000..4ecaf40e
 +
 +/**
 + * Collects samples for one title and decides when the stretch geometry changes.
-+ * The picture area is the union of all valid samples, so it only grows.
++ *
++ * Each edge keeps the thinnest bar seen in a trusted sample (so the picture area is the union of
++ * trusted samples and never cuts picture). An edge is cropped only after [CONFIRMATIONS] trusted
++ * samples from different frames. Per axis the thinner side wins, because baked-in bars are centered. Bars on both axes
++ * (windowbox) are kept only when each is clearly there: a thin second axis is a dark or vignetted
++ * frame edge, and cropping it would stretch the other direction as well.
 + */
 +class BlackBarTracker {
-+    private var union: VideoContentRect? = null
-+    private var validSamples = 0
++    private val thickness = FloatArray(4) { 1f }
++    private val observations = IntArray(4)
++    private var lastEvidence: IntArray? = null
++    private var samples = 0
 +    private var committed: VideoContentRect? = null
 +
-+    /** Sample faster until the first few valid samples are in. */
-+    val isCalibrating: Boolean get() = validSamples < CALIBRATION_SAMPLES
++    /** Sample faster until every edge is confirmed (or enough samples were taken). */
++    val isCalibrating: Boolean
++        get() = samples < MAX_CALIBRATION_SAMPLES && observations.any { it < CONFIRMATIONS }
 +
 +    val current: VideoContentRect? get() = committed
 +
 +    fun reset() {
-+        union = null
-+        validSamples = 0
++        thickness.fill(1f)
++        observations.fill(0)
++        lastEvidence = null
++        samples = 0
 +        committed = null
 +    }
 +
 +    /** Feed one sample. Returns the new picture area when it changed, else null. */
-+    fun offer(sample: VideoContentRect?): VideoContentRect? {
++    fun offer(sample: BarSample?): VideoContentRect? {
 +        if (sample == null) return null
-+        validSamples++
-+        val merged = union?.union(sample) ?: sample
-+        union = merged
-+        if (validSamples < CALIBRATION_SAMPLES) return null
++        samples++
++        // The same (paused or static) shot counts once: a dark scene must not confirm itself.
++        if (!sample.differsFrom(lastEvidence)) return null
++        lastEvidence = sample.signature
++        val measured = sample.thickness
++        for (edge in 0 until 4) {
++            if (!sample.confident[edge]) continue
++            observations[edge]++
++            thickness[edge] = min(thickness[edge], measured[edge].coerceAtLeast(0f))
++        }
++        if (samples < CALIBRATION_SAMPLES) return null
++        val edge = FloatArray(4) { if (observations[it] >= CONFIRMATIONS) thickness[it] else 0f }
++        var horizontal = min(edge[0], edge[2])
++        var vertical = min(edge[1], edge[3])
++        if (horizontal > 0f && vertical > 0f) {
++            if (horizontal < SECOND_AXIS_MIN_BAR) horizontal = 0f
++            if (vertical < SECOND_AXIS_MIN_BAR) vertical = 0f
++        }
++        val rect = VideoContentRect(horizontal, vertical, 1f - horizontal, 1f - vertical)
 +        val previous = committed
-+        if (previous != null && previous.isCloseTo(merged)) return null
-+        committed = merged
-+        return merged
++        if (previous != null && previous.isCloseTo(rect)) return null
++        committed = rect
++        return rect
 +    }
 +
 +    companion object {
 +        const val CALIBRATION_SAMPLES = 3
++        const val CONFIRMATIONS = 2
++        const val MAX_CALIBRATION_SAMPLES = 16
++        const val SECOND_AXIS_MIN_BAR = 0.03f
 +        const val CALIBRATION_INTERVAL_MS = 1_200L
 +        const val STEADY_INTERVAL_MS = 8_000L
 +        const val FIRST_SAMPLE_DELAY_MS = 800L
@@ -502,7 +630,7 @@ index 00000000..4ecaf40e
 +fun CustomStretchSamplingEffect(
 +    enabled: Boolean,
 +    sourceKey: Any?,
-+    sample: suspend () -> VideoContentRect?,
++    sample: suspend () -> BarSample?,
 +    onContentRect: (VideoContentRect?) -> Unit,
 +) {
 +    val latestSample = rememberUpdatedState(sample)
@@ -638,7 +766,7 @@ index 92907fdd..0ee837be 100644
      fun getAudioTrackCount(): Int
      fun getAudioTrackIndex(at: Int): Int
 diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerEngine.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerEngine.ios.kt
-index 03a4a239..685330e2 100644
+index 03a4a239..7d40bdbe 100644
 --- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerEngine.ios.kt
 +++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerEngine.ios.kt
 @@ -26,6 +26,10 @@ import androidx.compose.ui.platform.LocalDensity
@@ -683,8 +811,8 @@ index 03a4a239..685330e2 100644
 +        sample = {
 +            applyCustomStretchCrop()
 +            val frame = bridge.sampleVideoLuma(BlackBarTracker.SAMPLE_MAX_DIMENSION)?.toLumaFrame()
-+            frame?.detectContent()?.let { rect ->
-+                if (frame.cropped) rect.mapFromCrop(appliedCustomStretchRect) else rect
++            frame?.detectContent()?.let { sample ->
++                if (frame.cropped) sample.mapFromCrop(appliedCustomStretchRect) else sample
 +            }
 +        },
 +        onContentRect = { rect ->
