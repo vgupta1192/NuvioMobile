@@ -134,8 +134,36 @@ index a95a3d3d..99ad2b04 100644
                          failure.compareAndSet(null, "stream cannot seek")
                          return
                      }
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
+index 98e9f0dc..32685847 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
+@@ -445,8 +445,9 @@ internal class AudioSubtitleSyncController(
+             return
+         }
+         val heardEnough = timeline.knownFrameCount() >= SAMPLE_AFTER_FRAMES
+-        // Playlist audio is often heard only through the playback tap; that must not hold HLS sampling back.
+-        val waitedEnough = source.hls && sessionStartedAtMs > 0 &&
++        // Playlist audio (also behind addresses without ".m3u8") is often heard only through the
++        // playback tap; that must not hold sampling back.
++        val waitedEnough = sessionStartedAtMs > 0 &&
+             SystemClock.elapsedRealtime() - sessionStartedAtMs >= HLS_SAMPLE_AFTER_MS
+         if (!heardEnough && !waitedEnough) {
+             noteSpotWait("waiting for playback audio")
+@@ -521,7 +522,10 @@ internal class AudioSubtitleSyncController(
+                 val seconds = (SystemClock.elapsedRealtime() - startedAt) / 1_000
+                 spotStatus = "sampled $sampled of ${spots.size} dialogue spots in ${seconds}s (${bytes / 1_000_000} MB)"
+             }
+-            val result = if (source.hls) {
++            // Some playlists hide behind addresses without ".m3u8": the first bytes tell.
++            val hls = source.hls || HlsAudioSpotSampler.looksLikePlaylist(source.uri, source.dataSourceFactory)
++            if (hls != source.hls) SyncLog.i("spot source: HLS playlist (by content)")
++            val result = if (hls) {
+                 HlsAudioSpotSampler(source.uri, source.dataSourceFactory, maxBytes).run(
+                     spotsMs = spots,
+                     spotMs = SPOT_MS,
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt
-index 2a4232cd..018e2675 100644
+index 2a4232cd..6a289d8b 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt
 @@ -20,6 +20,7 @@ import androidx.media3.extractor.PositionHolder
@@ -250,6 +278,52 @@ index 2a4232cd..018e2675 100644
              arrayOf(
                  TsExtractor(
                      TsExtractor.MODE_HLS,
+@@ -286,16 +318,40 @@ internal class HlsAudioSpotSampler(
+         override fun seekMap(seekMap: SeekMap) = Unit
+     }
+ 
+-    private companion object {
+-        const val TS_SYNC_BYTE: Byte = 0x47
+-        val attribute = Regex("""([A-Z0-9-]+)=("[^"]*"|[^,]*)""")
++    companion object {
++        /**
++         * Whether [uri] serves an HLS playlist even though its address doesn't say so (proxies,
++         * disguised extensions). Reads the first bytes only. Blocking.
++         */
++        fun looksLikePlaylist(uri: Uri, dataSourceFactory: DataSource.Factory): Boolean {
++            val source = dataSourceFactory.createDataSource()
++            return try {
++                source.open(DataSpec.Builder().setUri(uri).setLength(SNIFF_BYTES.toLong()).build())
++                val buffer = ByteArray(SNIFF_BYTES)
++                var read = 0
++                while (read < buffer.size) {
++                    val count = source.read(buffer, read, buffer.size - read)
++                    if (count <= 0) break
++                    read += count
++                }
++                String(buffer, 0, read, Charsets.UTF_8).trimStart('\uFEFF', ' ', '\r', '\n', '\t').startsWith("#EXTM3U")
++            } catch (_: Exception) {
++                false
++            } finally {
++                runCatching { source.close() }
++            }
++        }
++
++        private const val SNIFF_BYTES = 64
++        private const val TS_SYNC_BYTE: Byte = 0x47
++        private val attribute = Regex("""([A-Z0-9-]+)=("[^"]*"|[^,]*)""")
+ 
+-        fun attributes(line: String): Map<String, String> =
++        private fun attributes(line: String): Map<String, String> =
+             attribute.findAll(line.substringAfter(':')).associate { match ->
+                 match.groupValues[1] to match.groupValues[2].removeSurrounding("\"")
+             }
+ 
+-        fun parseIv(value: String): ByteArray {
++        private fun parseIv(value: String): ByteArray {
+             val hex = value.removePrefix("0x").removePrefix("0X").padStart(32, '0')
+             return ByteArray(16) { index -> hex.substring(index * 2, index * 2 + 2).toInt(16).toByte() }
+         }
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedRecognizer.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedRecognizer.kt
 new file mode 100644
 index 00000000..e980fb68
@@ -552,10 +626,10 @@ index 00000000..ff17d6be
 +private const val FILE_TOKENS = "tokens.txt"
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
 new file mode 100644
-index 00000000..207c2044
+index 00000000..0689998b
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
-@@ -0,0 +1,530 @@
+@@ -0,0 +1,533 @@
 +@file:OptIn(androidx.media3.common.util.UnstableApi::class)
 +
 +package com.nuvio.app.features.player.generated
@@ -613,7 +687,7 @@ index 00000000..207c2044
 +    private val audioUrl = sourceAudioUrl?.takeIf { it.isNotBlank() } ?: sourceUrl
 +    private val uri: Uri? = runCatching { Uri.parse(audioUrl) }.getOrNull()
 +        ?.takeIf { it.scheme == "http" || it.scheme == "https" || it.scheme == "file" }
-+    private val hls = uri?.path.orEmpty().lowercase().endsWith(".m3u8")
++    private val hlsByAddress = uri?.path.orEmpty().lowercase().endsWith(".m3u8")
 +
 +    private class Run(val url: String) {
 +        @Volatile
@@ -659,7 +733,7 @@ index 00000000..207c2044
 +        current.generation = sidecar.currentGenerationFor(url) ?: return false
 +        active = current
 +        running = true
-+        SyncLog.i("generated subtitles: started (${if (hls) "HLS playlist" else "single file"})")
++        SyncLog.i("generated subtitles: started")
 +        current.ticker = scope.launch { tick(current) }
 +        current.worker = Thread({ work(current) }, "NuvioGeneratedSubs").apply {
 +            isDaemon = true
@@ -770,6 +844,9 @@ index 00000000..207c2044
 +                GeneratedSpeechModel.DOLPHIN -> GeneratedRecognizer.dolphin(appContext, language, THREADS)
 +            }
 +            val weights = appContext.resources.openRawResource(R.raw.silero_vad_v5_16k).use { SileroVadWeights.read(it) }
++            // Some playlists hide behind addresses without ".m3u8": the first bytes tell.
++            val hls = hlsByAddress || HlsAudioSpotSampler.looksLikePlaylist(source, dataSourceFactory)
++            SyncLog.i("generated subtitles: reading the stream as ${if (hls) "an HLS playlist" else "a single file"}")
 +            val hlsSampler = if (hls) HlsAudioSpotSampler(source, dataSourceFactory, MAX_WINDOW_BYTES) else null
 +            current.status = "Generating subtitles from the audio…"
 +            val covered = ArrayList<LongArray>()
