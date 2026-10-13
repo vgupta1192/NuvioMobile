@@ -50,7 +50,7 @@ index 3ca8b963..baf0527d 100644
          appliedListener = null
      }
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt
-index 7012210f..05d1657a 100644
+index 7012210f..193def20 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt
 @@ -49,6 +49,8 @@ internal class HlsAudioSpotSampler(
@@ -62,7 +62,7 @@ index 7012210f..05d1657a 100644
  ) {
      private class Key(val uri: String, val iv: ByteArray?)
  
-@@ -227,8 +229,9 @@ internal class HlsAudioSpotSampler(
+@@ -227,11 +229,12 @@ internal class HlsAudioSpotSampler(
              val period = manifest.getPeriod(periodIndex)
              val periodStartUs = period.startMs * 1_000L
              val periodDurationUs = manifest.getPeriodDurationUs(periodIndex)
@@ -70,10 +70,14 @@ index 7012210f..05d1657a 100644
 -            val set = sets.firstOrNull { set ->
 +            val trackType = if (video) C.TRACK_TYPE_VIDEO else C.TRACK_TYPE_AUDIO
 +            val sets = period.adaptationSets.filter { it.type == trackType && it.representations.isNotEmpty() }
-+            val set = if (video) sets.firstOrNull() else sets.firstOrNull { set ->
++            val set = (if (video) sets.firstOrNull() else sets.firstOrNull { set ->
                  val language = set.representations[0].format.language?.lowercase()?.substringBefore('-')
                  wanted != null && language != null && (language == wanted || language.startsWith(wanted) || wanted.startsWith(language))
-             } ?: sets.firstOrNull() ?: continue
+-            } ?: sets.firstOrNull() ?: continue
++            }) ?: sets.firstOrNull() ?: continue
+             val representation = set.representations.minByOrNull { it.format.bitrate.takeIf { rate -> rate > 0 } ?: Int.MAX_VALUE }
+                 ?: continue
+             val container = representation.format.containerMimeType.orEmpty()
 @@ -262,7 +265,7 @@ internal class HlsAudioSpotSampler(
                      )
                  }

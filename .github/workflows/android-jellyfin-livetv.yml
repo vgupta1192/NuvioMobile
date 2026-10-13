@@ -136,7 +136,7 @@ jobs:
         if: steps.ver.outputs.should_build == 'true'
         run: |
           # optional-ports
-          for P in livetv-robustness custom-stretch jellyfin-subtitles audio-sync-hls generated-subtitles synced-subtitles seek-previews; do
+          for P in livetv-robustness custom-stretch jellyfin-subtitles audio-sync-hls generated-subtitles synced-subtitles seek-previews volume-boost; do
             if git apply "fork-src/.github/patches/$P.patch"; then
               echo "applied $P.patch"
             else
@@ -593,3 +593,4 @@ jobs:
 # b79: synced subtitles stable stream key 2026-10-14
 # b80: seek previews (Reshaped on-device + Seekr, HLS/DASH filler) 2026-10-14
 # b81: synced subtitles keep every synced subtitle per stream 2026-10-14
+# b83: seek previews fix + volume boost + multiple synced subtitles 2026-10-14
