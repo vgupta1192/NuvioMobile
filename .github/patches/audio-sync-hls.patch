@@ -1,5 +1,5 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
-index e303ae00..cd8ea8c0 100644
+index e303ae00..98e9f0dc 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
 @@ -180,6 +180,8 @@ internal class AudioSubtitleSyncController(
@@ -53,15 +53,17 @@ index e303ae00..cd8ea8c0 100644
          )
          SubtitleSyncStatus.publishDiagnostics(diagnostics)
          logChange(diagnostics)
-@@ -380,6 +392,7 @@ internal class AudioSubtitleSyncController(
+@@ -380,6 +392,9 @@ internal class AudioSubtitleSyncController(
          spotSamplingStarted.set(false)
          spotDeclinedOnMobileData = false
          spotStatus = ""
++        lastSpotWait = ""
++        heardPlaybackPcm = false
 +        gaveUpKey = null
          model = null
          lockedAtElapsedMs = 0L
          lastAlignVersion = -1L
-@@ -407,10 +420,11 @@ internal class AudioSubtitleSyncController(
+@@ -407,10 +422,12 @@ internal class AudioSubtitleSyncController(
          val unavailable = when {
              localEngine -> "not used for torrent streams (would slow playback)"
              uri == null || (uri.scheme != "http" && uri.scheme != "https") -> "not available for this stream"
@@ -72,10 +74,53 @@ index e303ae00..cd8ea8c0 100644
 -        spotSource = if (unavailable == null) SpotSource(forSourceKey, uri!!, dataSourceFactory, extractorsFactory) else null
 +        val hls = path.endsWith(".m3u8")
 +        spotSource = if (unavailable == null) SpotSource(forSourceKey, uri!!, dataSourceFactory, extractorsFactory, hls) else null
++        SyncLog.i("spot source: ${unavailable ?: if (hls) "HLS playlist" else "single file"}")
          spotUnavailable = unavailable?.let { forSourceKey to it }
      }
  
-@@ -472,19 +486,31 @@ internal class AudioSubtitleSyncController(
+@@ -423,8 +440,18 @@ internal class AudioSubtitleSyncController(
+         val source = spotSource ?: return
+         val current = session ?: return
+         if (!enabled || released || source.sourceKey != sourceKey || (model != null && !estimated)) return
+-        if (mediaDurationMs < MIN_SAMPLED_FILM_MS) return
+-        if (timeline.knownFrameCount() < SAMPLE_AFTER_FRAMES) return
++        if (mediaDurationMs < MIN_SAMPLED_FILM_MS) {
++            noteSpotWait("not sampled: shorter than ${MIN_SAMPLED_FILM_MS / 60_000} min (${mediaDurationMs / 1_000}s)")
++            return
++        }
++        val heardEnough = timeline.knownFrameCount() >= SAMPLE_AFTER_FRAMES
++        // Playlist audio is often heard only through the playback tap; that must not hold HLS sampling back.
++        val waitedEnough = source.hls && sessionStartedAtMs > 0 &&
++            SystemClock.elapsedRealtime() - sessionStartedAtMs >= HLS_SAMPLE_AFTER_MS
++        if (!heardEnough && !waitedEnough) {
++            noteSpotWait("waiting for playback audio")
++            return
++        }
+         if (!spotSamplingStarted.compareAndSet(false, true)) return
+         if (!samplingOnMobileData && !AsrModel.isUnmetered(appContext)) {
+             SyncLog.i("not sampling audio across the film on a metered network")
+@@ -438,6 +465,20 @@ internal class AudioSubtitleSyncController(
+         }
+     }
+ 
++    @Volatile
++    private var lastSpotWait = ""
++
++    /** Why spots are not sampled yet: shown on the panel and logged once per reason. */
++    private fun noteSpotWait(reason: String) {
++        if (reason == lastSpotWait) return
++        lastSpotWait = reason
++        spotStatus = reason
++        SyncLog.i("audio sampling across the film: $reason")
++    }
++
++    @Volatile
++    private var heardPlaybackPcm = false
++
+     private fun sampleSpots(source: SpotSource, current: Session) {
+         Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+         val weights = runCatching { loadWeights(appContext) }.getOrNull() ?: return
+@@ -472,19 +513,31 @@ internal class AudioSubtitleSyncController(
              // On mobile data the target is also the cap; on other networks a high-bitrate file may
              // use more so each spot still holds whole sentences.
              val maxBytes = if (AsrModel.isUnmetered(appContext)) MAX_SPOT_BYTES else TARGET_SPOT_BYTES
@@ -117,7 +162,7 @@ index e303ae00..cd8ea8c0 100644
              SyncLog.i("sampled ${result.sampled} spots, ${result.bytes / 1_000_000} MB, failure=${result.failure}")
              if (result.failure != null && result.sampled == 0) spotStatus = "not possible for this stream"
              decoders.forEach { it.awaitDrained(DRAIN_TIMEOUT_MS) }
-@@ -497,10 +523,24 @@ internal class AudioSubtitleSyncController(
+@@ -497,10 +550,24 @@ internal class AudioSubtitleSyncController(
          }
      }
  
@@ -144,7 +189,7 @@ index e303ae00..cd8ea8c0 100644
              val playing = selectedAudioFormat ?: provisionalAudioFormat ?: return false
              return matches(format, playing)
          }
-@@ -513,10 +553,28 @@ internal class AudioSubtitleSyncController(
+@@ -513,10 +580,28 @@ internal class AudioSubtitleSyncController(
          }
  
          override fun onDiscontinuity() {
@@ -173,7 +218,7 @@ index e303ae00..cd8ea8c0 100644
      fun onAudioTrackSelected(format: Format?) {
          if (format == null || selectedAudioFormat?.let { matches(it, format) } == true) return
          selectedAudioFormat = format
-@@ -552,6 +610,7 @@ internal class AudioSubtitleSyncController(
+@@ -552,6 +637,7 @@ internal class AudioSubtitleSyncController(
          val handedOver = handover?.takeIf { it.key == key }
          handover = null
          if (switchNotice?.first != key) switchNotice = null
@@ -181,11 +226,23 @@ index e303ae00..cd8ea8c0 100644
          model = null
          lockedAtElapsedMs = 0L
          lockMethod = null
-@@ -1249,6 +1308,7 @@ internal class AudioSubtitleSyncController(
+@@ -1074,6 +1160,10 @@ internal class AudioSubtitleSyncController(
+     }
+ 
+     override fun onPlaybackPcm(mono: FloatArray, frames: Int, sampleRate: Int, mediaTimeUs: Long) {
++        if (!heardPlaybackPcm) {
++            heardPlaybackPcm = true
++            SyncLog.i("hearing playback audio: ${sampleRate}Hz from ${mediaTimeUs / 1_000}ms (playhead ${playbackPositionMs}ms)")
++        }
+         decoder?.offerPlaybackPcm(mono, frames, sampleRate, mediaTimeUs)
+     }
+ 
+@@ -1249,6 +1339,8 @@ internal class AudioSubtitleSyncController(
          private const val RESUME_THRESHOLD_MS = 10 * 60_000L
          private const val SPOT_BACKOFF_MS = 5L
          private const val DRAIN_TIMEOUT_MS = 10_000L
 +        private const val GIVE_UP_AFTER_MS = 6 * 60_000L
++        private const val HLS_SAMPLE_AFTER_MS = 10_000L
  
          /** Playback has started and buffered this much before sampling competes for bandwidth. */
          private val SAMPLE_AFTER_FRAMES = (5_000 / SpeechTimeline.FRAME_DURATION_MS).toInt()
@@ -498,3 +555,17 @@ index 00000000..2a4232cd
 +        }
 +    }
 +}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/PlaybackAudioTap.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/PlaybackAudioTap.kt
+index fc175f36..aa1f6987 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/PlaybackAudioTap.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/PlaybackAudioTap.kt
+@@ -41,6 +41,9 @@ internal class PlaybackAudioTap(
+                 it.channelCount > 0 && it.sampleRate > 0
+         }
+         lastPresentationTimeUs = C.TIME_UNSET
++        if (pcmFormat == null) {
++            SyncLog.i("playback audio can't be heard: ${inputFormat.sampleMimeType} encoding=${inputFormat.pcmEncoding}")
++        }
+         super.configure(inputFormat, specifiedBufferSize, outputChannels)
+     }
+ 
