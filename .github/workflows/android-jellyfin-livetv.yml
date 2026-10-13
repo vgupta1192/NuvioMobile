@@ -197,10 +197,16 @@ jobs:
           for i in 1 2 3; do
             echo "attempt $i"
             ./gradlew :androidApp:assembleFullRelease "-Pnuvio.app.versionName=${{ steps.ver.outputs.ver }}-fork.${{ github.run_number }}" --stacktrace 2>&1 | tee build-log.txt && ok=1 && break
+            # Compile errors don't go away on retry: show them as annotations (readable without
+            # signing in) and stop.
+            if grep -qE '^e: ' build-log.txt; then
+              grep -E '^e: ' build-log.txt | head -30 | while IFS= read -r line; do echo "::error::${line:0:900}"; done
+              exit 1
+            fi
             echo "gradle failed, retrying in 60s (transient repo errors are common)"
             sleep 60
           done
-          [ "$ok" = 1 ] || { echo "gradle failed after 3 attempts (see build-log.txt above)"; exit 1; }
+          [ "$ok" = 1 ] || { grep -E 'FAILURE|What went wrong' -A4 build-log.txt | head -20 | while IFS= read -r line; do echo "::error::${line:0:900}"; done; echo "gradle failed after 3 attempts (see build-log.txt above)"; exit 1; }
 
       # Proof, not assumption: the APK must carry the fixed key's certificate (CN=NuvioMobile self-host)
       - name: Verify signing certificate
