@@ -237,10 +237,10 @@ index 3136ec62..7c64c233 100644
      <string name="compose_player_seek_delta_forward">+%1$ds</string>
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
 new file mode 100644
-index 00000000..7a27408a
+index 00000000..42cc7a04
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
-@@ -0,0 +1,409 @@
+@@ -0,0 +1,435 @@
 +package com.nuvio.app.features.player
 +
 +import androidx.compose.runtime.Composable
@@ -424,9 +424,22 @@ index 00000000..7a27408a
 +
 +    /** A trusted bar is near black (baked bars are flat black; dark picture is noisier) ... */
 +    private const val BAR_MAX_MEAN = 12
-+    /** ... and the picture lines right next to it are clearly brighter (a sharp edge). */
++    /** Bar mean including the corners (a logo there is allowed, picture is not). */
++    private const val BAR_MAX_MEAN_WITH_CORNERS = 24
++    /**
++     * ... and the picture lines right next to it are clearly brighter (a sharp edge). The brightest
++     * of the [EDGE_BAND_LINES] lines next to the bar counts, so a soft (scaled or blurred) edge row
++     * between bar and picture does not hide the edge.
++     */
 +    private const val EDGE_MIN_CONTRAST = 24
-+    private const val EDGE_BAND_LINES = 2
++    private const val EDGE_BAND_LINES = 3
++
++    /**
++     * Bars are found in the middle of each line only (this fraction is skipped at both ends).
++     * Site logos and watermarks sit in the corners, often half inside a bar; they must not count
++     * as picture. Text in the middle of a bar (hardsubs) still keeps that bar.
++     */
++    private const val CORNER_FRACTION = 0.2f
 +
 +    /**
 +     * Measure the picture area in one luma sample ([width] x [height], row stride [stride]).
@@ -436,10 +449,12 @@ index 00000000..7a27408a
 +        if (width < 8 || height < 8 || luma.size < stride * (height - 1) + width) return null
 +
 +        val rowThreshold = max(2, (width * LINE_CONTENT_FRACTION).toInt())
++        val middleLeft = (width * CORNER_FRACTION).toInt()
++        val middleRight = width - middleLeft
 +        var top = -1
 +        var bottom = -1
 +        for (y in 0 until height) {
-+            if (countBright(luma, y * stride, 1, width) >= rowThreshold) {
++            if (countBright(luma, y * stride + middleLeft, 1, middleRight - middleLeft) >= rowThreshold) {
 +                if (top < 0) top = y
 +                bottom = y
 +            }
@@ -448,10 +463,12 @@ index 00000000..7a27408a
 +
 +        val rows = bottom - top + 1
 +        val columnThreshold = max(2, (rows * LINE_CONTENT_FRACTION).toInt())
++        val middleTop = top + (rows * CORNER_FRACTION).toInt()
++        val middleRows = rows - 2 * (rows * CORNER_FRACTION).toInt()
 +        var left = -1
 +        var right = -1
 +        for (x in 0 until width) {
-+            if (countBright(luma, top * stride + x, stride, rows) >= columnThreshold) {
++            if (countBright(luma, middleTop * stride + x, stride, middleRows) >= columnThreshold) {
 +                if (left < 0) left = x
 +                right = x
 +            }
@@ -467,34 +484,43 @@ index 00000000..7a27408a
 +        val pictureHeight = bottom - top + 1
 +        if (pictureWidth < width * MIN_CONTENT_WIDTH || pictureHeight < height * MIN_CONTENT_HEIGHT) return null
 +
-+        fun rowsMean(from: Int, toExclusive: Int): Int {
++        // Bar means skip the corners (logos); edge lines use the whole picture width or height.
++        val barLeft = max(left, middleLeft)
++        val barRight = min(right + 1, middleRight)
++        val barTop = max(top, middleTop)
++        val barBottom = min(bottom + 1, middleTop + middleRows)
++        fun rowMean(y: Int, x0: Int, x1: Int): Int {
 +            var sum = 0L
-+            var count = 0
-+            for (y in from until toExclusive) {
-+                for (x in left..right) sum += luma[y * stride + x].toInt() and 0xFF
-+                count += pictureWidth
-+            }
-+            return if (count == 0) 0 else (sum / count).toInt()
++            for (x in x0 until x1) sum += luma[y * stride + x].toInt() and 0xFF
++            return if (x1 <= x0) 0 else (sum / (x1 - x0)).toInt()
 +        }
-+        fun columnsMean(from: Int, toExclusive: Int): Int {
++        fun columnMean(x: Int, y0: Int, y1: Int): Int {
 +            var sum = 0L
-+            var count = 0
-+            for (x in from until toExclusive) {
-+                for (y in top..bottom) sum += luma[y * stride + x].toInt() and 0xFF
-+                count += pictureHeight
-+            }
-+            return if (count == 0) 0 else (sum / count).toInt()
++            for (y in y0 until y1) sum += luma[y * stride + x].toInt() and 0xFF
++            return if (y1 <= y0) 0 else (sum / (y1 - y0)).toInt()
 +        }
++        fun rowsMean(from: Int, toExclusive: Int, x0: Int = barLeft, x1: Int = barRight): Int =
++            if (toExclusive <= from) 0 else (from until toExclusive).sumOf { rowMean(it, x0, x1) } / (toExclusive - from)
++        fun columnsMean(from: Int, toExclusive: Int, y0: Int = barTop, y1: Int = barBottom): Int =
++            if (toExclusive <= from) 0 else (from until toExclusive).sumOf { columnMean(it, y0, y1) } / (toExclusive - from)
++        fun rowBar(from: Int, toExclusive: Int): Int =
++            if (rowsMean(from, toExclusive, left, right + 1) > BAR_MAX_MEAN_WITH_CORNERS) 255 else rowsMean(from, toExclusive)
++        fun columnBar(from: Int, toExclusive: Int): Int =
++            if (columnsMean(from, toExclusive, top, bottom + 1) > BAR_MAX_MEAN_WITH_CORNERS) 255 else columnsMean(from, toExclusive)
++        fun brightestRow(from: Int, toExclusive: Int): Int =
++            (from until toExclusive).maxOfOrNull { rowMean(it, left, right + 1) } ?: 0
++        fun brightestColumn(from: Int, toExclusive: Int): Int =
++            (from until toExclusive).maxOfOrNull { columnMean(it, top, bottom + 1) } ?: 0
 +        fun trusted(barMean: Int, edgeMean: Int) = barMean <= BAR_MAX_MEAN && edgeMean - barMean >= EDGE_MIN_CONTRAST
 +
 +        val band = EDGE_BAND_LINES
 +        val confident = booleanArrayOf(
-+            left == 0 || trusted(columnsMean(0, left), columnsMean(left, min(right + 1, left + band))),
-+            top == 0 || trusted(rowsMean(0, top), rowsMean(top, min(bottom + 1, top + band))),
++            left == 0 || trusted(columnBar(0, left), brightestColumn(left, min(right + 1, left + band))),
++            top == 0 || trusted(rowBar(0, top), brightestRow(top, min(bottom + 1, top + band))),
 +            right == width - 1 ||
-+                trusted(columnsMean(right + 1, width), columnsMean(max(left, right + 1 - band), right + 1)),
++                trusted(columnBar(right + 1, width), brightestColumn(max(left, right + 1 - band), right + 1)),
 +            bottom == height - 1 ||
-+                trusted(rowsMean(bottom + 1, height), rowsMean(max(top, bottom + 1 - band), bottom + 1)),
++                trusted(rowBar(bottom + 1, height), brightestRow(max(top, bottom + 1 - band), bottom + 1)),
 +        )
 +        val rect = VideoContentRect(
 +            left = left.toFloat() / width,
