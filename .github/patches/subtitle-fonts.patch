@@ -1,0 +1,353 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+index 1e39ac78..a8a4104f 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+@@ -1501,6 +1501,7 @@ private class NuvioLibmpvView(
+         mpv.setOptionString("demuxer-max-bytes", "${libmpvCacheBytes()}").logIfMpvError("demuxer-max-bytes")
+         mpv.setOptionString("demuxer-max-back-bytes", "${libmpvCacheBytes()}").logIfMpvError("demuxer-max-back-bytes")
+         mpv.setOptionString("vd-lavc-film-grain", "cpu")
++        mpv.setOptionString("sub-fonts-dir", SubtitleFontStore.fontsDir(context).path) // Nuvio fork: custom subtitle font
+         mpv.setOptionString("volume-max", com.nuvio.app.features.player.volumeboost.LIBMPV_VOLUME_MAX) // Volume boost hook
+         mpv.setPropertyBoolean("keep-open", true)
+         mpv.setPropertyBoolean("input-default-bindings", true)
+@@ -1884,6 +1885,7 @@ private class NuvioLibmpvView(
+                     mpv.setPropertyString("sub-border-color", style.outlineColor.toMpvColor())
+                     mpv.setPropertyString("sub-border-style", style.toMpvSubtitleBorderStyle())
+                     mpv.setPropertyString("sub-bold", if (style.bold) "yes" else "no")
++                    SubtitleFontStore.current(context)?.let { mpv.setPropertyString("sub-font", it.familyName) } // Nuvio fork: custom subtitle font
+                     mpv.setPropertyInt("sub-font-size", style.toMpvSubtitleFontSize())
+                     mpv.setPropertyInt("sub-outline-size", style.toMpvSubtitleOutlineSize())
+                     mpv.setPropertyInt("sub-border-size", style.toMpvSubtitleOutlineSize())
+@@ -2251,7 +2253,9 @@ private fun PlayerView.applySubtitleStyle(style: SubtitleStyleState, pipScale: F
+                 android.graphics.Color.TRANSPARENT,
+                 if (style.outlineEnabled) CaptionStyleCompat.EDGE_TYPE_OUTLINE else CaptionStyleCompat.EDGE_TYPE_NONE,
+                 style.outlineColor.toArgb(),
+-                if (style.bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT,
++                SubtitleFontStore.current(context)?.typeface // Nuvio fork: custom subtitle font
++                    ?.let { if (style.bold) Typeface.create(it, Typeface.BOLD) else it }
++                    ?: if (style.bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT,
+             )
+         )
+         setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, style.fontSizeSp.toFloat() * pipScale)
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/SubtitleFontPicker.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/SubtitleFontPicker.android.kt
+new file mode 100644
+index 00000000..6c8a60ab
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/SubtitleFontPicker.android.kt
+@@ -0,0 +1,48 @@
++package com.nuvio.app.features.player
++
++import android.widget.Toast
++import androidx.activity.compose.rememberLauncherForActivityResult
++import androidx.activity.result.contract.ActivityResultContracts
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.collectAsState
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.rememberCoroutineScope
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.platform.LocalContext
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.launch
++import kotlinx.coroutines.withContext
++
++@Composable
++actual fun rememberSubtitleFontPicker(): SubtitleFontPickerState? {
++    val context = LocalContext.current
++    val scope = rememberCoroutineScope()
++    val invalidMessage = "That file isn't a usable TTF or OTF font."
++    // First read touches disk, so keep it off the main thread.
++    LaunchedEffect(context) { withContext(Dispatchers.IO) { SubtitleFontStore.current(context) } }
++    val font by SubtitleFontStore.font.collectAsState()
++    var isImporting by remember { mutableStateOf(false) }
++    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
++        if (uri == null) return@rememberLauncherForActivityResult
++        isImporting = true
++        scope.launch {
++            val ok = SubtitleFontStore.import(context, uri)
++            isImporting = false
++            if (!ok) Toast.makeText(context, invalidMessage, Toast.LENGTH_LONG).show()
++        }
++    }
++    return SubtitleFontPickerState(
++        fontName = font?.familyName,
++        isImporting = isImporting,
++        pick = {
++            runCatching {
++                // Font MIME types vary by file manager; the import validates the file instead.
++                launcher.launch(arrayOf("*/*"))
++            }
++        },
++        reset = { SubtitleFontStore.clear(context) },
++    )
++}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/SubtitleFontStore.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/SubtitleFontStore.kt
+new file mode 100644
+index 00000000..38d63612
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/SubtitleFontStore.kt
+@@ -0,0 +1,166 @@
++package com.nuvio.app.features.player
++
++import android.content.Context
++import android.graphics.Typeface
++import android.net.Uri
++import android.provider.OpenableColumns
++import android.util.Log
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import kotlinx.coroutines.withContext
++import java.io.File
++import java.io.RandomAccessFile
++
++internal class CustomSubtitleFont(
++    val file: File,
++    /** Family name from the font's `name` table; libass (mpv) matches fonts by it. */
++    val familyName: String,
++    val typeface: Typeface,
++)
++
++/**
++ * Keeps at most one user-imported subtitle font in app storage. The font file itself is
++ * the persisted setting, so nothing is added to [PlayerSettingsRepository].
++ */
++internal object SubtitleFontStore {
++    private const val TAG = "SubtitleFontStore"
++    private const val MAX_FONT_BYTES = 30L * 1024 * 1024
++
++    private val _font = MutableStateFlow<CustomSubtitleFont?>(null)
++    val font: StateFlow<CustomSubtitleFont?> = _font.asStateFlow()
++
++    @Volatile
++    private var loaded = false
++
++    fun fontsDir(context: Context): File =
++        File(context.applicationContext.filesDir, "subtitle_fonts").apply { mkdirs() }
++
++    /** Returns the imported font, loading it from disk on first use. */
++    fun current(context: Context): CustomSubtitleFont? {
++        if (!loaded) {
++            synchronized(this) {
++                if (!loaded) {
++                    _font.value = fontsDir(context).listFiles()
++                        ?.firstOrNull { it.isFile }
++                        ?.let(::loadFont)
++                    loaded = true
++                }
++            }
++        }
++        return _font.value
++    }
++
++    suspend fun import(context: Context, uri: Uri): Boolean = withContext(Dispatchers.IO) {
++        val resolver = context.contentResolver
++        val displayName = runCatching {
++            resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
++                if (cursor.moveToFirst()) cursor.getString(0) else null
++            }
++        }.getOrNull()
++        val extension = displayName?.substringAfterLast('.', "")?.lowercase()
++            ?.takeIf { it == "ttf" || it == "otf" } ?: "ttf"
++        val dir = fontsDir(context)
++        val staging = File(dir, ".import.tmp")
++        val copied = runCatching {
++            resolver.openInputStream(uri)?.use { input ->
++                staging.outputStream().use { output ->
++                    val buffer = ByteArray(64 * 1024)
++                    var total = 0L
++                    while (true) {
++                        val read = input.read(buffer)
++                        if (read < 0) break
++                        total += read
++                        if (total > MAX_FONT_BYTES) error("font too large")
++                        output.write(buffer, 0, read)
++                    }
++                }
++            } != null
++        }.getOrElse {
++            Log.w(TAG, "Font copy failed", it)
++            false
++        }
++        val stagedFont = if (copied) loadFont(staging) else null
++        if (stagedFont == null) {
++            staging.delete()
++            return@withContext false
++        }
++        dir.listFiles()?.filter { it != staging }?.forEach { it.delete() }
++        val target = File(dir, "subtitle_font.$extension")
++        if (!staging.renameTo(target)) {
++            staging.delete()
++            return@withContext false
++        }
++        synchronized(this@SubtitleFontStore) {
++            _font.value = loadFont(target)
++            loaded = true
++        }
++        _font.value != null
++    }
++
++    fun clear(context: Context) {
++        synchronized(this) {
++            fontsDir(context).listFiles()?.forEach { it.delete() }
++            _font.value = null
++            loaded = true
++        }
++    }
++
++    private fun loadFont(file: File): CustomSubtitleFont? = runCatching {
++        val typeface = Typeface.createFromFile(file)
++        if (typeface == Typeface.DEFAULT) return@runCatching null
++        val family = readFontFamilyName(file) ?: return@runCatching null
++        CustomSubtitleFont(file = file, familyName = family, typeface = typeface)
++    }.getOrElse {
++        Log.w(TAG, "Unusable font ${file.name}", it)
++        null
++    }
++}
++
++/** Reads name ID 1 (font family) from a TrueType/OpenType `name` table. */
++private fun readFontFamilyName(file: File): String? = RandomAccessFile(file, "r").use { raf ->
++    val version = raf.readInt()
++    if (version != 0x00010000 && version != 0x4F54544F && version != 0x74727565) return null
++    val numTables = raf.readUnsignedShort()
++    raf.skipBytes(6)
++    var nameOffset = -1L
++    repeat(numTables) {
++        val tag = raf.readInt()
++        raf.skipBytes(4)
++        val offset = raf.readInt().toLong() and 0xFFFFFFFFL
++        raf.skipBytes(4)
++        if (tag == 0x6E616D65) nameOffset = offset // "name"
++    }
++    if (nameOffset < 0) return null
++    raf.seek(nameOffset)
++    raf.skipBytes(2)
++    val count = raf.readUnsignedShort()
++    val stringsOffset = nameOffset + raf.readUnsignedShort()
++    var macFallback: String? = null
++    for (i in 0 until count) {
++        raf.seek(nameOffset + 6 + i * 12L)
++        val platformId = raf.readUnsignedShort()
++        val encodingId = raf.readUnsignedShort()
++        val languageId = raf.readUnsignedShort()
++        val nameId = raf.readUnsignedShort()
++        val length = raf.readUnsignedShort()
++        val offset = raf.readUnsignedShort()
++        if (nameId != 1 || length == 0) continue
++        val bytes = ByteArray(length)
++        raf.seek(stringsOffset + offset)
++        raf.readFully(bytes)
++        when {
++            platformId == 3 || platformId == 0 -> {
++                val name = String(bytes, Charsets.UTF_16BE).trim()
++                if (name.isNotEmpty() && (platformId == 0 || languageId == 0x0409 || encodingId == 0)) {
++                    return name
++                }
++                if (name.isNotEmpty() && macFallback == null) macFallback = name
++            }
++            platformId == 1 && encodingId == 0 && macFallback == null ->
++                macFallback = String(bytes, Charsets.ISO_8859_1).trim().ifEmpty { null }
++        }
++    }
++    macFallback
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleFontPicker.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleFontPicker.kt
+new file mode 100644
+index 00000000..ba2e02e5
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleFontPicker.kt
+@@ -0,0 +1,17 @@
++package com.nuvio.app.features.player
++
++import androidx.compose.runtime.Composable
++
++/**
++ * User-supplied subtitle font. [fontName] is null while the built-in font is used.
++ * Platforms that cannot import fonts return null from [rememberSubtitleFontPicker].
++ */
++class SubtitleFontPickerState(
++    val fontName: String?,
++    val isImporting: Boolean,
++    val pick: () -> Unit,
++    val reset: () -> Unit,
++)
++
++@Composable
++expect fun rememberSubtitleFontPicker(): SubtitleFontPickerState?
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+index 27879934..ab2ed47f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+@@ -618,6 +618,8 @@ private fun PlaybackSettingsSection(
+ 
+         ConnectionFitSettingsSection(isTablet = isTablet) // Nuvio fork: connection-speed fit
+ 
++        SubtitleFontSettingsSection(isTablet = isTablet) // Nuvio fork: custom subtitle font
++
+         SettingsSection(
+             title = stringResource(Res.string.settings_playback_section_subtitle_rendering),
+             isTablet = isTablet,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SubtitleFontSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SubtitleFontSettings.kt
+new file mode 100644
+index 00000000..e190153e
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SubtitleFontSettings.kt
+@@ -0,0 +1,42 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.material3.Text
++import androidx.compose.material3.TextButton
++import androidx.compose.runtime.Composable
++import com.nuvio.app.features.player.rememberSubtitleFontPicker
++
++/**
++ * Nuvio fork (ported from NuvioMobile-Reshaped): import a TTF/OTF font for subtitles, used by
++ * ExoPlayer and libmpv. Hidden where fonts can't be imported (iOS).
++ */
++@Composable
++internal fun SubtitleFontSettingsSection(isTablet: Boolean) {
++    val picker = rememberSubtitleFontPicker() ?: return
++    SettingsSection(
++        title = "Subtitle font",
++        isTablet = isTablet,
++    ) {
++        SettingsGroup(isTablet = isTablet) {
++            SettingsNavigationRow(
++                title = "Subtitle font",
++                description = when {
++                    picker.isImporting -> "Importing font…"
++                    picker.fontName != null -> picker.fontName
++                    else -> "Default. Tap to import a .ttf or .otf file"
++                },
++                enabled = !picker.isImporting,
++                isTablet = isTablet,
++                trailingContent = if (picker.fontName != null) {
++                    {
++                        TextButton(onClick = picker.reset) {
++                            Text("Reset")
++                        }
++                    }
++                } else {
++                    null
++                },
++                onClick = picker.pick,
++            )
++        }
++    }
++}
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/SubtitleFontPicker.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/SubtitleFontPicker.ios.kt
+new file mode 100644
+index 00000000..dfd290f0
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/SubtitleFontPicker.ios.kt
+@@ -0,0 +1,6 @@
++package com.nuvio.app.features.player
++
++import androidx.compose.runtime.Composable
++
++@Composable
++actual fun rememberSubtitleFontPicker(): SubtitleFontPickerState? = null
