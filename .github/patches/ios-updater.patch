@@ -1,5 +1,5 @@
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt
-index adb11cd..57080f7 100644
+index adb11cd2..57080f72 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt
 @@ -1,6 +1,7 @@
@@ -30,7 +30,7 @@ index adb11cd..57080f7 100644
                  bestBuild = build
                  val name = release.name?.takeIf { it.isNotBlank() } ?: release.tagName.orEmpty()
 diff --git a/composeApp/src/iosFull/kotlin/com/nuvio/app/core/build/AppFeaturePolicy.ios.kt b/composeApp/src/iosFull/kotlin/com/nuvio/app/core/build/AppFeaturePolicy.ios.kt
-index e4dc2e2..afe3f0a 100644
+index e4dc2e2d..afe3f0a0 100644
 --- a/composeApp/src/iosFull/kotlin/com/nuvio/app/core/build/AppFeaturePolicy.ios.kt
 +++ b/composeApp/src/iosFull/kotlin/com/nuvio/app/core/build/AppFeaturePolicy.ios.kt
 @@ -10,7 +10,7 @@ actual object AppFeaturePolicy {
@@ -43,7 +43,7 @@ index e4dc2e2..afe3f0a 100644
      actual val mediaPlaybackForegroundServiceEnabled: Boolean = false
      actual val downloadForegroundServiceEnabled: Boolean = false
 diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.ios.kt
-index d7f22bd..6ed1c8a 100644
+index d7f22bd8..6ed1c8a5 100644
 --- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.ios.kt
 +++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.ios.kt
 @@ -1,36 +1,117 @@

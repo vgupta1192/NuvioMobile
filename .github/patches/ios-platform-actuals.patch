@@ -1,8 +1,8 @@
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-index 660c7dc..870be0b 100644
+index c29d42d5..0961a152 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-@@ -561,14 +561,19 @@ private fun PlaybackSettingsSection(
+@@ -602,14 +602,19 @@ private fun PlaybackSettingsSection(
              }
          }
  
@@ -30,7 +30,7 @@ index 660c7dc..870be0b 100644
  
          SettingsSection(
 diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
-index 0a9fc37..79371f1 100644
+index 0a9fc370..79371f19 100644
 --- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
 +++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
 @@ -1,21 +1,63 @@
@@ -105,7 +105,7 @@ index 0a9fc37..79371f1 100644
      }
  }
 diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt
-index c51d57a..5c44ce7 100644
+index c51d57a0..5c44ce70 100644
 --- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt
 +++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt
 @@ -1,10 +1,62 @@
@@ -196,7 +196,7 @@ index c51d57a..5c44ce7 100644
  }
 diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/MiniGzip.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/MiniGzip.kt
 new file mode 100644
-index 0000000..0915c5e
+index 00000000..0915c5e2
 --- /dev/null
 +++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/MiniGzip.kt
 @@ -0,0 +1,226 @@
