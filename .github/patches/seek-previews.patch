@@ -1,5 +1,5 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
-index 341429c4..d35a82b0 100644
+index 73dcae99..abe157a6 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 @@ -108,6 +108,7 @@ open class MainActivity : AppCompatActivity() {
@@ -2065,10 +2065,10 @@ index 00000000..f4855b0f
 +    <string name="settings_seekr_api_key_invalid">Seekr didn't accept this key.</string>
 +</resources>
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
-index 225e866d..4dd75a18 100644
+index 67f7cf74..cecc6e1e 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
-@@ -681,6 +681,9 @@ private fun ProgressControls(
+@@ -703,6 +703,9 @@ private fun ProgressControls(
                              onClick = onEpisodesClick,
                          )
                      }
@@ -2078,7 +2078,7 @@ index 225e866d..4dd75a18 100644
                  }
              }
          }
-@@ -698,8 +701,12 @@ internal fun PlayerSeekBar(
+@@ -720,8 +723,12 @@ internal fun PlayerSeekBar(
  ) {
      val seekDurationMs = durationMs.coerceAtLeast(1L)
      val seekDescription = stringResource(Res.string.player_seek_position)
@@ -2104,10 +2104,10 @@ index 220937e7..d69f0749 100644
      }
  }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
-index 8b86b9b0..24becaf0 100644
+index 36998e22..312ad865 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
-@@ -45,6 +45,7 @@ internal fun PlayerScreenRuntime.showGestureMessage(message: String) {
+@@ -47,6 +47,7 @@ internal fun PlayerScreenRuntime.showGestureMessage(message: String) {
  
  internal fun PlayerScreenRuntime.clearLiveGestureFeedback() {
      liveGestureFeedback = null
@@ -2115,7 +2115,7 @@ index 8b86b9b0..24becaf0 100644
  }
  
  internal fun PlayerScreenRuntime.revealLockedOverlay() {
-@@ -99,7 +100,8 @@ internal fun PlayerScreenRuntime.showSeekFeedback(direction: PlayerSeekDirection
+@@ -101,7 +102,8 @@ internal fun PlayerScreenRuntime.showSeekFeedback(direction: PlayerSeekDirection
      )
  }
  
@@ -2125,21 +2125,21 @@ index 8b86b9b0..24becaf0 100644
      val deltaMs = previewPositionMs - baselinePositionMs
      val direction = if (deltaMs < 0L) PlayerSeekDirection.Backward else PlayerSeekDirection.Forward
      liveGestureFeedback = GestureFeedbackState(
-@@ -317,7 +319,8 @@ internal fun PlayerScreenRuntime.rememberSurfaceGestureCallbacks(): PlayerSurfac
+@@ -335,7 +337,8 @@ internal fun PlayerScreenRuntime.rememberSurfaceGestureCallbacks(): PlayerSurfac
          playerControlsLocked = rememberUpdatedState(playerControlsLocked),
          currentPositionMs = rememberUpdatedState(playbackSnapshot.positionMs.coerceAtLeast(0L)),
          currentDurationMs = rememberUpdatedState(playbackSnapshot.durationMs),
--        commitHorizontalSeek = rememberUpdatedState { targetPositionMs: Long ->
+-        commitHorizontalSeek = rememberUpdatedState { requestedPositionMs: Long ->
 +        commitHorizontalSeek = rememberUpdatedState { rawTargetPositionMs: Long ->
-+            val targetPositionMs = seekPreviewAligned(rawTargetPositionMs) // Seek previews hook
-             lastManualSkipSeekPositions = playbackSnapshot.positionMs to targetPositionMs
-             playerController?.seekTo(targetPositionMs)
-             scheduleProgressSyncAfterSeek()
++            val requestedPositionMs = seekPreviewAligned(rawTargetPositionMs) // Seek previews hook
+             val targetPositionMs = if (isPartyControlLocked) {
+                 ownSeekTarget(requestedPositionMs) ?: return@rememberUpdatedState
+             } else {
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
-index 4486c122..a310b6c0 100644
+index f95b2a65..13f2a70a 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
-@@ -135,6 +135,7 @@ internal class PlayerScreenRuntime(
+@@ -138,6 +138,7 @@ internal class PlayerScreenRuntime(
      var playerControllerSourceUrl by mutableStateOf<String?>(null)
      var errorMessage by mutableStateOf<String?>(null)
      var isScrubbingTimeline by mutableStateOf(false)
@@ -2148,33 +2148,33 @@ index 4486c122..a310b6c0 100644
      var pausedOverlayVisible by mutableStateOf(false)
      var gestureFeedback by mutableStateOf<GestureFeedbackState?>(null)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index fa210543..63c17497 100644
+index a2de94b5..e1ea55f0 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -273,7 +273,7 @@ private fun PlayerScreenRuntime.currentInitialPositionRequestKey(): String? {
- private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long, isEpisode: Boolean) {
-     val isInPip = rememberIsInPictureInPicture()
+@@ -279,7 +279,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+     val partyState by PartyRepository.state.collectAsStateWithLifecycle()
+     val partyActive = partyState.party != null
      AnimatedVisibility(
 -        visible = (controlsVisible || showParentalGuide) && !playerControlsLocked && !isInPip,
 +        visible = (controlsVisible || showParentalGuide) && !playerControlsLocked && !isInPip && !seekPreview.showSyncPanel,
          enter = fadeIn(),
          exit = fadeOut(),
      ) {
-@@ -387,7 +387,8 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+@@ -402,7 +402,8 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
                  isScrubbingTimeline = true
                  scrubbingPositionMs = positionMs
              },
 -            onScrubFinished = { positionMs ->
 +            onScrubFinished = { rawPositionMs ->
 +                val positionMs = seekPreviewAligned(rawPositionMs) // Seek previews hook
-                 finishTimelineScrub(positionMs)
-                 playerController?.seekTo(positionMs)
-                 scheduleProgressSyncAfterSeek()
+                 val targetMs = if (isPartyControlLocked) ownSeekTarget(positionMs) else positionMs
+                 if (targetMs == null) {
+                     isScrubbingTimeline = false
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTimeline.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTimeline.kt
-index c626ca9d..2360b05d 100644
+index 9021309d..f2f6f823 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTimeline.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTimeline.kt
-@@ -122,6 +122,7 @@ internal fun PlayerTimeline(
+@@ -124,6 +124,7 @@ internal fun PlayerTimeline(
      val isPressed by interactionSource.collectIsPressedAsState()
      val isDragged by interactionSource.collectIsDraggedAsState()
      val isInteracting = enabled && durationMs > 0L && (isPressed || isDragged)
@@ -2182,7 +2182,7 @@ index c626ca9d..2360b05d 100644
      val trackThickness by animateDpAsState(
          targetValue = if (isInteracting) 10.dp else 6.dp,
          animationSpec = tween(durationMillis = if (isInteracting) 140 else 180),
-@@ -129,6 +130,7 @@ internal fun PlayerTimeline(
+@@ -131,6 +132,7 @@ internal fun PlayerTimeline(
      )
  
      CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
@@ -2190,7 +2190,7 @@ index c626ca9d..2360b05d 100644
          Slider(
              value = displayedPositionMs.coerceIn(0L, durationMs).toFloat(),
              onValueChange = { value ->
-@@ -171,6 +173,7 @@ internal fun PlayerTimeline(
+@@ -173,6 +175,7 @@ internal fun PlayerTimeline(
                                  size = Size(size.width * (state.value / rangeEnd).coerceIn(0f, 1f), trackHeight),
                                  cornerRadius = radius,
                              )
