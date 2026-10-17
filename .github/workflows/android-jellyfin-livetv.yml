@@ -147,6 +147,17 @@ jobs:
             fi
           done
 
+      # Fork feature (applies on top of the whole chain, mandatory): Jellyfin screen rewrite —
+      # cinematic home (hero pager + row per library) + full-screen detail page reusing the
+      # app's DetailHero/DetailMetaInfo/DetailCastSection, with media badges and cast photos.
+      - name: Apply Jellyfin cinematic UI patch
+        if: steps.ver.outputs.should_build == 'true'
+        run: |
+          if ! git apply fork-src/.github/patches/mobile-jellyfin-cinematic-ui.patch; then
+            echo "::error::mobile-jellyfin-cinematic-ui.patch no longer applies to upstream cmp-rewrite"
+            exit 1
+          fi
+
       - name: Fixed signing key
         id: signkey
         if: steps.ver.outputs.should_build == 'true'
