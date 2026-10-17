@@ -1,140 +1,23 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.android.kt
+index 921324b78f..48b11dc39c 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.android.kt
+@@ -57,4 +57,10 @@ internal actual object JellyfinPlatform {
+             if (value == null) remove(key) else putString(key, value)
+         }?.apply()
+     }
++
++    actual fun localEndTimeLabel(minutesFromNow: Long): String? = runCatching {
++        val calendar = java.util.Calendar.getInstance()
++        calendar.add(java.util.Calendar.MINUTE, minutesFromNow.toInt())
++        java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(calendar.time)
++    }.getOrNull()
+ }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index ffba217793..028d3dd0db 100644
+index ffba217793..3e0afe38bc 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-@@ -137,11 +137,6 @@ import com.nuvio.app.features.library.toMetaPreview
- import com.nuvio.app.features.membership.MemberAccessRepository
- import com.nuvio.app.features.notifications.EpisodeReleaseNotificationsRepository
- import com.nuvio.app.features.p2p.P2pSettingsRepository
--import com.nuvio.app.features.party.PartyEvent
--import com.nuvio.app.features.party.PartyMedia
--import com.nuvio.app.features.party.PartyRepository
--import com.nuvio.app.features.party.PartyScreen
--import com.nuvio.app.features.party.PartySync
- import com.nuvio.app.features.player.ExternalPlayerIntentResult
- import com.nuvio.app.features.player.externalPlaybackSession
- import com.nuvio.app.features.player.infusePlaybackCallbacks
-@@ -197,7 +192,6 @@ import com.nuvio.app.features.servers.ServerMatcher
- import com.nuvio.app.features.servers.ServerRepository
- import kotlinx.coroutines.flow.MutableSharedFlow
- import kotlinx.coroutines.flow.collectLatest
--import kotlinx.coroutines.flow.first
- import kotlinx.coroutines.launch
- import nuvio.composeapp.generated.resources.*
- import org.jetbrains.compose.resources.getString
-@@ -378,7 +372,6 @@ internal fun MainAppContent(
-     val collectionsTitle = stringResource(Res.string.collections_header)
-     val newCollectionTitle = stringResource(Res.string.collections_new)
-     val detailsFallbackTitle = stringResource(Res.string.meta_section_details_title)
--    val watchPartyTitle = stringResource(Res.string.party_title)
-     val isRemoteLibrarySource = libraryUiState.sourceMode != LibrarySourceMode.LOCAL
-     val appContentGeneration = if (ownsAppRuntime && appGateController != null) {
-         val generation by appGateController.contentGeneration.collectAsStateWithLifecycle()
-@@ -714,14 +707,13 @@ internal fun MainAppContent(
-         if (!ownsAppRuntime) return@LaunchedEffect
-         if (!initialHomeReady || profileSwitchLoading) return@LaunchedEffect
-         if (resumePromptItem != null) return@LaunchedEffect
--        if (currentRoute is StreamRoute || currentRoute is PlayerRoute || currentRoute is PartyRoute) return@LaunchedEffect
-         if (continueWatchingPreferencesUiState.showResumePromptOnLaunch) {
-             resumePromptItem = ResumePromptRepository.consumeResumePrompt()
-         }
-     }
- 
-     LaunchedEffect(currentRoute) {
--        val inPlaybackFlow = currentRoute is StreamRoute || currentRoute is PlayerRoute || currentRoute is PartyRoute
-+        val inPlaybackFlow = currentRoute is StreamRoute || currentRoute is PlayerRoute
-         if (inPlaybackFlow) {
-             resumePromptItem = null
-         }
-@@ -784,14 +776,6 @@ internal fun MainAppContent(
-                         AppDeepLinkRepository.markConsumed(deepLink)
-                     }
- 
--                    is AppDeepLink.Party -> {
--                        appGateController?.appReady?.first { it }
--                        navController.navigate(PartyRoute(code = deepLink.code, title = watchPartyTitle)) {
--                            launchSingleTop = true
--                        }
--                        AppDeepLinkRepository.markConsumed(deepLink)
--                    }
--
-                     null -> Unit
-                 }
-             }
-@@ -1119,32 +1103,6 @@ internal fun MainAppContent(
-             )
-         }
- 
--        fun openPartyMedia(media: PartyMedia) {
--            if (navController.currentRoute is PlayerRoute) navController.popBackStack()
--            val resumePositionMs = PartyRepository.playback.value
--                ?.takeIf { it.mediaKey == null || it.mediaKey == media.key }
--                ?.let { PartySync.expectedPositionMs(it, PartyRepository.nowMs()) }
--            launchPlaybackWithDownloadPreference(
--                type = media.type,
--                videoId = media.videoId ?: media.metaId,
--                parentMetaId = media.metaId,
--                parentMetaType = media.metaType,
--                title = media.title,
--                logo = media.logo,
--                poster = media.poster,
--                background = media.background,
--                seasonNumber = media.season,
--                episodeNumber = media.episode,
--                episodeTitle = media.episodeTitle,
--                episodeThumbnail = null,
--                pauseDescription = null,
--                resumePositionMs = resumePositionMs,
--                resumeProgressFraction = null,
--                manualSelection = true,
--                startFromBeginning = resumePositionMs == null,
--            )
--        }
--
-         val onPlay: ContentPlayAction =
-             { type, videoId, parentMetaId, parentMetaType, title, logo, poster, background, seasonNumber, episodeNumber, episodeTitle, episodeThumbnail, pauseDescription, resumePositionMs ->
-                 launchPlaybackWithDownloadPreference(
-@@ -1191,23 +1149,6 @@ internal fun MainAppContent(
-                 )
-             }
- 
--        LaunchedEffect(Unit) {
--            if (!ownsAppRuntime) return@LaunchedEffect
--            PartyRepository.events.collect { event ->
--                val message = when (event) {
--                    is PartyEvent.MemberJoined -> getString(Res.string.party_member_joined, event.name)
--                    is PartyEvent.MemberLeft -> getString(Res.string.party_member_left, event.name)
--                    PartyEvent.Removed -> getString(Res.string.party_removed)
--                    PartyEvent.Ended -> getString(Res.string.party_ended)
--                    is PartyEvent.MediaChanged -> getString(Res.string.party_media_changed, event.media.title)
--                    is PartyEvent.ControlChanged -> getString(
--                        if (event.hostOnly) Res.string.party_control_host_only else Res.string.party_control_everyone,
--                    )
--                }
--                NuvioToastController.show(message)
--            }
--        }
--
-         val onCatalogClick: (HomeCatalogSection) -> Unit = { section ->
-             val launchId = CatalogLaunchStore.put(
-                 CatalogLaunch(
-@@ -1564,7 +1505,6 @@ internal fun MainAppContent(
-                                     null
-                                 },
-                                 onCollectionsSettingsClick = { navController.navigate(CollectionsRoute(collectionsTitle)) },
--                                onWatchPartySettingsClick = { navController.navigate(PartyRoute(title = watchPartyTitle)) },
-                                 onFolderClick = { collectionId, folderId ->
-                                     val folderTitle = CollectionRepository.collections.value
-                                         .firstOrNull { it.id == collectionId }
-@@ -1667,7 +1607,6 @@ internal fun MainAppContent(
-                         onExternalPlayerLaunch = { launch -> lastExternalPlayerLaunch = launch },
-                         launchExternalPlayer = launchExternalPlayer,
-                         openExternalStreamUrl = ::openExternalStreamUrl,
--                        onOpenPartyMedia = ::openPartyMedia,
-                     )
-                 }
-                 entry<CatalogRoute> { route ->
-@@ -1712,7 +1651,13 @@ internal fun MainAppContent(
+@@ -1712,7 +1712,13 @@ internal fun MainAppContent(
                  }
                  entry<JellyfinRoute> { route ->
                      val onBack = rememberGuardedPopBackStack(navController, route)
@@ -149,22 +32,6 @@ index ffba217793..028d3dd0db 100644
                  }
                  entry<JellyfinDetailRoute> { route ->
                      val onBack = rememberGuardedPopBackStack(navController, route)
-@@ -1745,15 +1690,6 @@ internal fun MainAppContent(
-                         }
-                     }
-                 }
--                entry<PartyRoute> { route ->
--                    SettingsDestination(route, navController) { onBack ->
--                        PartyScreen(
--                            initialCode = route.code,
--                            onBack = onBack,
--                            onWatch = ::openPartyMedia,
--                        )
--                    }
--                }
-                 entry<AccountSettingsRoute> { route ->
-                     SettingsDestination(route, navController) { onBack ->
-                         AccountSettingsScreen(onBack = onBack)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt
 index b1b97c1f16..c20f828565 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt
@@ -344,10 +211,10 @@ index b1b97c1f16..c20f828565 100644
          json.parseToJsonElement(this).jsonObject
  
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
-index 7d1d7399b8..7c136db96c 100644
+index 7d1d7399b8..72b9ff7889 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
-@@ -1,26 +1,70 @@
+@@ -1,26 +1,67 @@
  package com.nuvio.app.features.jellyfin
  
  import androidx.compose.foundation.background
@@ -405,9 +272,6 @@ index 7d1d7399b8..7c136db96c 100644
 +import com.nuvio.app.features.details.components.DetailMetaInfo
 +import com.nuvio.app.features.details.components.ExpandableDescription
  import com.nuvio.app.navigation.JellyfinDetailRoute
-+import kotlinx.datetime.Clock
-+import kotlinx.datetime.TimeZone
-+import kotlinx.datetime.toLocalDateTime
  
 -/** Opens a Jellyfin item by id — the entry point for Jellyfin results in the global Search. */
 +/**
@@ -420,7 +284,7 @@ index 7d1d7399b8..7c136db96c 100644
  @Composable
  fun JellyfinDetailScreen(
      route: JellyfinDetailRoute,
-@@ -35,44 +79,429 @@ fun JellyfinDetailScreen(
+@@ -35,44 +76,418 @@ fun JellyfinDetailScreen(
          JellyfinRepository.selectItemById(route.itemId)
      }
  
@@ -542,7 +406,7 @@ index 7d1d7399b8..7c136db96c 100644
 +        DetailMetaInfo(
 +            meta = meta,
 +            modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-         )
++        )
 +        if (!item.overview.isNullOrBlank()) {
 +            ExpandableDescription(
 +                text = item.overview.orEmpty(),
@@ -554,7 +418,7 @@ index 7d1d7399b8..7c136db96c 100644
 +        DetailCastSection(
 +            cast = meta.cast,
 +            modifier = Modifier.padding(top = 12.dp),
-+        )
+         )
 +        if (item.isSeries && state.seasons.isNotEmpty()) {
 +            JellyfinSeasonsChips(
 +                state = state,
@@ -584,18 +448,7 @@ index 7d1d7399b8..7c136db96c 100644
 +        add(if (subtitles > 0) "CC None (+$subtitles)" else "CC None")
 +    }
 +    val endsAt = remember(item.runTimeTicks) {
-+        item.runTimeMinutes?.let { minutes ->
-+            val local = (Clock.System.now() + minutes * 60_000L)
-+                .toLocalDateTime(TimeZone.currentSystemDefault()).time
-+            val h24 = local.hour
-+            val h12 = when {
-+                h24 == 0 -> 12
-+                h24 > 12 -> h24 - 12
-+                else -> h24
-+            }
-+            val amPm = if (h24 < 12) "am" else "pm"
-+            "$h12:${local.minute.toString().padStart(2, '0')} $ampm"
-+        }
++        item.runTimeMinutes?.let { minutes -> JellyfinPlatform.localEndTimeLabel(minutes.toLong()) }
 +    }
 +    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
 +        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -738,17 +591,17 @@ index 7d1d7399b8..7c136db96c 100644
          ) {
 -            when {
 -                state.selectedDetail == null && state.isLoadingDetail -> Box(
--                    modifier = Modifier.fillMaxSize(),
--                    contentAlignment = Alignment.Center,
--                ) { CircularProgressIndicator() }
--
--                state.selectedDetail == null && state.detailError != null -> Column(
 +            if (thumbnailUrl != null) {
 +                AsyncImage(
 +                    model = thumbnailUrl,
 +                    contentDescription = episode.name,
 +                    contentScale = ContentScale.Crop,
                      modifier = Modifier.fillMaxSize(),
+-                    contentAlignment = Alignment.Center,
+-                ) { CircularProgressIndicator() }
+-
+-                state.selectedDetail == null && state.detailError != null -> Column(
+-                    modifier = Modifier.fillMaxSize(),
 -                    horizontalAlignment = Alignment.CenterHorizontally,
 -                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
 -                ) {
@@ -793,22 +646,22 @@ index 7d1d7399b8..7c136db96c 100644
 +            )
 +            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
 +                episode.runTimeMinutes?.let { minutes ->
++                    Text(
++                        text = "${minutes}m",
++                        style = MaterialTheme.typography.labelSmall,
++                        color = tokens.colors.textSecondary,
++                    )
++                }
++                if (episode.resumePositionMs > 0) {
                      Text(
 -                        text = state.detailError.orEmpty(),
 -                        style = MaterialTheme.typography.bodyMedium,
 -                        color = MaterialTheme.colorScheme.error,
-+                        text = "${minutes}m",
-+                        style = MaterialTheme.typography.labelSmall,
-+                        color = tokens.colors.textSecondary,
-                     )
-                 }
-+                if (episode.resumePositionMs > 0) {
-+                    Text(
 +                        text = "Resume at ${formatPosition(episode.resumePositionMs)}",
 +                        style = MaterialTheme.typography.labelSmall,
 +                        color = MaterialTheme.colorScheme.primary,
-+                    )
-+                }
+                     )
+                 }
 +            }
 +        }
 +    }
@@ -1004,6 +857,18 @@ index 05f1c52372..d4ee562d44 100644
 +    director = director,
 +    cast = cast,
 +)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.kt
+index 9e7f1f2685..3a1ae20bf1 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.kt
+@@ -13,4 +13,7 @@ internal expect object JellyfinPlatform {
+     fun loadString(key: String): String?
+ 
+     fun saveString(key: String, value: String?)
++
++    /** Wall-clock label ("4:48 pm") for `minutesFromNow` minutes from now; null when unavailable. */
++    fun localEndTimeLabel(minutesFromNow: Long): String?
+ }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinRepository.kt
 index 9eb5b58193..07d847066c 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinRepository.kt
@@ -1807,3 +1672,25 @@ index bfaf55c61b..547ca408a6 100644
 -        "${minutes}m"
 -    }
 -}
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
+index 0a9fc37078..d6ef86343f 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
+@@ -18,4 +18,17 @@ internal actual object JellyfinPlatform {
+     actual fun saveString(key: String, value: String?) {
+         if (value == null) values.remove(key) else values[key] = value
+     }
++
++    actual fun localEndTimeLabel(minutesFromNow: Long): String? = runCatching {
++        val formatter = platform.Foundation.NSDateFormatter().apply {
++            timeStyle = platform.Foundation.NSDateFormatterStyle.NSDateFormatterStyleShort
++            dateStyle = platform.Foundation.NSDateFormatterStyle.NSDateFormatterStyleNoStyle
++        }
++        formatter.stringFromDate(
++            platform.Foundation.NSDate(
++                timeIntervalSince1970 = platform.Foundation.NSDate().timeIntervalSince1970 +
++                    minutesFromNow * 60.0,
++            ),
++        )
++    }.getOrNull()
+ }
