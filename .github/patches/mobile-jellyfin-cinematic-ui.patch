@@ -65,7 +65,7 @@ index ffba2177..8d22f1f2 100644
                  entry<DownloadsRoute> { route ->
                      DownloadsDestination(
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
-index 43f1a28c..184c902b 100644
+index 43f1a28c..de79442d 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
 @@ -48,11 +48,27 @@ internal object AutoSyncSyncedSubtitle {
@@ -75,9 +75,9 @@ index 43f1a28c..184c902b 100644
 -/** "Auto synced" chip for the selected add-on subtitle in the subtitle panel; empty otherwise. */
 +/** "Auto synced" chip: live for the subtitle AutoSync just corrected, and shown for every
 + *  add-on subtitle that already has a saved synced timing for this title + stream. */
- @Composable
 +private val loggedRowBasenames = mutableSetOf<String>()
 +
+ @Composable
  internal fun AutoSyncedChip(subtitleUrl: String, selected: Boolean) {
 +    // Nuvio fork diagnostics: the stable-looking file name of every row shown in the list, so a
 +    // shared log capture can be compared against the saved timings' URLs on the server.
