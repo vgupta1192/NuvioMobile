@@ -68,6 +68,21 @@ index 43f1a28c..9b9b38be 100644
  
      val tokens = MaterialTheme.nuvio
      val contentColor = tokens.colors.onAccent.copy(alpha = 0.9f)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailCastSection.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailCastSection.kt
+index e430bdec..12884be6 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailCastSection.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailCastSection.kt
+@@ -83,7 +83,9 @@ fun DetailCastSection(
+                         sizing = sizing,
+                         sharedTransitionScope = sharedTransitionScope,
+                         animatedVisibilityScope = animatedVisibilityScope,
+-                        onClick = if (onCastClick != null && person.tmdbId != null && person.tmdbId > 0) {
++                        // Nuvio fork: the handler decides clickability - sources without TMDB
++                        // ids (Jellyfin) resolve the person by name instead.
++                        onClick = if (onCastClick != null) {
+                             { onCastClick(person, sharedTransitionKey) }
+                         } else {
+                             null
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt
 index b1b97c1f..c20f8285 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt
@@ -247,7 +262,7 @@ index b1b97c1f..c20f8285 100644
          json.parseToJsonElement(this).jsonObject
  
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
-index 7d1d7399..3934f573 100644
+index 7d1d7399..2d5f9423 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
 @@ -1,78 +1,507 @@
@@ -470,9 +485,9 @@ index 7d1d7399..3934f573 100644
 +            modifier = Modifier.padding(top = 12.dp),
 +            onCastClick = { person, _ ->
 +                castScope.launch {
-+                    TmdbMetadataService.searchPersonId(person.name)?.let { id ->
-+                        onOpenCast(id, person.name)
-+                    }
++                    val knownId = person.tmdbId?.takeIf { it > 0 }
++                    val id = knownId ?: TmdbMetadataService.searchPersonId(person.name)
++                    id?.let { onOpenCast(it, person.name) }
 +                }
 +            },
 +        )
@@ -1730,10 +1745,44 @@ index bfaf55c6..547ca408 100644
 -    }
 -}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
-index 94e9b375..86ddba79 100644
+index 94e9b375..70f13204 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
-@@ -214,7 +214,21 @@ object SyncedSubtitles {
+@@ -151,6 +151,33 @@ object SyncedSubtitles {
+             }.getOrNull().orEmpty()
+             if (remote.isNotEmpty() && _playback.value == next) merge(next, remote, store = true)
+         }
++        // Nuvio fork: nothing under THIS device's stream key - other devices (or earlier
++        // sessions with rotated stream URLs) saved under different keys for the same title.
++        // Pull every key known for the video and merge without persisting locally.
++        scope.launch {
++            if (_playback.value != next || !_saved.value?.second.isNullOrEmpty()) return@launch
++            val allKeys = runCatching {
++                val result = SupabaseProvider.client.postgrest.rpc(
++                    "synced_subtitles_list",
++                    buildJsonObject { put("p_video_id", next.videoId) },
++                )
++                json.decodeFromString<List<String>>(result.data)
++            }.getOrNull().orEmpty()
++            for (key in allKeys) {
++                if (_playback.value != next) break
++                val remote = runCatching {
++                    val result = SupabaseProvider.client.postgrest.rpc(
++                        "synced_subtitles_pull_all",
++                        buildJsonObject {
++                            put("p_video_id", next.videoId)
++                            put("p_stream_key", key)
++                        },
++                    )
++                    decodeList(result.data)
++                }.getOrNull().orEmpty()
++                if (remote.isNotEmpty() && _playback.value == next) merge(next, remote, store = false)
++            }
++        }
+     }
+ 
+     /** Adds [incoming] to the saved subtitles of [playback]; the newer copy of a subtitle wins. */
+@@ -214,7 +241,21 @@ object SyncedSubtitles {
      /** The saved synced subtitle for [url] in this playback, if any. */
      fun savedFor(url: String): Saved? {
          val (playback, saved) = _saved.value ?: return null
