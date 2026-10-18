@@ -65,10 +65,10 @@ index ffba2177..8d22f1f2 100644
                  entry<DownloadsRoute> { route ->
                      DownloadsDestination(
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
-index 43f1a28c..9b9b38be 100644
+index 43f1a28c..184c902b 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
-@@ -48,11 +48,17 @@ internal object AutoSyncSyncedSubtitle {
+@@ -48,11 +48,27 @@ internal object AutoSyncSyncedSubtitle {
      }
  }
  
@@ -76,7 +76,17 @@ index 43f1a28c..9b9b38be 100644
 +/** "Auto synced" chip: live for the subtitle AutoSync just corrected, and shown for every
 + *  add-on subtitle that already has a saved synced timing for this title + stream. */
  @Composable
++private val loggedRowBasenames = mutableSetOf<String>()
++
  internal fun AutoSyncedChip(subtitleUrl: String, selected: Boolean) {
++    // Nuvio fork diagnostics: the stable-looking file name of every row shown in the list, so a
++    // shared log capture can be compared against the saved timings' URLs on the server.
++    val rowBase = subtitleUrl.substringBefore('?').substringAfterLast('/')
++    synchronized(loggedRowBasenames) {
++        if (loggedRowBasenames.add(rowBase)) {
++            com.nuvio.app.features.player.SyncedSubtitles.log("subtitle list row file=$rowBase")
++        }
++    }
      val syncedUrl by AutoSyncSyncedSubtitle.url.collectAsState()
 -    if (!selected || syncedUrl != subtitleUrl) return
 +    val saved by com.nuvio.app.features.player.SyncedSubtitles.saved.collectAsState()
@@ -1765,7 +1775,7 @@ index bfaf55c6..547ca408 100644
 -    }
 -}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
-index 94e9b375..f492316a 100644
+index 94e9b375..de7d83d6 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
 @@ -50,6 +50,10 @@ object SyncedSubtitles {
@@ -1774,7 +1784,7 @@ index 94e9b375..f492316a 100644
  
 +    /** Nuvio fork: set by the Android side so the shareable audio-sync log shows the pull story. */
 +    var logSink: ((String) -> Unit)? = null
-+    private fun log(message: String) { logSink?.invoke(message) }
++    internal fun log(message: String) { logSink?.invoke(message) }
 +
      private var localLoad: ((name: String) -> String?)? = null
      private var localSave: ((name: String, value: String) -> Unit)? = null
