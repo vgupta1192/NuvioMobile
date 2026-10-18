@@ -44,6 +44,28 @@ index ffba2177..8d22f1f2 100644
                  }
                  entry<DownloadsRoute> { route ->
                      DownloadsDestination(
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
+index 43f1a28c..93b10f8f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
+@@ -48,11 +48,15 @@ internal object AutoSyncSyncedSubtitle {
+     }
+ }
+ 
+-/** "Auto synced" chip for the selected add-on subtitle in the subtitle panel; empty otherwise. */
++/** "Auto synced" chip: live for the subtitle AutoSync just corrected, and shown for every
++ *  add-on subtitle that already has a saved synced timing for this title + stream. */
+ @Composable
+ internal fun AutoSyncedChip(subtitleUrl: String, selected: Boolean) {
+     val syncedUrl by AutoSyncSyncedSubtitle.url.collectAsState()
+-    if (!selected || syncedUrl != subtitleUrl) return
++    val saved by com.nuvio.app.features.player.SyncedSubtitles.saved.collectAsState()
++    val liveSynced = selected && syncedUrl == subtitleUrl
++    val hasSavedTiming = saved?.second?.containsKey(subtitleUrl) == true
++    if (!liveSynced && !hasSavedTiming) return
+ 
+     val tokens = MaterialTheme.nuvio
+     val contentColor = tokens.colors.onAccent.copy(alpha = 0.9f)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt
 index b1b97c1f..c20f8285 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt
