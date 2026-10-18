@@ -1730,13 +1730,14 @@ index bfaf55c6..547ca408 100644
 -    }
 -}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
-index 94e9b375..2725fabd 100644
+index 94e9b375..86ddba79 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
-@@ -214,6 +214,22 @@ object SyncedSubtitles {
+@@ -214,7 +214,21 @@ object SyncedSubtitles {
      /** The saved synced subtitle for [url] in this playback, if any. */
      fun savedFor(url: String): Saved? {
          val (playback, saved) = _saved.value ?: return null
+-        return saved[url]?.takeIf { playback == _playback.value }
 +        if (playback != _playback.value) return null
 +        saved[url]?.let { return it }
 +        return saved.values.firstOrNull { sameSubtitleFile(it.subtitleUrl, url) }
@@ -1752,8 +1753,9 @@ index 94e9b375..2725fabd 100644
 +        val a = savedUrl.substringBefore('?').substringAfterLast('/')
 +        val b = listUrl.substringBefore('?').substringAfterLast('/')
 +        return a.isNotEmpty() && a == b
-+    }
+     }
  
+     /** AutoSync or the audio sync synced [url] to [srt] in this playback: keep it for next time. */
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tmdb/TmdbMetadataService.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tmdb/TmdbMetadataService.kt
 index fe0c628b..a58fd860 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tmdb/TmdbMetadataService.kt
