@@ -1,3 +1,23 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/SyncedSubtitleKeeper.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/SyncedSubtitleKeeper.kt
+index b976d322..da0718aa 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/SyncedSubtitleKeeper.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/SyncedSubtitleKeeper.kt
+@@ -12,6 +12,7 @@ import androidx.media3.common.text.Cue
+ import androidx.media3.extractor.text.CuesWithTiming
+ import com.nuvio.app.features.player.SidecarSubtitleController
+ import com.nuvio.app.features.player.SyncedSubtitles
++import com.nuvio.app.features.player.audiosync.SyncLog
+ import kotlinx.coroutines.CoroutineScope
+ import kotlinx.coroutines.Job
+ import kotlinx.coroutines.delay
+@@ -70,6 +71,7 @@ internal class SyncedSubtitleKeeper(
+ 
+         /** Device storage for [SyncedSubtitles] (filesDir/synced-subtitles). Call once at app start. */
+         fun initialize(context: Context) {
++            SyncedSubtitles.logSink = { message -> SyncLog.i(message) } // Nuvio fork: pull story in the shareable log
+             val dir = File(context.filesDir, "synced-subtitles")
+             SyncedSubtitles.installStore(
+                 load = { name -> runCatching { File(dir, name).takeIf { it.isFile }?.readText() }.getOrNull() },
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.android.kt
 index 921324b7..48b11dc3 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.android.kt
@@ -1745,11 +1765,36 @@ index bfaf55c6..547ca408 100644
 -    }
 -}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
-index 94e9b375..70f13204 100644
+index 94e9b375..f492316a 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
-@@ -151,6 +151,33 @@ object SyncedSubtitles {
+@@ -50,6 +50,10 @@ object SyncedSubtitles {
+     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+ 
++    /** Nuvio fork: set by the Android side so the shareable audio-sync log shows the pull story. */
++    var logSink: ((String) -> Unit)? = null
++    private fun log(message: String) { logSink?.invoke(message) }
++
+     private var localLoad: ((name: String) -> String?)? = null
+     private var localSave: ((name: String, value: String) -> Unit)? = null
+ 
+@@ -136,8 +140,10 @@ object SyncedSubtitles {
+         userPicked = false
+         next ?: return
+         requestMarks(next.videoId)
++        log("synced subs: playback video=$videoId key=$streamKey")
+         scope.launch {
+             val local = localLoad?.invoke(fileName(next))?.let(::decodeList).orEmpty()
++            log("synced subs: local file rows=${local.size}")
+             if (local.isNotEmpty() && _playback.value == next) merge(next, local, store = false)
+             val remote = runCatching {
+                 val result = SupabaseProvider.client.postgrest.rpc(
+@@ -149,8 +155,38 @@ object SyncedSubtitles {
+                 )
+                 decodeList(result.data)
              }.getOrNull().orEmpty()
++            log("synced subs: keyed pull rows=${remote.size}")
              if (remote.isNotEmpty() && _playback.value == next) merge(next, remote, store = true)
          }
 +        // Nuvio fork: nothing under THIS device's stream key - other devices (or earlier
@@ -1764,6 +1809,7 @@ index 94e9b375..70f13204 100644
 +                )
 +                json.decodeFromString<List<String>>(result.data)
 +            }.getOrNull().orEmpty()
++            log("synced subs: video-wide pull keys=$allKeys")
 +            for (key in allKeys) {
 +                if (_playback.value != next) break
 +                val remote = runCatching {
@@ -1776,13 +1822,14 @@ index 94e9b375..70f13204 100644
 +                    )
 +                    decodeList(result.data)
 +                }.getOrNull().orEmpty()
++                log("synced subs: video-wide key=$key rows=${remote.size}")
 +                if (remote.isNotEmpty() && _playback.value == next) merge(next, remote, store = false)
 +            }
 +        }
      }
  
      /** Adds [incoming] to the saved subtitles of [playback]; the newer copy of a subtitle wins. */
-@@ -214,7 +241,21 @@ object SyncedSubtitles {
+@@ -214,7 +250,21 @@ object SyncedSubtitles {
      /** The saved synced subtitle for [url] in this playback, if any. */
      fun savedFor(url: String): Saved? {
          val (playback, saved) = _saved.value ?: return null
