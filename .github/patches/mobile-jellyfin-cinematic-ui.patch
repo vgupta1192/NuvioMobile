@@ -1694,3 +1694,128 @@ index 0a9fc37078..d6ef86343f 100644
 +        )
 +    }.getOrNull()
  }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+index 3e0afe38..8d22f1f2 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+@@ -1722,7 +1722,14 @@ internal fun MainAppContent(
+                 }
+                 entry<JellyfinDetailRoute> { route ->
+                     val onBack = rememberGuardedPopBackStack(navController, route)
+-                    JellyfinDetailScreen(route = route, onBack = onBack, onPlay = ::openJellyfinItem)
++                    JellyfinDetailScreen(
++                        route = route,
++                        onBack = onBack,
++                        onPlay = ::openJellyfinItem,
++                        onOpenCast = { personId, personName ->
++                            navController.navigate(PersonDetailRoute(personId = personId, personName = personName))
++                        },
++                    )
+                 }
+                 entry<DownloadsRoute> { route ->
+                     DownloadsDestination(
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
+index 72b9ff78..df222be7 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
+@@ -45,6 +45,9 @@ import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.text.style.TextOverflow
+ import androidx.compose.ui.unit.dp
+ import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import androidx.compose.runtime.rememberCoroutineScope
++import com.nuvio.app.features.tmdb.TmdbMetadataService
++import kotlinx.coroutines.launch
+ import coil3.compose.AsyncImage
+ import com.nuvio.app.core.ui.nuvio
+ import com.nuvio.app.features.details.MetaPerson
+@@ -67,15 +70,20 @@ fun JellyfinDetailScreen(
+     route: JellyfinDetailRoute,
+     onBack: () -> Unit,
+     onPlay: (JellyfinItem) -> Unit,
++    onOpenCast: (Int, String) -> Unit = { _, _ -> },
+ ) {
+     val state by JellyfinRepository.uiState.collectAsStateWithLifecycle()
+     val tokens = MaterialTheme.nuvio
++    val castScope = rememberCoroutineScope()
+ 
+     LaunchedEffect(route.itemId) {
+         JellyfinRepository.initialize()
+         JellyfinRepository.selectItemById(route.itemId)
+     }
+ 
++    androidx.compose.runtime.CompositionLocalProvider(
++        com.nuvio.app.navigation.LocalUseNativeNavigation provides false,
++    ) {
+     Box(
+         modifier = Modifier
+             .fillMaxSize()
+@@ -191,17 +199,16 @@ private fun JellyfinDetailContent(
+             meta = meta,
+             modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+         )
+-        if (!item.overview.isNullOrBlank()) {
+-            ExpandableDescription(
+-                text = item.overview.orEmpty(),
+-                collapsedMaxLines = 4,
+-                modifier = Modifier.padding(horizontal = 24.dp),
+-                color = tokens.colors.textPrimary,
+-            )
+-        }
+         DetailCastSection(
+             cast = meta.cast,
+             modifier = Modifier.padding(top = 12.dp),
++            onCastClick = { person, _ ->
++                castScope.launch {
++                    TmdbMetadataService.searchPersonId(person.name)?.let { id ->
++                        onOpenCast(id, person.name)
++                    }
++                }
++            },
+         )
+         if (item.isSeries && state.seasons.isNotEmpty()) {
+             JellyfinSeasonsChips(
+@@ -218,6 +225,7 @@ private fun JellyfinDetailContent(
+         }
+         Spacer(modifier = Modifier.height(40.dp))
+     }
++    }
+ }
+ 
+ /** The TV photo's badge pills: "1080p H264 · English Dolby Atmos 5.1 · CC None (+38)" + Ends at. */
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tmdb/TmdbMetadataService.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tmdb/TmdbMetadataService.kt
+index fe0c628b..16d17843 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tmdb/TmdbMetadataService.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tmdb/TmdbMetadataService.kt
+@@ -71,6 +71,18 @@ object TmdbMetadataService {
+             }
+         }
+ 
++    /** Nuvio fork: person search by name, used when a source provides no TMDB person id. */
++    suspend fun searchPersonId(name: String): Int? = runCatching {
++        val settings = TmdbSettingsRepository.snapshot()
++        if (!settings.enabled) return@runCatching null
++        val language = normalizeTmdbLanguage(settings.language)
++        val response = fetch<TmdbPersonSearchResponse>(
++            endpoint = "search/person",
++            query = mapOf("query" to name, "language" to language, "include_adult" to "false"),
++        )
++        response.results.firstOrNull()?.id
++    }.getOrNull()
++
+     suspend fun fetchPersonDetail(
+         personId: Int,
+         preferCrewCredits: Boolean? = null,
+@@ -2234,3 +2246,13 @@ internal data class TmdbDiscoverResult(
+     @SerialName("vote_average") val voteAverage: Double? = null,
+     @SerialName("vote_count") val voteCount: Int? = null,
+ )
++
++internal data class TmdbPersonSearchResponse(
++    val results: List<TmdbPersonSearchResult> = emptyList(),
++)
++
++@Serializable
++internal data class TmdbPersonSearchResult(
++    val id: Int = 0,
++    val name: String = "",
++)
