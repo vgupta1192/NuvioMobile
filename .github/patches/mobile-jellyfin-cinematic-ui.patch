@@ -1753,8 +1753,6 @@ index 94e9b375..2725fabd 100644
 +        val b = listUrl.substringBefore('?').substringAfterLast('/')
 +        return a.isNotEmpty() && a == b
 +    }
-         return saved[url]?.takeIf { playback == _playback.value }
-     }
  
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tmdb/TmdbMetadataService.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tmdb/TmdbMetadataService.kt
 index fe0c628b..a58fd860 100644
