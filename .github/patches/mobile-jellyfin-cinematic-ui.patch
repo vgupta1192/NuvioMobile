@@ -1937,7 +1937,7 @@ index 0a9fc370..d6ef8634 100644
 +    }.getOrNull()
  }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
-index b613459c..260e8fdd 100644
+index de79442d..260e8fdd 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
 @@ -52,13 +52,15 @@ internal object AutoSyncSyncedSubtitle {
@@ -1957,49 +1957,54 @@ index b613459c..260e8fdd 100644
              com.nuvio.app.features.player.SyncedSubtitles.log("subtitle list row file=$rowBase")
          }
      }
-@@ -69,7 +71,7 @@ internal fun AutoSyncedChip(subtitleUrl: String, selected: Boolean) {
+@@ -68,15 +70,33 @@ internal fun AutoSyncedChip(subtitleUrl: String, selected: Boolean) {
+     val hasSavedTiming = saved?.second?.values?.any {
          com.nuvio.app.features.player.SyncedSubtitles.sameSubtitleFile(it.subtitleUrl, subtitleUrl)
      } == true
-     synchronized(loggedRowBasenames) {
--        if (loggedRowBasenames.add(rowBase)) {
++    synchronized(loggedRowBasenames) {
 +        if (loggedRowBasenames.add("chip:$rowBase:$liveSynced:$hasSavedTiming")) {
-             com.nuvio.app.features.player.SyncedSubtitles.log(
-                 "chip row file=$rowBase live=$liveSynced saved=$hasSavedTiming mapRows=${saved?.second?.size ?: 0}",
-             )
-@@ -99,24 +101,17 @@ internal fun AutoSyncedChip(subtitleUrl: String, selected: Boolean) {
++            com.nuvio.app.features.player.SyncedSubtitles.log(
++                "chip row file=$rowBase live=$liveSynced saved=$hasSavedTiming mapRows=${saved?.second?.size ?: 0}",
++            )
++        }
++    }
+     if (!liveSynced && !hasSavedTiming) return
+ 
+     val tokens = MaterialTheme.nuvio
+-    val contentColor = tokens.colors.onAccent.copy(alpha = 0.9f)
++    // Nuvio fork: match the source chip's colours per state - the onAccent palette is only
++    // readable on the selected (accent) row; unselected rows sit on the dark player surface.
++    val chipContent = if (selected) {
++        tokens.colors.onAccent.copy(alpha = 0.9f)
++    } else {
++        androidx.compose.ui.graphics.Color.White.copy(alpha = 0.85f)
++    }
++    val chipBackground = if (selected) {
++        tokens.colors.onAccent.copy(alpha = 0.14f)
++    } else {
++        androidx.compose.ui.graphics.Color.White.copy(alpha = 0.08f)
++    }
+     val shape = RoundedCornerShape(999.dp)
+     Row(
+         modifier = Modifier
+             .clip(shape)
+-            .background(tokens.colors.onAccent.copy(alpha = 0.14f))
++            .background(chipBackground)
+             .padding(horizontal = 8.dp, vertical = 3.dp),
          horizontalArrangement = Arrangement.spacedBy(4.dp),
          verticalAlignment = Alignment.CenterVertically,
-     ) {
--    val tokens = MaterialTheme.nuvio
--    // Nuvio fork: match the source chip's colours per state - the onAccent palette is only
--    // readable on the selected (accent) row; unselected rows sit on the dark player surface.
--    val chipContent = if (selected) {
--        tokens.colors.onAccent.copy(alpha = 0.9f)
--    } else {
--        androidx.compose.ui.graphics.Color.White.copy(alpha = 0.85f)
--    }
--    val chipBackground = if (selected) {
--        tokens.colors.onAccent.copy(alpha = 0.14f)
--    } else {
--        androidx.compose.ui.graphics.Color.White.copy(alpha = 0.08f)
--    }
--    val shape = RoundedCornerShape(999.dp)
--    Row(
--        modifier = Modifier
--            .clip(shape)
--            .background(chipBackground)
--            .padding(horizontal = 8.dp, vertical = 3.dp),
-+        Icon(
-+            imageVector = Icons.Rounded.Sync,
-+            contentDescription = null,
+@@ -84,12 +104,12 @@ internal fun AutoSyncedChip(subtitleUrl: String, selected: Boolean) {
+         Icon(
+             imageVector = Icons.Rounded.Sync,
+             contentDescription = null,
+-            tint = contentColor,
 +            tint = chipContent,
-+            modifier = Modifier.size(12.dp),
-+        )
-+        Text(
-+            text = stringResource(Res.string.autosync_label_synced),
+             modifier = Modifier.size(12.dp),
+         )
+         Text(
+             text = stringResource(Res.string.autosync_label_synced),
+-            color = contentColor,
 +            color = chipContent,
-+            style = MaterialTheme.typography.labelSmall,
-+            maxLines = 1,
-+        )
-     }
- }
+             style = MaterialTheme.typography.labelSmall,
+             maxLines = 1,
+         )
