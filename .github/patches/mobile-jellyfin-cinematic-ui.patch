@@ -223,10 +223,10 @@ index b1b97c1f..c20f8285 100644
          json.parseToJsonElement(this).jsonObject
  
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
-index 7d1d7399..9c76d167 100644
+index 7d1d7399..2889ee32 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
-@@ -1,78 +1,501 @@
+@@ -1,78 +1,504 @@
  package com.nuvio.app.features.jellyfin
  
  import androidx.compose.foundation.background
@@ -347,6 +347,7 @@ index 7d1d7399..9c76d167 100644
 +                item = item,
 +                onBack = onBack,
 +                onPlay = onPlay,
++                onOpenCast = onOpenCast,
 +            )
 +        }
 +    }
@@ -359,8 +360,10 @@ index 7d1d7399..9c76d167 100644
 +    item: JellyfinItem,
 +    onBack: () -> Unit,
 +    onPlay: (JellyfinItem) -> Unit,
++    onOpenCast: (Int, String) -> Unit,
 +) {
 +    val tokens = MaterialTheme.nuvio
++    val castScope = rememberCoroutineScope()
 +    val posterUrl = remember(item.id, item.imageTag) { JellyfinRepository.posterUrlFor(item) }
 +    val backdropUrl = remember(item.id, item.backdropTag) { JellyfinRepository.backdropUrlFor(item) }
 +    val logoUrl = remember(item.id, item.logoTag) { JellyfinRepository.logoUrlFor(item) }
