@@ -65,10 +65,10 @@ index ffba2177..8d22f1f2 100644
                  entry<DownloadsRoute> { route ->
                      DownloadsDestination(
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
-index 43f1a28c..de79442d 100644
+index 43f1a28c..0e58d0e1 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
-@@ -48,11 +48,27 @@ internal object AutoSyncSyncedSubtitle {
+@@ -48,11 +48,34 @@ internal object AutoSyncSyncedSubtitle {
      }
  }
  
@@ -94,6 +94,13 @@ index 43f1a28c..de79442d 100644
 +    val hasSavedTiming = saved?.second?.values?.any {
 +        com.nuvio.app.features.player.SyncedSubtitles.sameSubtitleFile(it.subtitleUrl, subtitleUrl)
 +    } == true
++    synchronized(loggedRowBasenames) {
++        if (loggedRowBasenames.add(rowBase)) {
++            com.nuvio.app.features.player.SyncedSubtitles.log(
++                "chip row file=$rowBase live=$liveSynced saved=$hasSavedTiming mapRows=${saved?.second?.size ?: 0}",
++            )
++        }
++    }
 +    if (!liveSynced && !hasSavedTiming) return
  
      val tokens = MaterialTheme.nuvio
