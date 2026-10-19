@@ -19216,14 +19216,18 @@ index 00000000..29cd8c55
 +    <string name="autosync_label_synced">Automatisch synchronisiert</string>
 +</resources>
 diff --git a/composeApp/src/commonMain/composeResources/values-el/autosync_toast_strings.xml b/composeApp/src/commonMain/composeResources/values-el/autosync_toast_strings.xml
-new file mode 100644
-index 00000000..50e5244a
---- /dev/null
+index 81f29aab..48f12716 100644
+--- a/composeApp/src/commonMain/composeResources/values-el/autosync_toast_strings.xml
 +++ b/composeApp/src/commonMain/composeResources/values-el/autosync_toast_strings.xml
-@@ -0,0 +1,16 @@
-+<?xml version="1.0" encoding="utf-8"?>
+@@ -1,7 +1,16 @@
+ <?xml version="1.0" encoding="utf-8"?>
 +<!-- AutoSync toasts and the "Auto synced" label. Keep keys in sync across locales. -->
-+<resources>
+ <resources>
+-    <string name="autosync_toast_failed">Ο συγχρονισμός απέτυχε: ο αυτόματος συγχρονισμός δεν μπόρεσε να αντιστοιχίσει αυτόν τον υπότιτλο με το βίντεο.</string>
+-    <string name="autosync_toast_failed_no_reference">Ο συγχρονισμός απέτυχε: δεν υπάρχουν κατάλληλοι ενσωματωμένοι υπότιτλοι για σύγκριση.</string>
+-    <string name="autosync_toast_failed_unsupported">Ο συγχρονισμός απέτυχε: ο αυτόματος συγχρονισμός δεν υποστηρίζει αυτή τη μορφή υποτίτλων.</string>
+-    <string name="autosync_label_synced">Αυτόματα συγχρονισμένος</string>
+-</resources>
 +    <string name="autosync_toast_analyzing">Auto Sync • Ανάλυση…</string>
 +    <string name="autosync_toast_synced">Auto Sync • Οι υπότιτλοι συγχρονίστηκαν</string>
 +    <string name="autosync_toast_synced_replaced">Auto Sync • Έγινε εναλλαγή σε υπότιτλο με καλύτερη αντιστοίχιση</string>
@@ -19237,6 +19241,7 @@ index 00000000..50e5244a
 +    <string name="autosync_toast_retry_failed">Auto Sync • Η νέα προσπάθεια με άλλη αναφορά απέτυχε • διατηρήθηκε ο τρέχων συγχρονισμός</string>
 +    <string name="autosync_label_synced">Αυτόματος συγχρονισμός</string>
 +</resources>
+\ No newline at end of file
 diff --git a/composeApp/src/commonMain/composeResources/values-es/autosync_toast_strings.xml b/composeApp/src/commonMain/composeResources/values-es/autosync_toast_strings.xml
 new file mode 100644
 index 00000000..1cbb20c9
