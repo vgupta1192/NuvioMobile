@@ -467,7 +467,7 @@ index 7d5f6390..b244d685 100644
                      mpv.setPropertyInt("contrast", if (enabled) 8 else 0)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEffects.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEffects.kt
 new file mode 100644
-index 00000000..25216182
+index 00000000..5fe20e66
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEffects.kt
 @@ -0,0 +1,387 @@
@@ -486,7 +486,7 @@ index 00000000..25216182
 +private val FLAT_BANDS = listOf(0f, 0f, 0f, 0f, 0f)
 +
 +/** Fork: one-tap sound modes from the audio effect panel. Dialogue lifts the speech range and levels loud scenes. */
-+internal enum class AudioPreset(val id: String, val label: String, val curve: List<Float>) {
++enum class AudioPreset(val id: String, val label: String, val curve: List<Float>) {
 +    ORIGINAL("original", "Original", FLAT_BANDS),
 +    CLARITY("clarity", "Clarity", listOf(-2f, -1f, 2f, 3f, 1f)),
 +    BASS_BOOST("bass", "Bass Boost", listOf(6f, 4f, 0f, 0f, 0f)),
@@ -501,7 +501,7 @@ index 00000000..25216182
 +}
 +
 +/** Equaliser curves in dB for the five bands. [CUSTOM] has no curve of its own: the sliders hold it. */
-+internal enum class EqPreset(val id: String, val label: String, val bands: List<Float>?) {
++enum class EqPreset(val id: String, val label: String, val bands: List<Float>?) {
 +    CUSTOM("custom", "Custom", null),
 +    NORMAL("normal", "Normal", listOf(3f, 0f, 0f, 0f, 3f)),
 +    CLASSICAL("classical", "Classical", listOf(5f, 3f, -2f, 4f, 4f)),
@@ -519,7 +519,7 @@ index 00000000..25216182
 +    }
 +}
 +
-+internal data class AudioFxState(
++data class AudioFxState(
 +    val preset: AudioPreset = AudioPreset.ORIGINAL,
 +    val eqEnabled: Boolean = false,
 +    val eqPreset: EqPreset = EqPreset.NORMAL,
@@ -575,7 +575,7 @@ index 00000000..25216182
 +    }
 +}
 +
-+internal enum class PicturePreset(val id: String, val label: String) {
++enum class PicturePreset(val id: String, val label: String) {
 +    ORIGINAL("original", "Original"),
 +    VIVID("vivid", "Vivid"),
 +    CINEMA("cinema", "Cinema"),
@@ -589,7 +589,7 @@ index 00000000..25216182
 +}
 +
 +/** HDR to SDR tone mapping curves (libmpv only). A null [mpv] leaves the engine's own choice. */
-+internal enum class ToneMapping(val id: String, val label: String, val mpv: String?) {
++enum class ToneMapping(val id: String, val label: String, val mpv: String?) {
 +    AUTO("auto", "Auto", null),
 +    BT2390("bt2390", "BT.2390", "bt.2390"),
 +    HABLE("hable", "Hable", "hable"),
@@ -605,7 +605,7 @@ index 00000000..25216182
 + * Picture controls. Sliders are in percent steps; [sharpen] and [denoise] run 0 (off) to 3 (high).
 + * [smartEnhance] is filled in when the state is handed to the engine, from the Smart Enhance button.
 + */
-+internal data class PictureState(
++data class PictureState(
 +    val preset: PicturePreset = PicturePreset.ORIGINAL,
 +    val brightness: Int = 0,
 +    val contrast: Int = 0,
@@ -658,7 +658,7 @@ index 00000000..25216182
 +}
 +
 +/** What the active engine can apply; the picture panel only offers these. */
-+internal data class PictureSupport(
++data class PictureSupport(
 +    val gamma: Boolean = false,
 +    val sharpen: Boolean = false,
 +    val denoise: Boolean = false,
