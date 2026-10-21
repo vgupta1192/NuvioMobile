@@ -403,8 +403,8 @@ index 00000000..4d6115fb
 +
 +internal object HomeSnapshotStore {
 +    fun currentProfileKey(): String? {
-+        val userId = ProfileRepository.state.value.userId.takeIf { it.isNotBlank() } ?: return null
-+        return "$userId|${ProfileRepository.activeProfileId}"
++        val profile = ProfileRepository.state.value.activeProfile ?: return null
++        return "${profile.userId}|${profile.id}|${profile.profileIndex}"
 +    }
 +
 +    private fun pathFor(profileKey: String): String =

@@ -1,0 +1,162 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/AndroidDownloadScheduler.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/AndroidDownloadScheduler.kt
+index b4a6634f..4bb8cea4 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/AndroidDownloadScheduler.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/AndroidDownloadScheduler.kt
+@@ -53,7 +53,11 @@ internal class AndroidDownloadScheduler(val context: Context) {
+             } else {
+                 val work = OneTimeWorkRequestBuilder<DownloadsTransferWorker>()
+                     .setInputData(workDataOf(FILE_NAME to item.fileName, GENERATION to transfer.generation))
+-                    .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
++                    .setConstraints(
++                        Constraints.Builder()
++                            .setRequiredNetworkType(if (DownloadsNetworkPolicy.isWifiOnly()) NetworkType.UNMETERED else NetworkType.CONNECTED)
++                            .build(),
++                    )
+                     .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                     .build()
+                 val operation = WorkManager.getInstance(context).enqueueUniqueWork(
+@@ -78,7 +82,7 @@ internal class AndroidDownloadScheduler(val context: Context) {
+     internal fun buildJob(transfer: AndroidDownloadTransfer): JobInfo =
+         JobInfo.Builder(transfer.jobId, ComponentName(context, DownloadsTransferJobService::class.java))
+             .setUserInitiated(true)
+-            .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
++            .setRequiredNetworkType(if (DownloadsNetworkPolicy.isWifiOnly()) JobInfo.NETWORK_TYPE_UNMETERED else JobInfo.NETWORK_TYPE_ANY)
+             .setPersisted(true)
+             .setEstimatedNetworkBytes(transfer.item.totalBytes ?: JobInfo.NETWORK_BYTES_UNKNOWN.toLong(), 0L)
+             .setBackoffCriteria(30_000L, JobInfo.BACKOFF_POLICY_EXPONENTIAL)
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsNetworkPolicy.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsNetworkPolicy.android.kt
+new file mode 100644
+index 00000000..1002dc28
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsNetworkPolicy.android.kt
+@@ -0,0 +1,18 @@
++package com.nuvio.app.features.downloads
++
++import android.content.Context
++
++internal actual object DownloadsNetworkPolicy {
++    private const val PREFERENCES_NAME = "nuvio_downloads_network"
++    private const val WIFI_ONLY_KEY = "wifi_only"
++
++    private fun preferences() =
++        DownloadsPlatformDownloader.applicationContextOrNull()
++            ?.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
++
++    actual fun isWifiOnly(): Boolean = preferences()?.getBoolean(WIFI_ONLY_KEY, false) ?: false
++
++    actual fun setWifiOnly(enabled: Boolean) {
++        preferences()?.edit()?.putBoolean(WIFI_ONLY_KEY, enabled)?.apply()
++    }
++}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt
+index 1f6484c5..9b25160c 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt
+@@ -23,6 +23,8 @@ internal actual object DownloadsPlatformDownloader {
+         scheduler(context)
+     }
+ 
++    internal fun applicationContextOrNull(): Context? = appContext
++
+     @Synchronized
+     internal fun scheduler(context: Context): AndroidDownloadScheduler {
+         appContext = context.applicationContext
+diff --git a/composeApp/src/commonMain/composeResources/values/strings_downloads_wifi.xml b/composeApp/src/commonMain/composeResources/values/strings_downloads_wifi.xml
+new file mode 100644
+index 00000000..5cb39c88
+--- /dev/null
++++ b/composeApp/src/commonMain/composeResources/values/strings_downloads_wifi.xml
+@@ -0,0 +1,5 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <string name="downloads_wifi_only_title">Download over Wi-Fi only</string>
++    <string name="downloads_wifi_only_description">New downloads wait for an unmetered connection instead of using mobile data.</string>
++</resources>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsNetworkPolicy.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsNetworkPolicy.kt
+new file mode 100644
+index 00000000..f6aabba7
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsNetworkPolicy.kt
+@@ -0,0 +1,10 @@
++package com.nuvio.app.features.downloads
++
++/**
++ * Wi-Fi-only downloads (ported idea from NuvioMobile-Enhanced): when on, new downloads wait for an
++ * unmetered network instead of using mobile data. A per-device choice, not synced.
++ */
++internal expect object DownloadsNetworkPolicy {
++    fun isWifiOnly(): Boolean
++    fun setWifiOnly(enabled: Boolean)
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt
+index 9f44a1aa..8c511e93 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt
+@@ -23,6 +23,7 @@ import androidx.compose.material3.IconButton
+ import androidx.compose.material3.LinearProgressIndicator
+ import androidx.compose.material3.MaterialTheme
+ import androidx.compose.material3.Surface
++import androidx.compose.material3.Switch
+ import androidx.compose.material3.Text
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.LaunchedEffect
+@@ -164,6 +165,40 @@ private fun LazyListScope.downloadsRootContent(
+         }
+         .sortedBy { (item, _) -> item.title.lowercase() }
+ 
++    item(key = "wifi_only_toggle") {
++        var wifiOnly by remember { mutableStateOf(DownloadsNetworkPolicy.isWifiOnly()) }
++        Row(
++            modifier = Modifier
++                .fillMaxWidth()
++                .clickable {
++                    wifiOnly = !wifiOnly
++                    DownloadsNetworkPolicy.setWifiOnly(wifiOnly)
++                }
++                .padding(horizontal = 4.dp, vertical = 8.dp),
++            verticalAlignment = Alignment.CenterVertically,
++        ) {
++            Column(modifier = Modifier.weight(1f)) {
++                Text(
++                    text = stringResource(Res.string.downloads_wifi_only_title),
++                    style = MaterialTheme.typography.bodyLarge,
++                    fontWeight = FontWeight.SemiBold,
++                )
++                Text(
++                    text = stringResource(Res.string.downloads_wifi_only_description),
++                    style = MaterialTheme.typography.bodySmall,
++                    color = MaterialTheme.colorScheme.onSurfaceVariant,
++                )
++            }
++            Switch(
++                checked = wifiOnly,
++                onCheckedChange = {
++                    wifiOnly = it
++                    DownloadsNetworkPolicy.setWifiOnly(it)
++                },
++            )
++        }
++    }
++
+     if (activeItems.isNotEmpty()) {
+         item {
+             SectionTitle(stringResource(Res.string.downloads_section_active))
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/downloads/DownloadsNetworkPolicy.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/downloads/DownloadsNetworkPolicy.ios.kt
+new file mode 100644
+index 00000000..6d268ff4
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/downloads/DownloadsNetworkPolicy.ios.kt
+@@ -0,0 +1,13 @@
++package com.nuvio.app.features.downloads
++
++import platform.Foundation.NSUserDefaults
++
++internal actual object DownloadsNetworkPolicy {
++    private const val WIFI_ONLY_KEY = "nuvio_downloads_wifi_only"
++
++    actual fun isWifiOnly(): Boolean = NSUserDefaults.standardUserDefaults.boolForKey(WIFI_ONLY_KEY)
++
++    actual fun setWifiOnly(enabled: Boolean) {
++        NSUserDefaults.standardUserDefaults.setBool(enabled, forKey = WIFI_ONLY_KEY)
++    }
++}
