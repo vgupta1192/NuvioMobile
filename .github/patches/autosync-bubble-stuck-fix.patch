@@ -1,0 +1,161 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt
+index baf0527d..238b44fa 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt
+@@ -7,6 +7,8 @@ import android.util.Log
+ import androidx.media3.common.C
+ import androidx.media3.exoplayer.ExoPlayer
+ import com.nuvio.app.features.autosync.bubble.AutoSyncBubbleKind
++import com.nuvio.app.features.autosync.bubble.AutoSyncBubbleToasts
++import com.nuvio.app.features.autosync.bubble.AutoSyncMessageOrder
+ import com.nuvio.app.features.autosync.bubble.showAutoSyncMessage
+ import com.nuvio.app.features.player.PlayerEngineController
+ import com.nuvio.app.features.player.PlayerSubtitleUtils
+@@ -60,9 +62,16 @@ internal class AutoSyncPlayerCoordinator(
+      * the glass bubble when it is turned on, else as a toast. [kind] tells the bubble how it ends.
+      */
+     private fun showToast(kind: AutoSyncBubbleKind, message: suspend () -> String) {
+-        scope.launch { showAutoSyncMessage(context, kind, message()) }
++        val ticket = AutoSyncMessageOrder.ticket()
++        lastToastKind = kind
++        scope.launch {
++            val text = message()
++            if (AutoSyncMessageOrder.shouldShow(ticket)) showAutoSyncMessage(context, kind, text)
++        }
+     }
+ 
++    private var lastToastKind: AutoSyncBubbleKind? = null
++
+     private var job: Job? = null
+     private var selectedBodyJob: Job? = null
+     private var retryJob: Job? = null
+@@ -480,7 +489,7 @@ internal class AutoSyncPlayerCoordinator(
+             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+             .build()
+ 
+-        job = scope.launch {
++        val launched = scope.launch {
+             var analysisOutcome: AutoSyncAnalysisOutcome? = null
+             var searchLanguage = getPreferredLanguage()
+             var resolved = AutomaticSubtitleSync.findTimelineRetime(
+@@ -711,6 +720,14 @@ internal class AutoSyncPlayerCoordinator(
+                 "applied selected=$url chosen=$chosenUrl alignment=${timeline.alignmentSource}",
+             )
+         }
++        job = launched
++        launched.invokeOnCompletion {
++            // The run ended (or failed) while its bubble was still working and nothing else will
++            // finish it: take the bubble down instead of leaving it up until it times out.
++            if (job === launched && lastToastKind == AutoSyncBubbleKind.Working && !audioFallback.isTakingOver) {
++                AutoSyncBubbleToasts.dismissWorking()
++            }
++        }
+     }
+ 
+     private data class RetryContext(
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/bubble/AutoSyncBubbleToastsAndroid.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/bubble/AutoSyncBubbleToastsAndroid.kt
+index 513a53da..d7aa5d08 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/bubble/AutoSyncBubbleToastsAndroid.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/bubble/AutoSyncBubbleToastsAndroid.kt
+@@ -18,6 +18,26 @@ internal object AutoSyncBubbleToastsAndroid {
+     }
+ }
+ 
++/**
++ * Messages are resolved asynchronously (string lookups), so a slow "Analyzing" could land after a
++ * fast result and leave a working bubble that never ends. A ticket taken when a message is
++ * issued lets a stale message be dropped once a newer one has been shown.
++ */
++internal object AutoSyncMessageOrder {
++    private var issued = 0L
++    private var shown = 0L
++
++    @Synchronized
++    fun ticket(): Long = ++issued
++
++    @Synchronized
++    fun shouldShow(ticket: Long): Boolean {
++        if (ticket < shown) return false
++        shown = ticket
++        return true
++    }
++}
++
+ /** Shows an AutoSync message in the glass bubble when it is turned on, else as a plain toast. */
+ internal fun showAutoSyncMessage(context: Context, kind: AutoSyncBubbleKind, message: String) {
+     if (!AutoSyncBubbleToasts.post(kind, message)) {
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSyncFallback.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSyncFallback.kt
+index 7e117d7f..5fd8e5ed 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSyncFallback.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSyncFallback.kt
+@@ -17,6 +17,7 @@ import androidx.media3.extractor.text.CuesWithTiming
+ import com.nuvio.app.features.addons.httpGetTextWithHeaders
+ import com.nuvio.app.features.autosync.AutoSyncSyncedSubtitle
+ import com.nuvio.app.features.autosync.bubble.AutoSyncBubbleKind
++import com.nuvio.app.features.autosync.bubble.AutoSyncMessageOrder
+ import com.nuvio.app.features.autosync.bubble.showAutoSyncMessage
+ import com.nuvio.app.features.player.AudioSyncSettings
+ import com.nuvio.app.features.player.SidecarSubtitleController
+@@ -81,6 +82,13 @@ internal class AudioSyncFallback(
+     private var candidates: List<AudioSubtitleSyncController.ReferenceCandidate> = emptyList()
+     private var content: Pair<String, String>? = null
+     private var armed = false
++    /** Between [arm] and [stop]: only then do the audio sync's statuses belong in the bubble. */
++    @Volatile
++    private var statusLive = false
++
++    /** The audio sync took over from AutoSync and is still at it. */
++    val isTakingOver: Boolean
++        get() = statusLive && (target.get() != null || takeOverJob?.isActive == true)
+     private var appliedModel: SubtitleSyncModel? = null
+     private var ticker: Job? = null
+     private var takeOverJob: Job? = null
+@@ -139,6 +147,7 @@ internal class AudioSyncFallback(
+         stop()
+         if (!AudioSyncSettings.fallbackEnabled.value) return
+         controller.enabled = true
++        statusLive = true
+         controller.samplingOnMobileData = AudioSyncSettings.samplingOnMobileData.value
+         controller.listensBeforeSession = true
+         if (!armed) {
+@@ -185,6 +194,7 @@ internal class AudioSyncFallback(
+ 
+     /** The user moved to another subtitle or track, or AutoSync starts over. */
+     fun stop() {
++        statusLive = false
+         takeOverJob?.cancel()
+         takeOverJob = null
+         ticker?.cancel()
+@@ -281,9 +291,15 @@ internal class AudioSyncFallback(
+     }
+ 
+     private fun toast(status: AudioSyncStatus) {
++        // A status that arrives after AutoSync applied its own result (or the audio sync was
++        // stopped) must not open a working bubble nothing will ever finish.
++        if (!statusLive) return
++        val ticket = AutoSyncMessageOrder.ticket()
+         scope.launch {
+             val message = status.message() ?: return@launch
+-            showAutoSyncMessage(appContext, status.bubbleKind(), message)
++            if (statusLive && AutoSyncMessageOrder.shouldShow(ticket)) {
++                showAutoSyncMessage(appContext, status.bubbleKind(), message)
++            }
+         }
+     }
+ 
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/bubble/AutoSyncBubbleToasts.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/bubble/AutoSyncBubbleToasts.kt
+index 8895f61a..1ee82d8f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/bubble/AutoSyncBubbleToasts.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/bubble/AutoSyncBubbleToasts.kt
+@@ -69,6 +69,11 @@ internal object AutoSyncBubbleToasts {
+         return true
+     }
+ 
++    /** Removes a bubble that is still working, when its run ended without a result to show. */
++    fun dismissWorking() {
++        _current.update { if (it?.kind == AutoSyncBubbleKind.Working) null else it }
++    }
++
+     /** Called by the bubble as it starts fading [session] away, so later messages do not join it. */
+     fun leaving(session: Long) {
+         leavingSession = session
