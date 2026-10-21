@@ -1,0 +1,149 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/HeroTrailerAudioState.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/HeroTrailerAudioState.kt
+index b0b3a447..fa0fd1ed 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/HeroTrailerAudioState.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/HeroTrailerAudioState.kt
+@@ -8,6 +8,10 @@ object HeroTrailerAudioState {
+     private val _muted = MutableStateFlow(true)
+     val muted: StateFlow<Boolean> = _muted.asStateFlow()
+ 
++    fun setMuted(muted: Boolean) {
++        _muted.value = muted
++    }
++
+     fun toggleMuted() {
+         _muted.value = !_muted.value
+     }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/HeroTrailerOptions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/HeroTrailerOptions.kt
+new file mode 100644
+index 00000000..1a038c96
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/HeroTrailerOptions.kt
+@@ -0,0 +1,51 @@
++package com.nuvio.app.features.details
++
++import com.nuvio.app.core.storage.AppFileCache
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++
++/**
++ * Hero trailer options (ported idea from NuvioMobile-Enhanced): start with sound and a start delay.
++ * Per device; kept in the app file cache.
++ */
++object HeroTrailerOptions {
++    private const val PATH = "settings/hero_trailer_options"
++    val delayChoicesSeconds = listOf(0, 2, 4, 6, 10)
++
++    data class State(val startUnmuted: Boolean = false, val startDelaySeconds: Int = 0)
++
++    private val _state = MutableStateFlow(State())
++    val state: StateFlow<State> = _state.asStateFlow()
++    private var loaded = false
++
++    fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        val parts = AppFileCache.read(PATH)?.trim()?.split(',').orEmpty()
++        _state.value = State(
++            startUnmuted = parts.getOrNull(0) == "1",
++            startDelaySeconds = parts.getOrNull(1)?.toIntOrNull()?.takeIf { it in delayChoicesSeconds } ?: 0,
++        )
++    }
++
++    fun current(): State {
++        ensureLoaded()
++        return _state.value
++    }
++
++    private fun update(next: State) {
++        _state.value = next
++        runCatching { AppFileCache.write(PATH, "${if (next.startUnmuted) 1 else 0},${next.startDelaySeconds}") }
++    }
++
++    fun setStartUnmuted(enabled: Boolean) {
++        update(current().copy(startUnmuted = enabled))
++    }
++
++    fun cycleStartDelay() {
++        val now = current()
++        val next = delayChoicesSeconds[(delayChoicesSeconds.indexOf(now.startDelaySeconds) + 1) % delayChoicesSeconds.size]
++        update(now.copy(startDelaySeconds = next))
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
+index 71feb84d..99085289 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
+@@ -742,12 +742,17 @@ fun MetaDetailsScreen(
+                     if (!deferredMetaWorkAllowed || !heroTrailerPlaybackEnabled || heroTrailerCandidate == null) {
+                         return@LaunchedEffect
+                     }
++                    val trailerOptions = HeroTrailerOptions.current()
++                    HeroTrailerAudioState.setMuted(!trailerOptions.startUnmuted)
+                     val resolvedSource = runCatching {
+                         TrailerPlaybackResolver.resolveFromYouTubeUrl(heroTrailerCandidate.youtubePlaybackUrl())
+                     }.getOrNull()
+                     if (resolvedSource == null) {
+                         heroTrailerFinished = true
+                     } else {
++                        if (trailerOptions.startDelaySeconds > 0) {
++                            kotlinx.coroutines.delay(trailerOptions.startDelaySeconds * 1_000L)
++                        }
+                         heroTrailerPlaybackSource = resolvedSource
+                     }
+                 }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/HeroTrailerOptionRows.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/HeroTrailerOptionRows.kt
+new file mode 100644
+index 00000000..61762567
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/HeroTrailerOptionRows.kt
+@@ -0,0 +1,37 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.features.details.HeroTrailerOptions
++
++/** Fork feature: extra hero trailer options shown under the hero trailer playback switch. */
++@Composable
++internal fun HeroTrailerOptionRows(isTablet: Boolean) {
++    LaunchedEffect(Unit) { HeroTrailerOptions.ensureLoaded() }
++    val options by HeroTrailerOptions.state.collectAsStateWithLifecycle()
++    SettingsGroupDivider(isTablet = isTablet)
++    SettingsSwitchRow(
++        title = "Start trailer with sound",
++        description = "Play the hero trailer unmuted instead of muted.",
++        checked = options.startUnmuted,
++        isTablet = isTablet,
++        onCheckedChange = { HeroTrailerOptions.setStartUnmuted(it) },
++    )
++    SettingsGroupDivider(isTablet = isTablet)
++    SettingsNavigationRow(
++        title = "Trailer start delay",
++        description = "Wait before the hero trailer starts. Tap to change.",
++        isTablet = isTablet,
++        trailingContent = {
++            Text(
++                text = if (options.startDelaySeconds == 0) "Off" else "${options.startDelaySeconds} s",
++                color = MaterialTheme.colorScheme.primary,
++            )
++        },
++        onClick = { HeroTrailerOptions.cycleStartDelay() },
++    )
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/MetaScreenSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/MetaScreenSettingsPage.kt
+index 6d07ed7b..781f126d 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/MetaScreenSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/MetaScreenSettingsPage.kt
+@@ -167,6 +167,7 @@ internal fun LazyListScope.metaScreenSettingsContent(
+                         isTablet = isTablet,
+                         onCheckedChange = { MetaScreenSettingsRepository.setHeroTrailerPlayback(it) },
+                     )
++                    HeroTrailerOptionRows(isTablet = isTablet)
+                 }
+                 SettingsGroupDivider(isTablet = isTablet)
+                 SettingsSwitchRow(

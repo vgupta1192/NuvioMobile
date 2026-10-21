@@ -1,0 +1,109 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
+index a36b1d52..6f31a376 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
+@@ -9,6 +9,7 @@ import androidx.activity.enableEdgeToEdge
+ import androidx.activity.SystemBarStyle
+ import androidx.appcompat.app.AppCompatActivity
+ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
++import kotlinx.coroutines.launch
+ import com.nuvio.app.core.auth.AuthStorage
+ import com.nuvio.app.core.network.ServerConfigurationStorage
+ import com.nuvio.app.core.diagnostics.SentryInitializer
+@@ -76,7 +77,7 @@ open class MainActivity : AppCompatActivity() {
+     private var pipRemoteActionReceiver: PipRemoteActionReceiver? = null
+ 
+     override fun onCreate(savedInstanceState: Bundle?) {
+-        installSplashScreen()
++        val splash = installSplashScreen()
+         enableEdgeToEdge(
+             navigationBarStyle = SystemBarStyle.dark(
+                 scrim = 0xFF020404.toInt(),
+@@ -157,8 +158,21 @@ open class MainActivity : AppCompatActivity() {
+         EpisodeReleaseNotificationPlatform.bindActivity(this)
+         handleIncomingAppIntent(intent)
+ 
+-        setContent {
+-            App()
++        var contentShown = false
++        splash.setKeepOnScreenCondition { !contentShown }
++        val showContent = {
++            contentShown = true
++            setContent {
++                App()
++            }
++        }
++        if (com.nuvio.app.core.startup.StartupPreloader.isComplete) {
++            showContent()
++        } else {
++            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
++                com.nuvio.app.core.startup.StartupPreloader.awaitReady()
++                if (!isFinishing && !isDestroyed) showContent()
++            }
+         }
+     }
+ 
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/startup/StartupPreloader.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/startup/StartupPreloader.kt
+new file mode 100644
+index 00000000..773f07c1
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/startup/StartupPreloader.kt
+@@ -0,0 +1,58 @@
++package com.nuvio.app.core.startup
++
++import com.nuvio.app.features.details.MetaScreenSettingsRepository
++import com.nuvio.app.features.home.HomeRepository
++import com.nuvio.app.features.library.LibraryRepository
++import com.nuvio.app.features.player.PlayerSettingsRepository
++import com.nuvio.app.features.profiles.ProfileRepository
++import com.nuvio.app.features.watched.WatchedRepository
++import com.nuvio.app.features.watchprogress.ContinueWatchingPreferencesRepository
++import com.nuvio.app.features.watchprogress.WatchProgressRepository
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Deferred
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.SupervisorJob
++import kotlinx.coroutines.async
++import kotlinx.coroutines.withTimeoutOrNull
++import kotlin.coroutines.cancellation.CancellationException
++
++/**
++ * Startup preloader (ported idea from NuvioMobile-Enhanced): saved profiles, library, watch state,
++ * settings and the saved home screen load on a background thread while the splash screen is up,
++ * so the first frame already has its data.
++ */
++object StartupPreloader {
++    private const val MAX_WAIT_MS = 2_500L
++
++    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
++    private var job: Deferred<Unit>? = null
++
++    val isComplete: Boolean
++        get() = job?.isCompleted == true
++
++    /** Waits for the preload, but never longer than [MAX_WAIT_MS] so a slow disk cannot hold the splash. */
++    suspend fun awaitReady() {
++        val active = job ?: start()
++        withTimeoutOrNull(MAX_WAIT_MS) { active.await() }
++    }
++
++    private fun start(): Deferred<Unit> = scope.async {
++        step { ProfileRepository.loadCachedProfiles() }
++        step { LibraryRepository.ensureLoaded() }
++        step { WatchedRepository.ensureLoaded() }
++        step { WatchProgressRepository.ensureLoaded() }
++        step { ContinueWatchingPreferencesRepository.ensureLoaded() }
++        step { PlayerSettingsRepository.ensureLoaded() }
++        step { MetaScreenSettingsRepository.ensureLoaded() }
++        step { HomeRepository.preloadSnapshot() }
++    }.also { job = it }
++
++    private inline fun step(block: () -> Unit) {
++        try {
++            block()
++        } catch (cancellation: CancellationException) {
++            throw cancellation
++        } catch (_: Throwable) {
++        }
++    }
++}
