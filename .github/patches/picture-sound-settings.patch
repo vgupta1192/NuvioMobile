@@ -1,0 +1,214 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PictureSoundSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PictureSoundSettings.kt
+new file mode 100644
+index 00000000..d4c5a2df
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PictureSoundSettings.kt
+@@ -0,0 +1,195 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.core.ui.Chip
++import com.nuvio.app.features.player.AudioPreset
++import com.nuvio.app.features.player.EqPreset
++import com.nuvio.app.features.player.PicturePreset
++import com.nuvio.app.features.player.PlayerEffects
++import com.nuvio.app.features.player.SmartEnhance
++import com.nuvio.app.features.player.ToneMapping
++
++private val StepNames = listOf("Off", "Low", "Medium", "High")
++
++/**
++ * Fork: Picture & Sound defaults for the player. The same choices live in the player's picture and audio effect
++ * panels; this is where they are set up front, and where the per-title memory and auto-enhance rules are switched.
++ */
++@Composable
++internal fun PictureSoundSettingsSection(isTablet: Boolean) {
++    LaunchedEffect(Unit) {
++        PlayerEffects.ensureLoaded()
++        SmartEnhance.ensureLoaded()
++    }
++    val picture by PlayerEffects.picture.collectAsStateWithLifecycle()
++    val audio by PlayerEffects.audio.collectAsStateWithLifecycle()
++    val smartEnhance by SmartEnhance.enabled.collectAsStateWithLifecycle()
++    val autoEnhance by PlayerEffects.autoEnhance.collectAsStateWithLifecycle()
++    val bestQuality by PlayerEffects.preferBestQuality.collectAsStateWithLifecycle()
++    val rememberTitle by PlayerEffects.rememberPerTitle.collectAsStateWithLifecycle()
++
++    SettingsSection(title = "Picture & Sound", isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            SettingsSwitchRow(
++                title = "Smart Enhance",
++                description = "A contrast and colour lift for a more immersive picture. Also on the player's toolbar.",
++                checked = smartEnhance,
++                isTablet = isTablet,
++                onCheckedChange = { if (it != smartEnhance) SmartEnhance.toggle() },
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Auto Smart Enhance",
++                description = "Turns Smart Enhance on for sources under 720p or under 2 Mbps.",
++                checked = autoEnhance,
++                isTablet = isTablet,
++                onCheckedChange = PlayerEffects::setAutoEnhance,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsChipRow(
++                title = "Picture preset",
++                description = "Brightness, contrast and colour. Fine tune in the player's picture panel.",
++                isTablet = isTablet,
++            ) {
++                PicturePreset.values().forEach { preset ->
++                    Chip(
++                        label = preset.label,
++                        selected = picture.preset == preset,
++                        onClick = { PlayerEffects.setPicture(picture.withPreset(preset)) },
++                    )
++                }
++            }
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsChipRow(
++                title = "Sharpen",
++                description = "Crisper edges on soft video. ExoPlayer and libmpv.",
++                isTablet = isTablet,
++            ) {
++                StepNames.forEachIndexed { index, name ->
++                    Chip(
++                        label = name,
++                        selected = picture.sharpen == index,
++                        onClick = { PlayerEffects.setPicture(picture.copy(preset = PicturePreset.CUSTOM, sharpen = index)) },
++                    )
++                }
++            }
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsChipRow(
++                title = "Denoise",
++                description = "Smooths compression noise on low bitrate streams. ExoPlayer only.",
++                isTablet = isTablet,
++            ) {
++                StepNames.forEachIndexed { index, name ->
++                    Chip(
++                        label = name,
++                        selected = picture.denoise == index,
++                        onClick = { PlayerEffects.setPicture(picture.copy(preset = PicturePreset.CUSTOM, denoise = index)) },
++                    )
++                }
++            }
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Remove banding",
++                description = "Smooths colour steps in skies and dark scenes.",
++                checked = picture.deband,
++                isTablet = isTablet,
++                onCheckedChange = { PlayerEffects.setPicture(picture.copy(preset = PicturePreset.CUSTOM, deband = it)) },
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsChipRow(
++                title = "HDR tone mapping",
++                description = "How HDR video is squeezed onto a standard screen. libmpv engine only.",
++                isTablet = isTablet,
++            ) {
++                ToneMapping.values().forEach { tone ->
++                    Chip(
++                        label = tone.label,
++                        selected = picture.toneMapping == tone,
++                        onClick = { PlayerEffects.setPicture(picture.copy(toneMapping = tone)) },
++                    )
++                }
++            }
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Smooth motion",
++                description = "Frame interpolation. Can look like a soap opera. libmpv engine only.",
++                checked = picture.interpolation,
++                isTablet = isTablet,
++                onCheckedChange = { PlayerEffects.setPicture(picture.copy(interpolation = it)) },
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Match refresh rate",
++                description = "Switches the screen to the video's frame rate when it can. ExoPlayer only.",
++                checked = picture.matchRefreshRate,
++                isTablet = isTablet,
++                onCheckedChange = { PlayerEffects.setPicture(picture.copy(matchRefreshRate = it)) },
++            )
++        }
++        SettingsGroup(isTablet = isTablet) {
++            SettingsChipRow(
++                title = "Sound mode",
++                description = "Dialogue lifts voices and levels loud scenes so speech stays clear.",
++                isTablet = isTablet,
++            ) {
++                AudioPreset.values().forEach { preset ->
++                    Chip(
++                        label = preset.label,
++                        selected = audio.preset == preset,
++                        onClick = { PlayerEffects.setAudio(audio.copy(preset = preset)) },
++                    )
++                }
++            }
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Equalizer",
++                description = "Five bands, 60 Hz to 14 kHz. Drag the bands in the player's audio panel.",
++                checked = audio.eqEnabled,
++                isTablet = isTablet,
++                onCheckedChange = { PlayerEffects.setAudio(audio.copy(eqEnabled = it)) },
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsChipRow(
++                title = "Equalizer preset",
++                description = "Starting curve for the equalizer.",
++                isTablet = isTablet,
++            ) {
++                EqPreset.values().forEach { preset ->
++                    Chip(
++                        label = preset.label,
++                        selected = audio.eqPreset == preset,
++                        onClick = {
++                            PlayerEffects.setAudio(
++                                if (preset == EqPreset.CUSTOM) {
++                                    audio.copy(eqPreset = preset, customBands = audio.eqBands)
++                                } else {
++                                    audio.copy(eqPreset = preset)
++                                },
++                            )
++                        },
++                    )
++                }
++            }
++        }
++        SettingsGroup(isTablet = isTablet) {
++            SettingsSwitchRow(
++                title = "Remember per title",
++                description = "Keeps the picture and sound choices for each title you watch.",
++                checked = rememberTitle,
++                isTablet = isTablet,
++                onCheckedChange = PlayerEffects::setRememberPerTitle,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Prefer best picture",
++                description = "Auto-play picks the highest resolution and best codec first.",
++                checked = bestQuality,
++                isTablet = isTablet,
++                onCheckedChange = PlayerEffects::setPreferBestQuality,
++            )
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+index a7a5c3a1..6f9bb8a0 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+@@ -637,6 +637,8 @@ private fun PlaybackSettingsSection(
+ 
+         VolumeBoostSettingsSection(isTablet = isTablet) // Volume boost hook
+ 
++        PictureSoundSettingsSection(isTablet = isTablet) // Picture and sound hook
++
+         ConnectionFitSettingsSection(isTablet = isTablet) // Nuvio fork: connection-speed fit
+ 
+         SubtitleFontSettingsSection(isTablet = isTablet) // Nuvio fork: custom subtitle font
