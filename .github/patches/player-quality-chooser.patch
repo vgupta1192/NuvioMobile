@@ -1,0 +1,256 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+index 2e92eb58..649797fd 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+@@ -41,6 +41,7 @@ import androidx.media3.common.MimeTypes
+ import androidx.media3.common.PlaybackException
+ import androidx.media3.common.Player
+ import androidx.media3.common.TrackSelectionOverride
++import androidx.media3.common.Tracks
+ import androidx.media3.common.VideoSize
+ import androidx.media3.common.text.Cue
+ import androidx.media3.common.text.CueGroup
+@@ -885,6 +886,13 @@ private fun ExoPlayerSurface(
+                 override fun getAudioTracks(): List<AudioTrack> =
+                     exoPlayer.extractAudioTracks(context)
+ 
++                override fun getVideoQualities(): List<VideoQualityOption> =
++                    exoPlayer.extractVideoQualities()
++
++                override fun selectVideoQuality(heightPx: Int?) {
++                    exoPlayer.applyVideoQuality(heightPx)
++                }
++
+                 override suspend fun getMediaInfo(): PlayerMediaInfo {
+                     val video = exoPlayer.videoFormat
+                     val audio = exoPlayer.audioFormat
+@@ -2275,6 +2283,51 @@ private fun PlayerView.applySubtitleStyle(style: SubtitleStyleState, pipScale: F
+     }
+ }
+ 
++private fun ExoPlayer.extractVideoQualities(): List<VideoQualityOption> {
++    val pinnedHeight = trackSelectionParameters.overrides.values
++        .firstOrNull { it.mediaTrackGroup.type == C.TRACK_TYPE_VIDEO }
++        ?.let { pin -> pin.mediaTrackGroup.getFormat(pin.trackIndices.first()).height }
++    val byHeight = LinkedHashMap<Int, VideoQualityOption>()
++    for (group in currentTracks.groups) {
++        if (group.type != C.TRACK_TYPE_VIDEO) continue
++        for (i in 0 until group.length) {
++            if (!group.isTrackSupported(i)) continue
++            val format = group.getTrackFormat(i)
++            if (format.height <= 0) continue
++            val existing = byHeight[format.height]
++            if (existing == null || (format.bitrate > (existing.bitrate ?: 0))) {
++                byHeight[format.height] = VideoQualityOption(
++                    heightPx = format.height,
++                    label = "${format.height}p",
++                    bitrate = format.bitrate.takeIf { it > 0 },
++                    isSelected = pinnedHeight == format.height,
++                )
++            }
++        }
++    }
++    return byHeight.values.sortedByDescending { it.heightPx }
++}
++
++private fun ExoPlayer.applyVideoQuality(heightPx: Int?) {
++    val builder = trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_VIDEO)
++    if (heightPx != null) {
++        var best: Pair<Tracks.Group, Int>? = null
++        for (group in currentTracks.groups) {
++            if (group.type != C.TRACK_TYPE_VIDEO) continue
++            for (i in 0 until group.length) {
++                val format = group.getTrackFormat(i)
++                if (format.height != heightPx || !group.isTrackSupported(i)) continue
++                val currentBest = best?.let { it.first.getTrackFormat(it.second).bitrate } ?: -1
++                if (format.bitrate > currentBest) best = group to i
++            }
++        }
++        best?.let { (group, index) ->
++            builder.setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, listOf(index)))
++        }
++    }
++    trackSelectionParameters = builder.build()
++}
++
+ private fun ExoPlayer.extractAudioTracks(context: Context): List<AudioTrack> {
+     val tracks = mutableListOf<AudioTrack>()
+     val trackNameProvider = CustomDefaultTrackNameProvider(context.resources)
+diff --git a/composeApp/src/commonMain/composeResources/values/strings_video_quality.xml b/composeApp/src/commonMain/composeResources/values/strings_video_quality.xml
+new file mode 100644
+index 00000000..7629a7b2
+--- /dev/null
++++ b/composeApp/src/commonMain/composeResources/values/strings_video_quality.xml
+@@ -0,0 +1,5 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <string name="player_video_quality">Video quality</string>
++    <string name="player_video_quality_auto">Auto</string>
++</resources>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AudioTrackModal.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AudioTrackModal.kt
+index c9b0f46a..5368d6a2 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AudioTrackModal.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AudioTrackModal.kt
+@@ -23,6 +23,10 @@ import androidx.compose.material3.Icon
+ import androidx.compose.material3.MaterialTheme
+ import androidx.compose.material3.Text
+ import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.draw.clip
+@@ -33,6 +37,8 @@ import com.nuvio.app.core.ui.nuvio
+ import nuvio.composeapp.generated.resources.Res
+ import nuvio.composeapp.generated.resources.compose_player_audio_tracks
+ import nuvio.composeapp.generated.resources.compose_player_no_audio_tracks_available
++import nuvio.composeapp.generated.resources.player_video_quality
++import nuvio.composeapp.generated.resources.player_video_quality_auto
+ import org.jetbrains.compose.resources.stringResource
+ 
+ @Composable
+@@ -43,7 +49,9 @@ fun AudioTrackModal(
+     onTrackSelected: (Int) -> Unit,
+     onDismiss: () -> Unit,
+     modifier: Modifier = Modifier,
++    videoController: PlayerEngineController? = null,
+ ) {
++    var qualities by remember(visible) { mutableStateOf(if (visible) videoController?.getVideoQualities().orEmpty() else emptyList()) }
+     PlayerOverlayScaffold(
+         visible = visible,
+         onDismiss = onDismiss,
+@@ -92,11 +100,70 @@ fun AudioTrackModal(
+                         }
+                     }
+                 }
++
++                if (qualities.size > 1) {
++                    Text(
++                        text = stringResource(Res.string.player_video_quality),
++                        color = Color.White,
++                        style = MaterialTheme.typography.headlineMedium,
++                        modifier = Modifier.padding(top = 12.dp, bottom = 8.dp),
++                    )
++                    val pinned = qualities.any { it.isSelected }
++                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
++                        QualityRow(
++                            label = stringResource(Res.string.player_video_quality_auto),
++                            isSelected = !pinned,
++                            onClick = {
++                                videoController?.selectVideoQuality(null)
++                                qualities = qualities.map { it.copy(isSelected = false) }
++                            },
++                        )
++                        qualities.forEach { option ->
++                            QualityRow(
++                                label = option.label,
++                                isSelected = option.isSelected,
++                                onClick = {
++                                    videoController?.selectVideoQuality(option.heightPx)
++                                    qualities = qualities.map { it.copy(isSelected = it.heightPx == option.heightPx) }
++                                },
++                            )
++                        }
++                    }
++                }
+             }
+         }
+     }
+ }
+ 
++@Composable
++private fun QualityRow(label: String, isSelected: Boolean, onClick: () -> Unit) {
++    val tokens = MaterialTheme.nuvio
++    Row(
++        modifier = Modifier
++            .fillMaxWidth()
++            .clip(RoundedCornerShape(12.dp))
++            .background(if (isSelected) tokens.colors.accent else Color.Transparent)
++            .clickable(onClick = onClick)
++            .padding(horizontal = 12.dp, vertical = 8.dp),
++        horizontalArrangement = Arrangement.SpaceBetween,
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        Text(
++            text = label,
++            color = if (isSelected) tokens.colors.onAccent else Color.White,
++            style = MaterialTheme.typography.titleMedium,
++        )
++        if (isSelected) {
++            Icon(
++                imageVector = Icons.Rounded.Check,
++                contentDescription = null,
++                tint = tokens.colors.onAccent,
++                modifier = Modifier.size(20.dp),
++            )
++        }
++    }
++}
++
+ @Composable
+ private fun AudioTrackRow(
+     track: AudioTrack,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
+index 62eaa18e..cb2b5d55 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
+@@ -13,6 +13,10 @@ interface PlayerEngineController {
+     fun setPlaybackSpeed(speed: Float)
+     fun setMuted(muted: Boolean) {}
+     fun getAudioTracks(): List<AudioTrack>
++    /** Fork: HLS/DASH quality variants (empty when the stream has a single video track). */
++    fun getVideoQualities(): List<VideoQualityOption> = emptyList()
++    /** Fork: pins a variant by pixel height, or null to go back to adaptive (auto). */
++    fun selectVideoQuality(heightPx: Int?) {}
+     fun getSubtitleTracks(): List<SubtitleTrack>
+     fun applyAudioLanguagePreferences(languages: List<String>)
+     fun selectAudioTrack(index: Int)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt
+index 2702619c..6b01de89 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt
+@@ -24,6 +24,7 @@ internal fun PlayerScreenModalHosts(
+     selectedAudioIndex: Int,
+     onAudioTrackSelected: (Int) -> Unit,
+     onAudioModalDismissed: () -> Unit,
++    videoController: PlayerEngineController? = null,
+     showSubtitleModal: Boolean,
+     subtitleTracks: List<SubtitleTrack>,
+     selectedSubtitleIndex: Int,
+@@ -120,6 +121,7 @@ internal fun PlayerScreenModalHosts(
+         selectedIndex = selectedAudioIndex,
+         onTrackSelected = onAudioTrackSelected,
+         onDismiss = onAudioModalDismissed,
++        videoController = videoController,
+     )
+ 
+     SubtitleModal(
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+index 03424e47..75579bbb 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+@@ -540,6 +540,7 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
+             }
+         },
+         onAudioModalDismissed = { showAudioModal = false },
++        videoController = playerController,
+         showSubtitleModal = showSubtitleModal,
+         subtitleTracks = serverSubtitleTracks.ifEmpty { subtitleTracks },
+         selectedSubtitleIndex = if (serverSubtitleTracks.isEmpty()) {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/VideoQualityOption.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/VideoQualityOption.kt
+new file mode 100644
+index 00000000..5c20adad
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/VideoQualityOption.kt
+@@ -0,0 +1,9 @@
++package com.nuvio.app.features.player
++
++/** One selectable video variant of an adaptive stream; [heightPx] is the key used to pin it. */
++data class VideoQualityOption(
++    val heightPx: Int,
++    val label: String,
++    val bitrate: Int?,
++    val isSelected: Boolean,
++)

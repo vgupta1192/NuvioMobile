@@ -1,0 +1,223 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
+index 30fc3061..71feb84d 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
+@@ -1182,6 +1182,7 @@ fun MetaDetailsScreen(
+                                                         onWatchedClick = toggleWatched,
+                                                         onSaveClick = toggleSaved,
+                                                         onSaveLongClick = openLibraryListPicker,
++                                                        meta = meta,
+                                                     )
+                                                 }
+                                             } else {
+@@ -2305,6 +2306,7 @@ private fun ConfiguredMetaSections(
+                     onWatchedClick = onWatchedClick,
+                     onSaveClick = onSaveClick,
+                     onSaveLongClick = onSaveLongClick,
++                    meta = meta,
+                 )
+             }
+             MetaScreenSectionKey.OVERVIEW -> {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailActionButtons.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailActionButtons.kt
+index 2c7faff4..c5df6055 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailActionButtons.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailActionButtons.kt
+@@ -256,7 +256,9 @@ fun DetailActions(
+     onWatchedClick: () -> Unit,
+     onSaveClick: () -> Unit,
+     onSaveLongClick: (() -> Unit)?,
++    meta: com.nuvio.app.features.details.MetaDetails? = null,
+ ) {
++    val ratingAction = rememberRatingAction(meta)
+     val shuffleAction = onShuffleClick?.let { onClick ->
+         DetailSecondaryAction(
+             label = stringResource(if (shuffleEnabled) Res.string.shuffle_stop else Res.string.random_episode_title),
+@@ -288,6 +290,7 @@ fun DetailActions(
+                     onLongClick = onSaveLongClick,
+                 ),
+             )
++            ratingAction?.let(::add)
+         },
+         isTablet = isTablet,
+         onPlayClick = onPlayClick,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailRatingAction.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailRatingAction.kt
+new file mode 100644
+index 00000000..bed26764
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailRatingAction.kt
+@@ -0,0 +1,175 @@
++package com.nuvio.app.features.details.components
++
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.FlowRow
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.shape.CircleShape
++import androidx.compose.foundation.background
++import androidx.compose.foundation.layout.ExperimentalLayoutApi
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.filled.Star
++import androidx.compose.material.icons.outlined.StarBorder
++import androidx.compose.material3.AlertDialog
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.material3.TextButton
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.rememberCoroutineScope
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.unit.dp
++import com.nuvio.app.features.details.MetaDetails
++import com.nuvio.app.features.profiles.ProfileRepository
++import com.nuvio.app.features.tracking.TRACKING_RATING_MAX
++import com.nuvio.app.features.tracking.TRACKING_RATING_MIN
++import com.nuvio.app.features.tracking.TrackingCatalogReference
++import com.nuvio.app.features.tracking.TrackingProviderRegistry
++import com.nuvio.app.features.tracking.TrackingRatingScope
++import com.nuvio.app.features.tracking.TrackingRatingTarget
++import com.nuvio.app.features.tracking.extractTrackingYear
++import com.nuvio.app.features.tracking.parseTrackingExternalIds
++import com.nuvio.app.features.tracking.trackingMediaKind
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.launch
++
++/** Fork feature: rate the title 1-10 on every connected tracker that supports ratings. */
++private fun MetaDetails.ratingTarget(): TrackingRatingTarget? {
++    val ids = parseTrackingExternalIds(id).let { parsed ->
++        if (parsed.imdb == null && imdbId != null) parsed.copy(imdb = imdbId) else parsed
++    }
++    val kind = trackingMediaKind(type, ids)
++    val isMovie = type.trim().lowercase() in setOf("movie", "film")
++    return TrackingRatingTarget(
++        scope = if (isMovie) TrackingRatingScope.MOVIE else TrackingRatingScope.SHOW,
++        kind = kind,
++        ids = ids,
++        title = name,
++        year = extractTrackingYear(releaseInfo),
++        catalog = TrackingCatalogReference(contentId = id, contentType = type),
++    ).takeIf { it.isValid }
++}
++
++/** Returns the "Rate" action (null when no connected tracker can rate this title) and hosts its dialog. */
++@Composable
++internal fun rememberRatingAction(meta: MetaDetails?): DetailSecondaryAction? {
++    if (meta == null) return null
++    val target = remember(meta.id) { meta.ratingTarget() } ?: return null
++    val providers = remember(meta.id) {
++        TrackingProviderRegistry.connectedRatingProviders().filter { it.canRate(target) }
++    }
++    if (providers.isEmpty()) return null
++
++    var showDialog by remember(meta.id) { mutableStateOf(false) }
++    var current by remember(meta.id) { mutableStateOf<Int?>(null) }
++    val scope = rememberCoroutineScope()
++    val profileId = ProfileRepository.activeProfileId
++
++    LaunchedEffect(showDialog) {
++        if (!showDialog) return@LaunchedEffect
++        current = runCatching {
++            val normalized = providers.first().normalize(target)
++            providers.first().fetchRatings(profileId, normalized.scope)
++                .firstOrNull { it.matches(normalized) }?.rating
++        }.getOrNull()
++    }
++
++    if (showDialog) {
++        RatingDialog(
++            title = meta.name,
++            current = current,
++            onRate = { value ->
++                showDialog = false
++                current = value
++                scope.launch {
++                    providers.forEach { provider ->
++                        try {
++                            provider.setRating(profileId, provider.normalize(target), value)
++                        } catch (e: CancellationException) {
++                            throw e
++                        } catch (_: Exception) {
++                        }
++                    }
++                }
++            },
++            onRemove = {
++                showDialog = false
++                current = null
++                scope.launch {
++                    providers.forEach { provider ->
++                        try {
++                            provider.removeRating(profileId, provider.normalize(target))
++                        } catch (e: CancellationException) {
++                            throw e
++                        } catch (_: Exception) {
++                        }
++                    }
++                }
++            },
++            onDismiss = { showDialog = false },
++        )
++    }
++
++    return DetailSecondaryAction(
++        label = current?.let { "Rated $it/10" } ?: "Rate",
++        icon = if (current != null) Icons.Default.Star else Icons.Outlined.StarBorder,
++        isActive = current != null,
++        onClick = { showDialog = true },
++    )
++}
++
++@OptIn(ExperimentalLayoutApi::class)
++@Composable
++private fun RatingDialog(
++    title: String,
++    current: Int?,
++    onRate: (Int) -> Unit,
++    onRemove: () -> Unit,
++    onDismiss: () -> Unit,
++) {
++    AlertDialog(
++        onDismissRequest = onDismiss,
++        title = { Text("Rate $title") },
++        text = {
++            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
++                FlowRow(
++                    horizontalArrangement = Arrangement.spacedBy(8.dp),
++                    verticalArrangement = Arrangement.spacedBy(8.dp),
++                ) {
++                    for (value in TRACKING_RATING_MIN..TRACKING_RATING_MAX) {
++                        val selected = value == current
++                        Box(
++                            modifier = Modifier
++                                .size(44.dp)
++                                .clip(CircleShape)
++                                .background(
++                                    if (selected) MaterialTheme.colorScheme.primary
++                                    else MaterialTheme.colorScheme.surfaceVariant,
++                                )
++                                .clickable { onRate(value) },
++                            contentAlignment = Alignment.Center,
++                        ) {
++                            Text(
++                                text = value.toString(),
++                                color = if (selected) MaterialTheme.colorScheme.onPrimary
++                                else MaterialTheme.colorScheme.onSurface,
++                            )
++                        }
++                    }
++                }
++            }
++        },
++        confirmButton = {
++            if (current != null) TextButton(onClick = onRemove) { Text("Remove rating") }
++        },
++        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
++    )
++}

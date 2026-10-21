@@ -1,0 +1,144 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/AndroidDownloadScheduler.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/AndroidDownloadScheduler.kt
+index 4bb8cea4..b01b4caa 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/AndroidDownloadScheduler.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/AndroidDownloadScheduler.kt
+@@ -36,7 +36,7 @@ import okhttp3.ConnectionPool
+ 
+ internal class AndroidDownloadScheduler(val context: Context) {
+     val store = AndroidDownloadStore(File(context.filesDir, "download-transfers"))
+-    val directory = File(context.filesDir, "downloads")
++    val directory: File get() = DownloadsStorageLocation.directory(context)
+     private val locks = ConcurrentHashMap<String, Mutex>()
+     private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+ 
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsStorageLocation.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsStorageLocation.android.kt
+new file mode 100644
+index 00000000..79d81665
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsStorageLocation.android.kt
+@@ -0,0 +1,37 @@
++package com.nuvio.app.features.downloads
++
++import android.content.Context
++import android.os.Environment
++import java.io.File
++
++internal actual object DownloadsStorageLocation {
++    private const val PREFERENCES_NAME = "nuvio_downloads_location"
++    private const val EXTERNAL_KEY = "external"
++
++    private fun preferences() =
++        DownloadsPlatformDownloader.applicationContextOrNull()
++            ?.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
++
++    /** Mounted removable-storage app folder, or null when only the internal volume exists. */
++    private fun externalRoot(context: Context): File? =
++        context.getExternalFilesDirs(null)
++            .filterNotNull()
++            .firstOrNull { Environment.getExternalStorageState(it) == Environment.MEDIA_MOUNTED && Environment.isExternalStorageRemovable(it) }
++
++    actual fun isExternalAvailable(): Boolean {
++        val context = DownloadsPlatformDownloader.applicationContextOrNull() ?: return false
++        return externalRoot(context) != null
++    }
++
++    actual fun isExternal(): Boolean = preferences()?.getBoolean(EXTERNAL_KEY, false) ?: false
++
++    actual fun setExternal(enabled: Boolean) {
++        preferences()?.edit()?.putBoolean(EXTERNAL_KEY, enabled)?.apply()
++    }
++
++    /** Folder for new downloads; falls back to the internal folder when the card is gone. */
++    fun directory(context: Context): File {
++        val external = if (isExternal()) externalRoot(context) else null
++        return if (external != null) File(external, "downloads") else File(context.filesDir, "downloads")
++    }
++}
+diff --git a/composeApp/src/commonMain/composeResources/values/strings_downloads_location.xml b/composeApp/src/commonMain/composeResources/values/strings_downloads_location.xml
+new file mode 100644
+index 00000000..f9c80c76
+--- /dev/null
++++ b/composeApp/src/commonMain/composeResources/values/strings_downloads_location.xml
+@@ -0,0 +1,5 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <string name="downloads_external_storage_title">Save to SD card</string>
++    <string name="downloads_external_storage_description">New downloads go to removable storage when it is available. Existing downloads stay where they are.</string>
++</resources>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt
+index 8c511e93..139db8b8 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt
+@@ -199,6 +199,42 @@ private fun LazyListScope.downloadsRootContent(
+         }
+     }
+ 
++    if (DownloadsStorageLocation.isExternalAvailable()) {
++        item(key = "external_storage_toggle") {
++            var external by remember { mutableStateOf(DownloadsStorageLocation.isExternal()) }
++            Row(
++                modifier = Modifier
++                    .fillMaxWidth()
++                    .clickable {
++                        external = !external
++                        DownloadsStorageLocation.setExternal(external)
++                    }
++                    .padding(horizontal = 4.dp, vertical = 8.dp),
++                verticalAlignment = Alignment.CenterVertically,
++            ) {
++                Column(modifier = Modifier.weight(1f)) {
++                    Text(
++                        text = stringResource(Res.string.downloads_external_storage_title),
++                        style = MaterialTheme.typography.bodyLarge,
++                        fontWeight = FontWeight.SemiBold,
++                    )
++                    Text(
++                        text = stringResource(Res.string.downloads_external_storage_description),
++                        style = MaterialTheme.typography.bodySmall,
++                        color = MaterialTheme.colorScheme.onSurfaceVariant,
++                    )
++                }
++                Switch(
++                    checked = external,
++                    onCheckedChange = {
++                        external = it
++                        DownloadsStorageLocation.setExternal(it)
++                    },
++                )
++            }
++        }
++    }
++
+     if (activeItems.isNotEmpty()) {
+         item {
+             SectionTitle(stringResource(Res.string.downloads_section_active))
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsStorageLocation.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsStorageLocation.kt
+new file mode 100644
+index 00000000..4a24da24
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsStorageLocation.kt
+@@ -0,0 +1,11 @@
++package com.nuvio.app.features.downloads
++
++/**
++ * Fork feature: choose where new downloads are stored. Android can use the app folder on removable
++ * storage (SD card) when one is mounted; existing downloads stay where they are.
++ */
++internal expect object DownloadsStorageLocation {
++    fun isExternalAvailable(): Boolean
++    fun isExternal(): Boolean
++    fun setExternal(enabled: Boolean)
++}
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/downloads/DownloadsStorageLocation.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/downloads/DownloadsStorageLocation.ios.kt
+new file mode 100644
+index 00000000..f07ec0fa
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/downloads/DownloadsStorageLocation.ios.kt
+@@ -0,0 +1,7 @@
++package com.nuvio.app.features.downloads
++
++internal actual object DownloadsStorageLocation {
++    actual fun isExternalAvailable(): Boolean = false
++    actual fun isExternal(): Boolean = false
++    actual fun setExternal(enabled: Boolean) {}
++}
