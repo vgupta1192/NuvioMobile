@@ -1,0 +1,771 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/AndroidDownloadExport.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/AndroidDownloadExport.kt
+new file mode 100644
+index 00000000..cc7c923c
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/AndroidDownloadExport.kt
+@@ -0,0 +1,107 @@
++package com.nuvio.app.features.downloads
++
++import android.content.Context
++import android.net.Uri
++import android.provider.DocumentsContract
++import android.util.Log
++import android.webkit.MimeTypeMap
++import java.io.File
++import java.io.IOException
++import java.security.MessageDigest
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.currentCoroutineContext
++import kotlinx.coroutines.ensureActive
++import kotlinx.coroutines.withContext
++
++/**
++ * Fork port of the Enhanced custom download folder. Downloads are staged in app storage and copied
++ * into the folder the user picked (Storage Access Framework tree) when they finish.
++ */
++internal object AndroidDownloadExport {
++    private const val TAG = "NuvioDownloadExport"
++
++    private val context: Context?
++        get() = DownloadsPlatformDownloader.applicationContextOrNull()
++
++    fun isContentUri(uri: String): Boolean = uri.startsWith("content:", ignoreCase = true)
++
++    /** Document URI of the picked folder when the permission is still granted and the folder exists. */
++    fun writableFolder(treeUri: String): Uri? = runCatching {
++        val context = context ?: return@runCatching null
++        val tree = Uri.parse(treeUri)
++        val granted = context.contentResolver.persistedUriPermissions.any { it.uri == tree && it.isWritePermission }
++        if (!granted) return@runCatching null
++        val folder = treeDocumentUri(treeUri) ?: return@runCatching null
++        val mime = context.contentResolver.query(
++            folder, arrayOf(DocumentsContract.Document.COLUMN_MIME_TYPE), null, null, null,
++        )?.use { if (it.moveToFirst()) it.getString(0) else null }
++        folder.takeIf { mime == DocumentsContract.Document.MIME_TYPE_DIR }
++    }.onFailure { Log.w(TAG, "Download location is not accessible", it) }.getOrNull()
++
++    fun treeDocumentUri(treeUri: String): Uri? = runCatching {
++        val uri = Uri.parse(treeUri)
++        DocumentsContract.buildDocumentUriUsingTree(uri, DocumentsContract.getTreeDocumentId(uri))
++    }.getOrNull()
++
++    suspend fun copyInto(folder: Uri, source: File): Uri = withContext(Dispatchers.IO) {
++        val resolver = checkNotNull(context) { "Download export is not initialized" }.contentResolver
++        val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(source.extension.lowercase())
++            ?: "application/octet-stream"
++        val target = DocumentsContract.createDocument(resolver, folder, mimeType, source.name)
++            ?: throw IOException("Could not create the file in the selected download location")
++        try {
++            val output = resolver.openOutputStream(target, "w")
++                ?: throw IOException("Could not open the selected download location")
++            output.use { out ->
++                source.inputStream().use { input ->
++                    val buffer = ByteArray(256 * 1024)
++                    while (true) {
++                        currentCoroutineContext().ensureActive()
++                        val size = input.read(buffer)
++                        if (size == -1) break
++                        out.write(buffer, 0, size)
++                    }
++                    out.flush()
++                }
++            }
++            val written = resolver.openFileDescriptor(target, "r")?.use { it.statSize } ?: -1L
++            if (written >= 0L && written != source.length()) {
++                throw IOException("Copy to the selected download location was incomplete")
++            }
++            target
++        } catch (error: Throwable) {
++            runCatching { DocumentsContract.deleteDocument(resolver, target) }
++            throw error
++        }
++    }
++
++    fun exists(uri: String): Boolean = runCatching {
++        val resolver = context?.contentResolver ?: return@runCatching false
++        resolver.query(
++            Uri.parse(uri), arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID), null, null, null,
++        )?.use { it.moveToFirst() } == true
++    }.getOrDefault(false)
++
++    fun delete(uri: String): Boolean = runCatching {
++        val resolver = context?.contentResolver ?: return@runCatching false
++        DocumentsContract.deleteDocument(resolver, Uri.parse(uri))
++    }.getOrDefault(false)
++
++    fun subtitleDirectory(contentUri: String): File {
++        val key = MessageDigest.getInstance("SHA-256").digest(contentUri.toByteArray())
++            .joinToString("") { "%02x".format(it) }
++        return File(File(checkNotNull(context).filesDir, "download-subtitles"), "$key.subtitles")
++    }
++
++    fun moveSubtitles(privateVideo: File, contentUri: String) {
++        val from = File(privateVideo.path + ".subtitles")
++        if (!from.isDirectory) return
++        val to = subtitleDirectory(contentUri)
++        to.deleteRecursively()
++        to.parentFile?.mkdirs()
++        if (!from.renameTo(to)) {
++            from.copyRecursively(to, overwrite = true)
++            from.deleteRecursively()
++        }
++    }
++}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/AndroidDownloadScheduler.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/AndroidDownloadScheduler.kt
+index b01b4caa..9f4007f4 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/AndroidDownloadScheduler.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/AndroidDownloadScheduler.kt
+@@ -8,6 +8,7 @@ import android.net.Network
+ import android.os.Build
+ import android.os.PersistableBundle
+ import android.os.SystemClock
++import android.util.Log
+ import androidx.annotation.RequiresApi
+ import androidx.core.content.ContextCompat
+ import androidx.work.BackoffPolicy
+@@ -154,10 +155,17 @@ internal class AndroidDownloadScheduler(val context: Context) {
+                 .connectionPool(ConnectionPool())
+                 .build()
+         } else downloadHttpClient
++        // Subtitles load in parallel so a slow subtitle host never delays the video transfer.
++        val subtitles = CoroutineScope(currentCoroutineContext()).launch {
++            try {
++                DownloadSubtitles.prepare(transfer.item, destination.toURI().toString())
++            } catch (cancelled: CancellationException) {
++                throw cancelled
++            } catch (error: Exception) {
++                Log.w(TAG, "Subtitle preparation failed for $fileName", error)
++            }
++        }
+         try {
+-            DownloadSubtitles.prepare(transfer.item, destination.toURI().toString())
+-            currentCoroutineContext().ensureActive()
+-            if (!isActive(transfer)) return@withLock false
+             var lastProgressAt = 0L
+             val partial = if (destination.isFile) destination else transferAndroidDownload(
+                 item = transfer.item,
+@@ -178,19 +186,40 @@ internal class AndroidDownloadScheduler(val context: Context) {
+                 },
+             )
+             currentCoroutineContext().ensureActive()
+-            updateActive(transfer) { current ->
+-                if (partial != destination && !partial.renameTo(destination)) {
+-                    throw IOException("Could not finalize the downloaded file")
++            if (!isActive(transfer)) return@withLock false
++            subtitles.join()
++            if (partial != destination && !partial.renameTo(destination)) {
++                throw IOException("Could not finalize the downloaded file")
++            }
++            val bytes = destination.length()
++            val exportFolder = DownloadsSettingsRepository.run {
++                ensureLoaded()
++                downloadLocationUri.value
++            }?.let(AndroidDownloadExport::writableFolder)
++            val exportedUri = exportFolder?.let { folder ->
++                runCatching { AndroidDownloadExport.copyInto(folder, destination).toString() }
++                    .onFailure {
++                        if (it is CancellationException) throw it
++                        Log.w(TAG, "Download location unavailable, keeping $fileName in app storage", it)
++                    }
++                    .getOrNull()
++            }
++            val completed = updateActive(transfer) { current ->
++                if (exportedUri != null) {
++                    runCatching { AndroidDownloadExport.moveSubtitles(destination, exportedUri) }
++                    destination.delete()
+                 }
+-                val bytes = destination.length()
+                 current.copy(item = current.item.copy(
+                     status = DownloadStatus.Completed,
+-                    localFileUri = destination.toURI().toString(),
++                    localFileUri = exportedUri ?: destination.toURI().toString(),
+                     downloadedBytes = bytes,
+                     totalBytes = bytes,
+                     errorMessage = null,
+                 ))
+             }
++            if (exportedUri != null && completed?.item?.localFileUri != exportedUri) {
++                AndroidDownloadExport.delete(exportedUri)
++            }
+             false
+         } catch (cancelled: CancellationException) {
+             throw cancelled
+@@ -202,6 +231,7 @@ internal class AndroidDownloadScheduler(val context: Context) {
+             else fail(transfer, error)
+             retry
+         } finally {
++            subtitles.cancel()
+             if (network != null) withContext(NonCancellable + Dispatchers.IO) { client.connectionPool.evictAll() }
+         }
+     }
+@@ -233,6 +263,7 @@ internal class AndroidDownloadScheduler(val context: Context) {
+     private fun workName(transfer: AndroidDownloadTransfer) = "nuvio-download-${transfer.jobId}"
+ 
+     companion object {
++        private const val TAG = "NuvioDownloads"
+         const val FILE_NAME = "download_file_name"
+         const val GENERATION = "download_generation"
+         const val JOB_NAMESPACE = "nuvio-downloads"
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadSubtitleStorage.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadSubtitleStorage.android.kt
+index e7eb6694..9848bfed 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadSubtitleStorage.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadSubtitleStorage.android.kt
+@@ -5,7 +5,11 @@ import java.io.File
+ import java.net.URI
+ 
+ internal actual class DownloadSubtitleStorage actual constructor(localVideoUri: String) {
+-    private val directory = File(File(URI(localVideoUri)).path + ".subtitles")
++    private val directory = if (AndroidDownloadExport.isContentUri(localVideoUri)) {
++        AndroidDownloadExport.subtitleDirectory(localVideoUri)
++    } else {
++        File(File(URI(localVideoUri)).path + ".subtitles")
++    }
+ 
+     actual fun read(fileName: String): String? =
+         runCatching { AtomicFile(file(fileName)).readFully().decodeToString() }.getOrNull()
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsLocationStorage.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsLocationStorage.android.kt
+new file mode 100644
+index 00000000..2c7e918a
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsLocationStorage.android.kt
+@@ -0,0 +1,27 @@
++package com.nuvio.app.features.downloads
++
++import android.content.Context
++
++internal actual object DownloadsLocationStorage {
++    private const val PREFERENCES_NAME = "nuvio_downloads_settings"
++    private const val LOCATION_KEY = "download_location_uri"
++    private const val SHOW_BUTTON_KEY = "show_download_button"
++
++    private fun preferences() =
++        DownloadsPlatformDownloader.applicationContextOrNull()
++            ?.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
++
++    actual fun loadLocationUri(): String? = preferences()?.getString(LOCATION_KEY, null)?.takeIf { it.isNotBlank() }
++
++    actual fun saveLocationUri(uri: String?) {
++        preferences()?.edit()?.run {
++            if (uri == null) remove(LOCATION_KEY) else putString(LOCATION_KEY, uri)
++        }?.apply()
++    }
++
++    actual fun loadShowDownloadButton(): Boolean = preferences()?.getBoolean(SHOW_BUTTON_KEY, true) ?: true
++
++    actual fun saveShowDownloadButton(enabled: Boolean) {
++        preferences()?.edit()?.putBoolean(SHOW_BUTTON_KEY, enabled)?.apply()
++    }
++}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsNetworkPolicy.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsNetworkPolicy.android.kt
+index 1002dc28..f4183dd5 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsNetworkPolicy.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsNetworkPolicy.android.kt
+@@ -10,7 +10,7 @@ internal actual object DownloadsNetworkPolicy {
+         DownloadsPlatformDownloader.applicationContextOrNull()
+             ?.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+ 
+-    actual fun isWifiOnly(): Boolean = preferences()?.getBoolean(WIFI_ONLY_KEY, false) ?: false
++    actual fun isWifiOnly(): Boolean = preferences()?.getBoolean(WIFI_ONLY_KEY, true) ?: true
+ 
+     actual fun setWifiOnly(enabled: Boolean) {
+         preferences()?.edit()?.putBoolean(WIFI_ONLY_KEY, enabled)?.apply()
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt
+index 9b25160c..70020ca4 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt
+@@ -73,6 +73,10 @@ internal actual object DownloadsPlatformDownloader {
+ 
+     actual fun removeFile(localFileUri: String?): Boolean {
+         if (localFileUri.isNullOrBlank()) return false
++        if (AndroidDownloadExport.isContentUri(localFileUri)) {
++            DownloadSubtitleStorage(localFileUri).remove()
++            return AndroidDownloadExport.delete(localFileUri)
++        }
+         val file = localFileUri.toLocalFileOrNull() ?: return false
+         return runCatching { file.delete() }.getOrDefault(false)
+     }
+@@ -84,6 +88,9 @@ internal actual object DownloadsPlatformDownloader {
+     }
+ 
+     actual fun resolveLocalFileUri(localFileUri: String?, destinationFileName: String): String? {
++        if (localFileUri != null && AndroidDownloadExport.isContentUri(localFileUri)) {
++            if (AndroidDownloadExport.exists(localFileUri)) return localFileUri
++        }
+         localFileUri
+             ?.toLocalFileOrNull()
+             ?.takeIf { it.exists() }
+@@ -103,8 +110,14 @@ internal actual object DownloadsPlatformDownloader {
+ 
+     actual fun openDownloadsDirectory(): Boolean {
+         val context = appContext ?: return false
++        val customUri = DownloadsSettingsRepository.run {
++            ensureLoaded()
++            downloadLocationUri.value
++        }
++            ?.takeIf { AndroidDownloadExport.writableFolder(it) != null }
++            ?.let(AndroidDownloadExport::treeDocumentUri)
+         val downloadsDir = File(context.filesDir, "downloads").apply { mkdirs() }
+-        val uri = runCatching {
++        val uri = customUri ?: runCatching {
+             FileProvider.getUriForFile(
+                 context,
+                 "${context.packageName}.fileprovider",
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/settings/DownloadsSettingsPage.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/settings/DownloadsSettingsPage.android.kt
+new file mode 100644
+index 00000000..35574ada
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/settings/DownloadsSettingsPage.android.kt
+@@ -0,0 +1,39 @@
++package com.nuvio.app.features.settings
++
++import android.content.Intent
++import androidx.activity.compose.rememberLauncherForActivityResult
++import androidx.activity.result.contract.ActivityResultContracts
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.ui.platform.LocalContext
++
++@Composable
++internal actual fun DownloadLocationPicker(
++    onLocationSelected: (uri: String) -> Unit,
++    onDismiss: () -> Unit,
++) {
++    val context = LocalContext.current
++    val launcher = rememberLauncherForActivityResult(
++        contract = ActivityResultContracts.OpenDocumentTree(),
++    ) { uri ->
++        if (uri != null) {
++            val persisted = runCatching {
++                context.contentResolver.takePersistableUriPermission(
++                    uri,
++                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
++                )
++            }.isSuccess
++            if (persisted) onLocationSelected(uri.toString())
++        }
++        onDismiss()
++    }
++
++    LaunchedEffect(Unit) {
++        launcher.launch(null)
++    }
++}
++
++internal actual fun formatUriForDisplay(uri: String): String {
++    val androidUri = android.net.Uri.parse(uri)
++    return androidUri.path?.substringAfterLast(':') ?: uri
++}
+diff --git a/composeApp/src/commonMain/composeResources/values/strings_downloads_settings.xml b/composeApp/src/commonMain/composeResources/values/strings_downloads_settings.xml
+new file mode 100644
+index 00000000..8430b7a0
+--- /dev/null
++++ b/composeApp/src/commonMain/composeResources/values/strings_downloads_settings.xml
+@@ -0,0 +1,10 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <string name="downloads_allow_mobile_data_title">Allow mobile data</string>
++    <string name="downloads_allow_mobile_data_description">By default, downloads only start on Wi-Fi. Enable this to also allow them on mobile data.</string>
++    <string name="downloads_show_download_button_title">Show download button</string>
++    <string name="downloads_show_download_button_description">Adds a download button under Play on a title’s details page.</string>
++    <string name="settings_downloads_location_title">Download Location</string>
++    <string name="settings_downloads_location_private">Internal Storage (Private)</string>
++    <string name="settings_downloads_location_reset">Reset to Default</string>
++</resources>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/StreamDestination.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/StreamDestination.kt
+index 33c36072..a2b26a89 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/StreamDestination.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/StreamDestination.kt
+@@ -375,7 +375,7 @@ internal fun StreamDestination(
+                     ),
+                 ),
+             )
+-            if (playerSettings.externalPlayerEnabled) {
++            if (playerSettings.externalPlayerEnabled || launch.forceExternalPlayer) {
+                 openExternalPlayback(playerLaunch)
+                 StreamsRepository.cancelLoading()
+                 StreamsRepository.setOverlayVisible(false)
+@@ -540,7 +540,7 @@ internal fun StreamDestination(
+             sourceFilename = stream.behaviorHints.filename,
+             stream = stream,
+         )
+-        if (playerSettings.externalPlayerEnabled && stream.serverTarget == null) {
++        if ((playerSettings.externalPlayerEnabled || launch.forceExternalPlayer) && stream.serverTarget == null) {
+             openExternalPlayback(playerLaunch)
+             StreamsRepository.consumeAutoPlay()
+             StreamsRepository.cancelLoading()
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
+index f57dcf46..754431c6 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
+@@ -47,6 +47,7 @@ import androidx.compose.material3.Text
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.SideEffect
+ import androidx.compose.runtime.CompositionLocalProvider
++import com.nuvio.app.features.downloads.DownloadsSettingsRepository
+ import com.nuvio.app.features.details.components.LocalDetailExtraActions
+ import com.nuvio.app.features.details.components.DetailExtraActionsHolder
+ import androidx.compose.runtime.LaunchedEffect
+@@ -958,7 +959,13 @@ fun MetaDetailsScreen(
+                         )
+                     }
+                 }
+-                val onDownloadClick: (() -> Unit)? = onDownload?.let { handler -> { runExtraPlayAction(handler, null) } }
++                val showDownloadButton by remember {
++                    DownloadsSettingsRepository.ensureLoaded()
++                    DownloadsSettingsRepository.showDownloadButton
++                }.collectAsStateWithLifecycle()
++                val onDownloadClick: (() -> Unit)? = onDownload
++                    ?.takeIf { showDownloadButton }
++                    ?.let { handler -> { runExtraPlayAction(handler, null) } }
+                 val onPlayFromStartClick: (() -> Unit)? = onPlayFromStart
+                     ?.takeIf { (activeResumePositionMs ?: 0L) > 0L }
+                     ?.let { handler -> { runExtraPlayAction(handler, 0L) } }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsLocationStorage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsLocationStorage.kt
+new file mode 100644
+index 00000000..35d1f3fd
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsLocationStorage.kt
+@@ -0,0 +1,9 @@
++package com.nuvio.app.features.downloads
++
++/** Device-level download preferences: custom download folder and details-page button visibility. */
++internal expect object DownloadsLocationStorage {
++    fun loadLocationUri(): String?
++    fun saveLocationUri(uri: String?)
++    fun loadShowDownloadButton(): Boolean
++    fun saveShowDownloadButton(enabled: Boolean)
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt
+index 139db8b8..18f3d691 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt
+@@ -18,6 +18,7 @@ import androidx.compose.material.icons.rounded.Folder
+ import androidx.compose.material.icons.rounded.Pause
+ import androidx.compose.material.icons.rounded.PlayArrow
+ import androidx.compose.material.icons.rounded.Refresh
++import androidx.compose.material.icons.rounded.Settings
+ import androidx.compose.material3.Icon
+ import androidx.compose.material3.IconButton
+ import androidx.compose.material3.LinearProgressIndicator
+@@ -43,6 +44,7 @@ import com.nuvio.app.core.ui.NuvioScreen
+ import com.nuvio.app.core.ui.NuvioScreenHeader
+ import com.nuvio.app.core.ui.NuvioStatusModal
+ import com.nuvio.app.core.ui.NuvioToastController
++import com.nuvio.app.features.settings.DownloadsSettingsScreen
+ import nuvio.composeapp.generated.resources.*
+ import org.jetbrains.compose.resources.stringResource
+ 
+@@ -64,6 +66,7 @@ fun DownloadsScreen(
+ 
+     var selectedShowId by rememberSaveable(initialShowId) { mutableStateOf(initialShowId) }
+     var downloadPendingDeletionId by rememberSaveable { mutableStateOf<String?>(null) }
++    var showSettings by rememberSaveable { mutableStateOf(false) }
+     val openDownloadsDirectoryFailedText = stringResource(Res.string.downloads_open_directory_failed)
+ 
+     val completedEpisodes = remember(uiState.items) {
+@@ -78,6 +81,11 @@ fun DownloadsScreen(
+         }
+     }
+ 
++    if (showSettings) {
++        DownloadsSettingsScreen(onBack = { showSettings = false })
++        return
++    }
++
+     NuvioScreen {
+         stickyHeader {
+             NuvioScreenHeader(
+@@ -94,6 +102,14 @@ fun DownloadsScreen(
+                     }
+                 },
+                 actions = {
++                    if (selectedShowId == null) {
++                        IconButton(onClick = { showSettings = true }) {
++                            Icon(
++                                imageVector = Icons.Rounded.Settings,
++                                contentDescription = stringResource(Res.string.compose_settings_page_root),
++                            )
++                        }
++                    }
+                     IconButton(
+                         onClick = {
+                             if (!DownloadsPlatformDownloader.openDownloadsDirectory()) {
+@@ -165,76 +181,6 @@ private fun LazyListScope.downloadsRootContent(
+         }
+         .sortedBy { (item, _) -> item.title.lowercase() }
+ 
+-    item(key = "wifi_only_toggle") {
+-        var wifiOnly by remember { mutableStateOf(DownloadsNetworkPolicy.isWifiOnly()) }
+-        Row(
+-            modifier = Modifier
+-                .fillMaxWidth()
+-                .clickable {
+-                    wifiOnly = !wifiOnly
+-                    DownloadsNetworkPolicy.setWifiOnly(wifiOnly)
+-                }
+-                .padding(horizontal = 4.dp, vertical = 8.dp),
+-            verticalAlignment = Alignment.CenterVertically,
+-        ) {
+-            Column(modifier = Modifier.weight(1f)) {
+-                Text(
+-                    text = stringResource(Res.string.downloads_wifi_only_title),
+-                    style = MaterialTheme.typography.bodyLarge,
+-                    fontWeight = FontWeight.SemiBold,
+-                )
+-                Text(
+-                    text = stringResource(Res.string.downloads_wifi_only_description),
+-                    style = MaterialTheme.typography.bodySmall,
+-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+-                )
+-            }
+-            Switch(
+-                checked = wifiOnly,
+-                onCheckedChange = {
+-                    wifiOnly = it
+-                    DownloadsNetworkPolicy.setWifiOnly(it)
+-                },
+-            )
+-        }
+-    }
+-
+-    if (DownloadsStorageLocation.isExternalAvailable()) {
+-        item(key = "external_storage_toggle") {
+-            var external by remember { mutableStateOf(DownloadsStorageLocation.isExternal()) }
+-            Row(
+-                modifier = Modifier
+-                    .fillMaxWidth()
+-                    .clickable {
+-                        external = !external
+-                        DownloadsStorageLocation.setExternal(external)
+-                    }
+-                    .padding(horizontal = 4.dp, vertical = 8.dp),
+-                verticalAlignment = Alignment.CenterVertically,
+-            ) {
+-                Column(modifier = Modifier.weight(1f)) {
+-                    Text(
+-                        text = stringResource(Res.string.downloads_external_storage_title),
+-                        style = MaterialTheme.typography.bodyLarge,
+-                        fontWeight = FontWeight.SemiBold,
+-                    )
+-                    Text(
+-                        text = stringResource(Res.string.downloads_external_storage_description),
+-                        style = MaterialTheme.typography.bodySmall,
+-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+-                    )
+-                }
+-                Switch(
+-                    checked = external,
+-                    onCheckedChange = {
+-                        external = it
+-                        DownloadsStorageLocation.setExternal(it)
+-                    },
+-                )
+-            }
+-        }
+-    }
+-
+     if (activeItems.isNotEmpty()) {
+         item {
+             SectionTitle(stringResource(Res.string.downloads_section_active))
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsSettingsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsSettingsRepository.kt
+new file mode 100644
+index 00000000..5841d8f2
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsSettingsRepository.kt
+@@ -0,0 +1,49 @@
++package com.nuvio.app.features.downloads
++
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++
++/**
++ * Fork port of the Enhanced Downloads settings: mobile-data permission (backed by
++ * [DownloadsNetworkPolicy]), details-page download button and custom download folder.
++ * Per-device, not synced.
++ */
++object DownloadsSettingsRepository {
++    private val _allowMobileDataDownloads = MutableStateFlow(false)
++    val allowMobileDataDownloads: StateFlow<Boolean> = _allowMobileDataDownloads.asStateFlow()
++
++    private val _showDownloadButton = MutableStateFlow(true)
++    val showDownloadButton: StateFlow<Boolean> = _showDownloadButton.asStateFlow()
++
++    private val _downloadLocationUri = MutableStateFlow<String?>(null)
++    val downloadLocationUri: StateFlow<String?> = _downloadLocationUri.asStateFlow()
++
++    private var hasLoaded = false
++
++    fun ensureLoaded() {
++        if (hasLoaded) return
++        hasLoaded = true
++        _allowMobileDataDownloads.value = !DownloadsNetworkPolicy.isWifiOnly()
++        _showDownloadButton.value = DownloadsLocationStorage.loadShowDownloadButton()
++        _downloadLocationUri.value = DownloadsLocationStorage.loadLocationUri()
++    }
++
++    fun setAllowMobileDataDownloads(enabled: Boolean) {
++        ensureLoaded()
++        _allowMobileDataDownloads.value = enabled
++        DownloadsNetworkPolicy.setWifiOnly(!enabled)
++    }
++
++    fun setShowDownloadButton(enabled: Boolean) {
++        ensureLoaded()
++        _showDownloadButton.value = enabled
++        DownloadsLocationStorage.saveShowDownloadButton(enabled)
++    }
++
++    fun setDownloadLocationUri(uri: String?) {
++        ensureLoaded()
++        _downloadLocationUri.value = uri
++        DownloadsLocationStorage.saveLocationUri(uri)
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DownloadsSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DownloadsSettingsPage.kt
+new file mode 100644
+index 00000000..9bd5b0b9
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DownloadsSettingsPage.kt
+@@ -0,0 +1,105 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.foundation.lazy.LazyListScope
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.features.downloads.DownloadsSettingsRepository
++import com.nuvio.app.features.downloads.DownloadsStorageLocation
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.compose_settings_root_downloads_title
++import nuvio.composeapp.generated.resources.downloads_allow_mobile_data_description
++import nuvio.composeapp.generated.resources.downloads_allow_mobile_data_title
++import nuvio.composeapp.generated.resources.downloads_external_storage_description
++import nuvio.composeapp.generated.resources.downloads_external_storage_title
++import nuvio.composeapp.generated.resources.downloads_show_download_button_description
++import nuvio.composeapp.generated.resources.downloads_show_download_button_title
++import nuvio.composeapp.generated.resources.settings_downloads_location_private
++import nuvio.composeapp.generated.resources.settings_downloads_location_reset
++import nuvio.composeapp.generated.resources.settings_downloads_location_title
++import org.jetbrains.compose.resources.stringResource
++
++internal fun LazyListScope.downloadsSettingsContent(
++    isTablet: Boolean,
++) {
++    item {
++        val downloadLocationUri by DownloadsSettingsRepository.downloadLocationUri.collectAsStateWithLifecycle()
++        val allowMobileData by DownloadsSettingsRepository.allowMobileDataDownloads.collectAsStateWithLifecycle()
++        val showDownloadButton by DownloadsSettingsRepository.showDownloadButton.collectAsStateWithLifecycle()
++        var showPicker by remember { mutableStateOf(false) }
++
++        SettingsSection(
++            title = stringResource(Res.string.compose_settings_root_downloads_title),
++            isTablet = isTablet,
++        ) {
++            SettingsGroup(isTablet = isTablet) {
++                SettingsSwitchRow(
++                    title = stringResource(Res.string.downloads_allow_mobile_data_title),
++                    description = stringResource(Res.string.downloads_allow_mobile_data_description),
++                    checked = allowMobileData,
++                    isTablet = isTablet,
++                    onCheckedChange = DownloadsSettingsRepository::setAllowMobileDataDownloads,
++                )
++                SettingsGroupDivider(isTablet = isTablet)
++                SettingsSwitchRow(
++                    title = stringResource(Res.string.downloads_show_download_button_title),
++                    description = stringResource(Res.string.downloads_show_download_button_description),
++                    checked = showDownloadButton,
++                    isTablet = isTablet,
++                    onCheckedChange = DownloadsSettingsRepository::setShowDownloadButton,
++                )
++                SettingsGroupDivider(isTablet = isTablet)
++                SettingsNavigationRow(
++                    title = stringResource(Res.string.settings_downloads_location_title),
++                    description = downloadLocationUri?.let { formatUriForDisplay(it) }
++                        ?: stringResource(Res.string.settings_downloads_location_private),
++                    isTablet = isTablet,
++                    onClick = { showPicker = true },
++                )
++                if (downloadLocationUri != null) {
++                    SettingsGroupDivider(isTablet = isTablet)
++                    SettingsNavigationRow(
++                        title = stringResource(Res.string.settings_downloads_location_reset),
++                        description = null,
++                        isTablet = isTablet,
++                        onClick = { DownloadsSettingsRepository.setDownloadLocationUri(null) },
++                    )
++                } else if (DownloadsStorageLocation.isExternalAvailable()) {
++                    var external by remember { mutableStateOf(DownloadsStorageLocation.isExternal()) }
++                    SettingsGroupDivider(isTablet = isTablet)
++                    SettingsSwitchRow(
++                        title = stringResource(Res.string.downloads_external_storage_title),
++                        description = stringResource(Res.string.downloads_external_storage_description),
++                        checked = external,
++                        isTablet = isTablet,
++                        onCheckedChange = {
++                            external = it
++                            DownloadsStorageLocation.setExternal(it)
++                        },
++                    )
++                }
++            }
++        }
++
++        if (showPicker) {
++            DownloadLocationPicker(
++                onLocationSelected = { uri ->
++                    DownloadsSettingsRepository.setDownloadLocationUri(uri)
++                    showPicker = false
++                },
++                onDismiss = { showPicker = false },
++            )
++        }
++    }
++}
++
++@Composable
++internal expect fun DownloadLocationPicker(
++    onLocationSelected: (uri: String) -> Unit,
++    onDismiss: () -> Unit,
++)
++
++internal expect fun formatUriForDisplay(uri: String): String
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DownloadsSettingsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DownloadsSettingsScreen.kt
+new file mode 100644
+index 00000000..5bad106c
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DownloadsSettingsScreen.kt
+@@ -0,0 +1,30 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.runtime.Composable
++import androidx.compose.ui.Modifier
++import com.nuvio.app.core.ui.NuvioScreen
++import com.nuvio.app.core.ui.NuvioScreenHeader
++import com.nuvio.app.features.downloads.DownloadsSettingsRepository
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.compose_settings_root_downloads_title
++import org.jetbrains.compose.resources.stringResource
++
++@Composable
++fun DownloadsSettingsScreen(
++    onBack: () -> Unit,
++) {
++    DownloadsSettingsRepository.ensureLoaded()
++
++    NuvioScreen(
++        modifier = Modifier.fillMaxSize(),
++    ) {
++        stickyHeader {
++            NuvioScreenHeader(
++                title = stringResource(Res.string.compose_settings_root_downloads_title),
++                onBack = onBack,
++            )
++        }
++        downloadsSettingsContent(isTablet = false)
++    }
++}

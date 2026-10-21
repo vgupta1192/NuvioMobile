@@ -164,7 +164,7 @@ jobs:
         if: steps.ver.outputs.should_build == 'true'
         run: |
           # enhanced-ports
-          for P in enhanced-base livetv-iptv-sources livetv-guide-grid instant-home streams-pin-search episode-navigator downloads-wifi-only trackers-anilist-wetrakr private-viewing dynamic-home-background player-quality-chooser downloads-sd-card details-rate-action player-cast hero-trailer-options startup-preloader player-quick-actions user-ratings mini-player player-hls-quality-ratings details-actions-legacy-controls ports-compile-fixes; do
+          for P in enhanced-base livetv-iptv-sources livetv-guide-grid instant-home streams-pin-search episode-navigator downloads-wifi-only trackers-anilist-wetrakr private-viewing dynamic-home-background player-quality-chooser downloads-sd-card details-rate-action player-cast hero-trailer-options startup-preloader player-quick-actions user-ratings mini-player player-hls-quality-ratings details-actions-legacy-controls ports-compile-fixes downloads-settings-saf; do
             if git apply "fork-src/.github/patches/$P.patch"; then
               echo "applied $P.patch"
             else
