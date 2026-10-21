@@ -1,0 +1,363 @@
+diff --git a/composeApp/build.gradle.kts b/composeApp/build.gradle.kts
+index 8e2e4ecc..c77eccd8 100644
+--- a/composeApp/build.gradle.kts
++++ b/composeApp/build.gradle.kts
+@@ -480,6 +480,7 @@ kotlin {
+                 implementation(libs.androidx.media3.decoder)
+                 implementation(libs.androidx.media3.session)
+                 implementation(libs.androidx.media3.common)
++                implementation(libs.androidx.media3.effect)
+                 implementation(libs.androidx.media3.container)
+                 implementation("com.google.android.gms:play-services-cast-framework:22.1.0")
+                 implementation("androidx.mediarouter:mediarouter:1.7.0")
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+index 066835cd..7d5f6390 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+@@ -42,6 +42,8 @@ import androidx.media3.common.MimeTypes
+ import androidx.media3.common.PlaybackException
+ import androidx.media3.common.Player
+ import androidx.media3.common.TrackSelectionOverride
++import androidx.media3.effect.Contrast
++import androidx.media3.effect.HslAdjustment
+ import androidx.media3.common.Tracks
+ import androidx.media3.common.VideoSize
+ import androidx.media3.common.text.Cue
+@@ -930,6 +932,12 @@ private fun ExoPlayerSurface(
+                     exoPlayer.applyVideoQuality(heightPx)
+                 }
+ 
++                override fun supportsSmartEnhance(): Boolean = true
++
++                override fun setSmartEnhance(enabled: Boolean) {
++                    exoPlayer.applySmartEnhance(enabled)
++                }
++
+                 override suspend fun getMediaInfo(): PlayerMediaInfo {
+                     val video = exoPlayer.videoFormat
+                     val audio = exoPlayer.audioFormat
+@@ -1859,6 +1867,18 @@ private class NuvioLibmpvView(
+                 executeMpv { mpv.setPropertyBoolean("mute", muted) }
+             }
+ 
++            override fun supportsSmartEnhance(): Boolean = true
++
++            // Smart Enhance on libmpv: a mild contrast, saturation and gamma lift through mpv's own colour controls.
++            override fun setSmartEnhance(enabled: Boolean) {
++                executeMpv {
++                    mpv.setPropertyInt("contrast", if (enabled) 8 else 0)
++                    mpv.setPropertyInt("saturation", if (enabled) 14 else 0)
++                    mpv.setPropertyInt("gamma", if (enabled) 6 else 0)
++                    mpv.setPropertyInt("brightness", if (enabled) 2 else 0)
++                }
++            }
++
+             override fun getAudioTracks(): List<AudioTrack> =
+                 latestAudioTracks.mapIndexed { index, track ->
+                     AudioTrack(
+@@ -2423,6 +2443,22 @@ private fun ExoPlayer.extractVideoQualities(): List<VideoQualityOption> {
+     return byHeight.values.sortedByDescending { it.heightPx }
+ }
+ 
++/** Smart Enhance on ExoPlayer: a GL contrast and saturation lift on the decoded frames; an empty list restores the original picture. */
++private fun ExoPlayer.applySmartEnhance(enabled: Boolean) {
++    runCatching {
++        setVideoEffects(
++            if (enabled) {
++                listOf(
++                    Contrast(0.12f),
++                    HslAdjustment.Builder().adjustSaturation(16f).adjustLightness(2f).build(),
++                )
++            } else {
++                emptyList()
++            },
++        )
++    }.onFailure { Log.w(TAG, "Smart Enhance could not be applied", it) }
++}
++
+ private fun ExoPlayer.applyVideoQuality(heightPx: Int?) {
+     val builder = trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+     if (heightPx != null) {
+diff --git a/composeApp/src/commonMain/composeResources/values/strings_smart_enhance.xml b/composeApp/src/commonMain/composeResources/values/strings_smart_enhance.xml
+new file mode 100644
+index 00000000..1215fc13
+--- /dev/null
++++ b/composeApp/src/commonMain/composeResources/values/strings_smart_enhance.xml
+@@ -0,0 +1,5 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <string name="player_smart_enhance">Smart Enhance</string>
++    <string name="player_smart_enhance_tagline">Immersive visual experience</string>
++</resources>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
+index 7dd9a21e..b0e9153d 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
+@@ -80,6 +80,7 @@ internal fun PlayerToolbar(
+ ) {
+     Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+         Spacer(Modifier.weight(1f))
++        SmartEnhanceToolbarAction()
+         if (onCastClick != null) {
+             PlayerAction(
+                 description = stringResource(Res.string.player_cast),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+index c50c9df6..c7575e36 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+@@ -482,6 +482,7 @@ private fun PlayerHeader(
+                     horizontalArrangement = Arrangement.spacedBy(10.dp),
+                     verticalAlignment = Alignment.CenterVertically,
+                 ) {
++                    SmartEnhanceHeaderButton(metrics)
+                     if (onCastClick != null) {
+                         PlayerHeaderIconButton(
+                             icon = if (castActive) Icons.Rounded.CastConnected else Icons.Rounded.Cast,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
+index b632383e..17d23ab9 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
+@@ -17,6 +17,9 @@ interface PlayerEngineController {
+     fun getVideoQualities(): List<VideoQualityOption> = emptyList()
+     /** Fork: pins a variant by pixel height, or null to go back to adaptive (auto). */
+     fun selectVideoQuality(heightPx: Int?) {}
++    /** Fork: true when this engine can apply Smart Enhance (contrast and colour lift). */
++    fun supportsSmartEnhance(): Boolean = false
++    fun setSmartEnhance(enabled: Boolean) {}
+     /** Fork: opens the Cast device picker (Android with Google Play services). */
+     fun showCastDialog() {}
+     fun getSubtitleTracks(): List<SubtitleTrack>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+index a1498807..30354a0c 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+@@ -318,6 +318,15 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+     val userRatingTarget = currentUserRatingTarget()
+     val canRate = rememberCanRate(userRatingTarget)
+     val userRating = rememberUserRating(userRatingTarget.takeIf { canRate })
++    // Smart Enhance: the engine applies the effect; re-applied whenever the engine (or the choice) changes.
++    val smartEnhanceOn by SmartEnhance.enabled.collectAsStateWithLifecycle()
++    LaunchedEffect(playerController, smartEnhanceOn) {
++        SmartEnhance.ensureLoaded()
++        val controller = playerController
++        SmartEnhance.available.value = controller?.supportsSmartEnhance() == true
++        controller?.setSmartEnhance(smartEnhanceOn)
++    }
++    SmartEnhanceBanner()
+     AnimatedVisibility(
+         visible = (controlsVisible || showParentalGuide) && !playerControlsLocked && !isInPip && !seekPreview.showSyncPanel,
+         enter = fadeIn(),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SmartEnhance.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SmartEnhance.kt
+new file mode 100644
+index 00000000..ec2ab43b
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SmartEnhance.kt
+@@ -0,0 +1,196 @@
++package com.nuvio.app.features.player
++
++import androidx.compose.animation.core.animateFloatAsState
++import androidx.compose.animation.core.tween
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.size
++import androidx.compose.material3.Icon
++import androidx.compose.material3.IconButton
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.alpha
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.graphics.PathFillType
++import androidx.compose.ui.graphics.SolidColor
++import androidx.compose.ui.graphics.StrokeCap
++import androidx.compose.ui.graphics.StrokeJoin
++import androidx.compose.ui.graphics.vector.ImageVector
++import androidx.compose.ui.graphics.vector.path
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.style.TextAlign
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import androidx.compose.material3.MaterialTheme
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.core.storage.AppFileCache
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.player_smart_enhance
++import nuvio.composeapp.generated.resources.player_smart_enhance_tagline
++import org.jetbrains.compose.resources.stringResource
++
++/**
++ * Smart Enhance (ported idea from MX Player): a player button that lifts contrast and colour for a more immersive
++ * picture, with a short banner when it is turned on. The player engine applies the actual video effect.
++ */
++object SmartEnhance {
++    private const val PATH = "settings/smart_enhance"
++    private val _enabled = MutableStateFlow(false)
++    val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
++
++    /** True while the current engine can apply the effect; the toolbar button only shows then. */
++    internal val available = MutableStateFlow(false)
++
++    private val _bannerTick = MutableStateFlow(0)
++    internal val bannerTick: StateFlow<Int> = _bannerTick.asStateFlow()
++    private var loaded = false
++
++    fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        AppFileCache.read(PATH)?.trim()?.let { _enabled.value = it == "1" }
++    }
++
++    fun toggle() {
++        ensureLoaded()
++        val next = !_enabled.value
++        _enabled.value = next
++        if (next) _bannerTick.value = _bannerTick.value + 1
++        runCatching { AppFileCache.write(PATH, if (next) "1" else "0") }
++    }
++}
++
++/** A video frame with a play triangle and a sparkle, drawn here so it needs no extra icon set. */
++internal val SmartEnhanceIcon: ImageVector by lazy {
++    ImageVector.Builder(
++        name = "SmartEnhance",
++        defaultWidth = 24.dp,
++        defaultHeight = 24.dp,
++        viewportWidth = 24f,
++        viewportHeight = 24f,
++    ).apply {
++        path(
++            stroke = SolidColor(Color.White),
++            strokeLineWidth = 1.8f,
++            strokeLineCap = StrokeCap.Round,
++            strokeLineJoin = StrokeJoin.Round,
++        ) {
++            moveTo(11f, 5f)
++            horizontalLineTo(6f)
++            arcTo(2.5f, 2.5f, 0f, false, false, 3.5f, 7.5f)
++            verticalLineTo(16.5f)
++            arcTo(2.5f, 2.5f, 0f, false, false, 6f, 19f)
++            horizontalLineTo(16f)
++            arcTo(2.5f, 2.5f, 0f, false, false, 18.5f, 16.5f)
++            verticalLineTo(12f)
++        }
++        path(fill = SolidColor(Color.White), pathFillType = PathFillType.NonZero) {
++            moveTo(8.5f, 9.2f)
++            lineTo(14f, 12f)
++            lineTo(8.5f, 14.8f)
++            close()
++        }
++        path(fill = SolidColor(Color.White), pathFillType = PathFillType.NonZero) {
++            moveTo(18.5f, 2.5f)
++            lineTo(19.6f, 5.4f)
++            lineTo(22.5f, 6.5f)
++            lineTo(19.6f, 7.6f)
++            lineTo(18.5f, 10.5f)
++            lineTo(17.4f, 7.6f)
++            lineTo(14.5f, 6.5f)
++            lineTo(17.4f, 5.4f)
++            close()
++        }
++    }.build()
++}
++
++/** Centre banner shown for a moment each time Smart Enhance is turned on. */
++@Composable
++internal fun SmartEnhanceBanner(modifier: Modifier = Modifier) {
++    val tick by SmartEnhance.bannerTick.collectAsStateWithLifecycle()
++    var visible by remember { mutableStateOf(false) }
++    LaunchedEffect(tick) {
++        if (tick == 0) return@LaunchedEffect
++        visible = true
++        delay(2_200)
++        visible = false
++    }
++    val alpha by animateFloatAsState(
++        targetValue = if (visible) 1f else 0f,
++        animationSpec = tween(durationMillis = if (visible) 280 else 520),
++        label = "smartEnhanceBanner",
++    )
++    if (alpha <= 0f) return
++    Box(modifier = modifier.fillMaxSize().alpha(alpha), contentAlignment = Alignment.Center) {
++        Column(
++            horizontalAlignment = Alignment.CenterHorizontally,
++            verticalArrangement = Arrangement.spacedBy(6.dp),
++        ) {
++            Icon(
++                imageVector = SmartEnhanceIcon,
++                contentDescription = null,
++                tint = Color.White,
++                modifier = Modifier.size(52.dp),
++            )
++            Text(
++                text = stringResource(Res.string.player_smart_enhance).uppercase(),
++                color = Color.White,
++                style = MaterialTheme.typography.headlineMedium,
++                fontWeight = FontWeight.Bold,
++                letterSpacing = 1.5.sp,
++                textAlign = TextAlign.Center,
++            )
++            Text(
++                text = stringResource(Res.string.player_smart_enhance_tagline),
++                color = Color.White,
++                style = MaterialTheme.typography.bodyLarge,
++                textAlign = TextAlign.Center,
++            )
++        }
++    }
++}
++
++/** Toolbar button for the header layout. */
++@Composable
++internal fun SmartEnhanceHeaderButton(metrics: PlayerLayoutMetrics) {
++    val available by SmartEnhance.available.collectAsStateWithLifecycle()
++    val enabled by SmartEnhance.enabled.collectAsStateWithLifecycle()
++    if (!available) return
++    PlayerHeaderIconButton(
++        icon = SmartEnhanceIcon,
++        contentDescription = stringResource(Res.string.player_smart_enhance),
++        buttonSize = metrics.headerIconSize + 16.dp,
++        iconSize = metrics.headerIconSize,
++        onClick = { SmartEnhance.toggle() },
++        tint = if (enabled) MaterialTheme.colorScheme.primary else Color.White,
++    )
++}
++
++/** Toolbar button for the legacy layout. */
++@Composable
++internal fun SmartEnhanceToolbarAction() {
++    val available by SmartEnhance.available.collectAsStateWithLifecycle()
++    val enabled by SmartEnhance.enabled.collectAsStateWithLifecycle()
++    if (!available) return
++    IconButton(onClick = { SmartEnhance.toggle() }, modifier = Modifier.size(48.dp)) {
++        Icon(
++            imageVector = SmartEnhanceIcon,
++            contentDescription = stringResource(Res.string.player_smart_enhance),
++            tint = if (enabled) MaterialTheme.colorScheme.primary else Color.White,
++            modifier = Modifier.size(24.dp),
++        )
++    }
++}
+diff --git a/gradle/libs.versions.toml b/gradle/libs.versions.toml
+index 6d7de4bc..1c6fa408 100644
+--- a/gradle/libs.versions.toml
++++ b/gradle/libs.versions.toml
+@@ -82,6 +82,7 @@ androidx-media3-decoder = { module = "androidx.media3:media3-decoder", version.r
+ androidx-media3-ui = { module = "androidx.media3:media3-ui", version.ref = "androidx-media3" }
+ androidx-media3-session = { module = "androidx.media3:media3-session", version.ref = "androidx-media3" }
+ androidx-media3-common = { module = "androidx.media3:media3-common", version.ref = "androidx-media3" }
++androidx-media3-effect = { module = "androidx.media3:media3-effect", version.ref = "androidx-media3" }
+ androidx-media3-container = { module = "androidx.media3:media3-container", version.ref = "androidx-media3" }
+ androidx-media3-extractor = { module = "androidx.media3:media3-extractor", version.ref = "androidx-media3" }
+ mpv-android-lib = { module = "io.github.abdallahmehiz:mpv-android-lib", version.ref = "mpv-android-lib" }
