@@ -1,0 +1,1551 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerTemporaryPlaylistStore.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerTemporaryPlaylistStore.android.kt
+new file mode 100644
+index 00000000..aed38af0
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerTemporaryPlaylistStore.android.kt
+@@ -0,0 +1,10 @@
++package com.nuvio.app.features.player
++
++import java.io.File
++
++internal actual fun writeTemporaryHlsPlaylist(playlistText: String): String? = runCatching {
++    val file = File.createTempFile("nuvio_player_quality_", ".m3u8")
++    file.writeText(playlistText)
++    file.deleteOnExit()
++    "file://${file.absolutePath}"
++}.getOrNull()
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/logging/InAppLogger.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/logging/InAppLogger.kt
+new file mode 100644
+index 00000000..6c3e52e3
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/logging/InAppLogger.kt
+@@ -0,0 +1,13 @@
++package com.nuvio.app.core.logging
++
++import co.touchlab.kermit.Logger
++
++/** Fork shim for the Enhanced in-app logger: forwards to Kermit. */
++internal object InAppLogger {
++    fun debug(tag: String, message: String) = Logger.withTag(tag).d { message }
++    fun info(tag: String, message: String) = Logger.withTag(tag).i { message }
++    fun warn(tag: String, message: String) = Logger.withTag(tag).w { message }
++    fun redactUrl(url: String?): String = url?.substringBefore('?').orEmpty()
++    fun headerKeys(headers: Map<String, String>): String = headers.keys.sorted().joinToString(",")
++    fun throwableSummary(error: Throwable): String = "${error::class.simpleName}: ${error.message}"
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/tracking/TrackingProviderBootstrap.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/tracking/TrackingProviderBootstrap.kt
+index 7e3ee87a..297615c9 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/tracking/TrackingProviderBootstrap.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/tracking/TrackingProviderBootstrap.kt
+@@ -11,7 +11,9 @@ import com.nuvio.app.features.simkl.SimklWatchedSyncAdapter
+ import com.nuvio.app.features.simkl.SimklSyncRepository
+ import com.nuvio.app.features.tracking.TrackingProviderRegistry
+ import com.nuvio.app.features.mdblist.MdbListTracker
++import com.nuvio.app.features.simkl.SimklRatingsProvider
+ import com.nuvio.app.features.trakt.TraktAuthRepository
++import com.nuvio.app.features.trakt.TraktRatingsProvider
+ import com.nuvio.app.features.trakt.TraktScrobbleRepository
+ import com.nuvio.app.features.trakt.TraktTrackingLibraryProvider
+ import com.nuvio.app.features.trakt.TraktTrackingProgressProvider
+@@ -35,4 +37,6 @@ fun ensureTrackingProvidersRegistered() {
+     TrackingProviderRegistry.registerWatchedProvider(SimklWatchedSyncAdapter)
+     TrackingProviderRegistry.registerProgressProvider(TraktTrackingProgressProvider)
+     TrackingProviderRegistry.registerProgressProvider(SimklTrackingProgressProvider)
++    TrackingProviderRegistry.registerRatingProvider(TraktRatingsProvider)
++    TrackingProviderRegistry.registerRatingProvider(SimklRatingsProvider)
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/mdblist/MdbListRatingsProvider.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/mdblist/MdbListRatingsProvider.kt
+new file mode 100644
+index 00000000..fd723acc
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/mdblist/MdbListRatingsProvider.kt
+@@ -0,0 +1,167 @@
++package com.nuvio.app.features.mdblist
++
++import com.nuvio.app.features.tracking.TrackingExternalIds
++import com.nuvio.app.features.tracking.TrackingProviderId
++import com.nuvio.app.features.tracking.TrackingRatingException
++import com.nuvio.app.features.tracking.TrackingRatingProvider
++import com.nuvio.app.features.tracking.TrackingRatingRecord
++import com.nuvio.app.features.tracking.TrackingRatingScope
++import com.nuvio.app.features.tracking.TrackingRatingTarget
++import com.nuvio.app.features.tracking.arrayOrEmpty
++import com.nuvio.app.features.tracking.countersTotal
++import com.nuvio.app.features.tracking.intOrNull
++import com.nuvio.app.features.tracking.notFoundTotal
++import com.nuvio.app.features.tracking.objectOrNull
++import com.nuvio.app.features.tracking.toTrackingExternalIds
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.sync.Mutex
++import kotlinx.coroutines.sync.withLock
++import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.JsonArray
++import kotlinx.serialization.json.JsonObject
++import kotlinx.serialization.json.JsonPrimitive
++import kotlinx.serialization.json.buildJsonObject
++import kotlinx.serialization.json.put
++import kotlin.time.Clock
++
++private const val MDBLIST_RATINGS_PAGE_LIMIT = 5000
++private const val MDBLIST_RATINGS_MAX_PAGES = 20
++private const val MDBLIST_RATINGS_REUSE_MS = 15_000L
++
++/**
++ * MDBList personal ratings via its Trakt-compatible sync API: `GET /sync/ratings` (movies,
++ * shows, seasons and episodes in one paged response), `POST /sync/ratings` and
++ * `POST /sync/ratings/remove`, all on a 1–10 scale.
++ */
++internal class MdbListRatingsProvider(
++    private val api: MdbListApiClient,
++    private val store: MdbListAuthStore,
++) : TrackingRatingProvider {
++    override val providerId = TrackingProviderId.MDBLIST
++    override val supportedScopes = TrackingRatingScope.entries.toSet()
++
++    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
++    private val fetchMutex = Mutex()
++    private var lastFetch: Triple<MdbListAuthScope, Long, List<TrackingRatingRecord>>? = null
++
++    override fun canRate(target: TrackingRatingTarget): Boolean = target.ids.toMdbListIds() != null
++
++    override suspend fun fetchRatings(profileId: Int, scope: TrackingRatingScope): List<TrackingRatingRecord> =
++        allRatings(scope(profileId)).filter { it.scope == scope }
++
++    /** One paged read serves every scope; reuse it briefly so four scope lookups cost one fetch. */
++    private suspend fun allRatings(authScope: MdbListAuthScope): List<TrackingRatingRecord> = fetchMutex.withLock {
++        val now = Clock.System.now().toEpochMilliseconds()
++        lastFetch?.let { (cachedScope, fetchedAt, records) ->
++            if (cachedScope == authScope && now - fetchedAt <= MDBLIST_RATINGS_REUSE_MS) return@withLock records
++        }
++        val records = mutableListOf<TrackingRatingRecord>()
++        var offset = 0
++        for (page in 0 until MDBLIST_RATINGS_MAX_PAGES) {
++            val response = api.get(
++                "/sync/ratings",
++                query = mapOf("offset" to offset.toString(), "limit" to MDBLIST_RATINGS_PAGE_LIMIT.toString()),
++                scope = authScope,
++            )
++            store.checkScope(authScope)
++            val payload = json.parseToJsonElement(response.body.ifBlank { "{}" }).objectOrNull() ?: break
++            val pageRecords = parsePage(payload)
++            records += pageRecords
++            val pagination = payload["pagination"].objectOrNull()
++            val hasMore = (pagination?.get("has_more") as? JsonPrimitive)?.content?.toBooleanStrictOrNull() == true
++            if (!hasMore || pageRecords.isEmpty()) break
++            offset += MDBLIST_RATINGS_PAGE_LIMIT
++        }
++        lastFetch = Triple(authScope, now, records)
++        records
++    }
++
++    override suspend fun setRating(profileId: Int, target: TrackingRatingTarget, rating: Int) {
++        val authScope = scope(profileId)
++        val response = api.post("/sync/ratings", buildBody(target, rating).toString(), authScope)
++        val payload = json.parseToJsonElement(response.body.ifBlank { "{}" }).objectOrNull()
++        val updated = payload?.get("updated").countersTotal() + payload?.get("added").countersTotal()
++        if (payload?.get("not_found").notFoundTotal() > 0 || payload?.get("errors").arrayOrEmpty().isNotEmpty() ||
++            (payload != null && (payload.containsKey("updated") || payload.containsKey("added")) && updated <= 0)
++        ) {
++            throw TrackingRatingException("MDBList did not find this item")
++        }
++        invalidate()
++    }
++
++    override suspend fun removeRating(profileId: Int, target: TrackingRatingTarget) {
++        val authScope = scope(profileId)
++        val response = api.post("/sync/ratings/remove", buildBody(target, null).toString(), authScope)
++        val payload = json.parseToJsonElement(response.body.ifBlank { "{}" }).objectOrNull()
++        if (payload?.get("not_found").notFoundTotal() > 0) {
++            throw TrackingRatingException("MDBList did not find this item")
++        }
++        invalidate()
++    }
++
++    private suspend fun invalidate() = fetchMutex.withLock { lastFetch = null }
++
++    private fun buildBody(target: TrackingRatingTarget, rating: Int?): JsonObject {
++        val ids = target.ids.toMdbListIds()?.requestIds() ?: throw TrackingRatingException("Missing MDBList ids")
++        val item = buildJsonObject {
++            put("ids", ids)
++            when (target.scope) {
++                TrackingRatingScope.MOVIE, TrackingRatingScope.SHOW -> rating?.let { put("rating", it) }
++                TrackingRatingScope.SEASON -> put("seasons", JsonArray(listOf(buildJsonObject {
++                    put("number", requireNotNull(target.season))
++                    rating?.let { put("rating", it) }
++                })))
++                TrackingRatingScope.EPISODE -> put("seasons", JsonArray(listOf(buildJsonObject {
++                    put("number", requireNotNull(target.season))
++                    put("episodes", JsonArray(listOf(buildJsonObject {
++                        put("number", requireNotNull(target.episode))
++                        rating?.let { put("rating", it) }
++                    })))
++                })))
++            }
++        }
++        val group = if (target.scope == TrackingRatingScope.MOVIE) "movies" else "shows"
++        return buildJsonObject { put(group, JsonArray(listOf(item))) }
++    }
++
++    private fun parsePage(payload: JsonObject): List<TrackingRatingRecord> = buildList {
++        payload["movies"].arrayOrEmpty().forEach { row ->
++            val obj = row.objectOrNull() ?: return@forEach
++            val rating = obj.intOrNull("rating") ?: return@forEach
++            add(TrackingRatingRecord(TrackingRatingScope.MOVIE, obj["movie"].objectOrNull()?.get("ids").toTrackingExternalIds(), rating))
++        }
++        payload["shows"].arrayOrEmpty().forEach { row ->
++            val obj = row.objectOrNull() ?: return@forEach
++            val rating = obj.intOrNull("rating") ?: return@forEach
++            add(TrackingRatingRecord(TrackingRatingScope.SHOW, obj["show"].objectOrNull()?.get("ids").toTrackingExternalIds(), rating))
++        }
++        payload["seasons"].arrayOrEmpty().forEach { row ->
++            val obj = row.objectOrNull() ?: return@forEach
++            val rating = obj.intOrNull("rating") ?: return@forEach
++            val season = obj["season"].objectOrNull() ?: return@forEach
++            val number = season.intOrNull("number") ?: return@forEach
++            add(TrackingRatingRecord(TrackingRatingScope.SEASON, showIds(obj, season), rating, season = number))
++        }
++        payload["episodes"].arrayOrEmpty().forEach { row ->
++            val obj = row.objectOrNull() ?: return@forEach
++            val rating = obj.intOrNull("rating") ?: return@forEach
++            val episode = obj["episode"].objectOrNull() ?: return@forEach
++            add(
++                TrackingRatingRecord(
++                    TrackingRatingScope.EPISODE,
++                    showIds(obj, episode),
++                    rating,
++                    season = episode.intOrNull("season") ?: return@forEach,
++                    episode = episode.intOrNull("number") ?: return@forEach,
++                ),
++            )
++        }
++    }.filter { it.ids.hasAny }
++
++    private fun showIds(row: JsonObject, child: JsonObject): TrackingExternalIds =
++        (child["show"].objectOrNull() ?: row["show"].objectOrNull())?.get("ids").toTrackingExternalIds()
++
++    private fun scope(profileId: Int): MdbListAuthScope = store.scope().also {
++        if (it.profileId != profileId) throw CancellationException("MDBList profile changed")
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/mdblist/MdbListTracker.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/mdblist/MdbListTracker.kt
+index f6e77887..09f5c9f7 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/mdblist/MdbListTracker.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/mdblist/MdbListTracker.kt
+@@ -36,13 +36,14 @@ object MdbListTracker : TrackingAuthProvider {
+         TrackingProviderId.MDBLIST, "MDBList", setOf(
+             TrackingCapability.AUTHENTICATION, TrackingCapability.WATCHED_READ, TrackingCapability.WATCHED_WRITE,
+             TrackingCapability.PROGRESS_READ, TrackingCapability.PROGRESS_WRITE, TrackingCapability.SCROBBLE,
+-            TrackingCapability.LIBRARY_READ, TrackingCapability.LIBRARY_WRITE,
++            TrackingCapability.LIBRARY_READ, TrackingCapability.LIBRARY_WRITE, TrackingCapability.RATINGS,
+         )
+     )
+     val writes = MdbListTrackingWrites(sync, history, scrobble)
+     val progressProvider = MdbListTrackingProgressProvider(sync, scrobble, store, activeProfile, ::ensureLoaded)
+     val watchedProvider = MdbListWatchedSyncAdapter(sync, history, store, activeProfile)
+     val libraryProvider = MdbListTrackingLibraryProvider(library, sync, ::ensureLoaded)
++    internal val ratingProvider = MdbListRatingsProvider(api, store)
+ 
+     init {
+         coroutineScope.launch {
+@@ -60,6 +61,7 @@ object MdbListTracker : TrackingAuthProvider {
+         TrackingProviderRegistry.registerProgressProvider(progressProvider)
+         TrackingProviderRegistry.registerWatchedProvider(watchedProvider)
+         TrackingProviderRegistry.registerLibraryProvider(libraryProvider)
++        TrackingProviderRegistry.registerRatingProvider(ratingProvider)
+     }
+ 
+     override fun ensureLoaded() {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerQualityPanel.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerQualityPanel.kt
+new file mode 100644
+index 00000000..eff7a014
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerQualityPanel.kt
+@@ -0,0 +1,246 @@
++package com.nuvio.app.features.player
++
++import androidx.compose.animation.AnimatedVisibility
++import androidx.compose.animation.core.tween
++import androidx.compose.animation.fadeIn
++import androidx.compose.animation.fadeOut
++import androidx.compose.animation.slideInVertically
++import androidx.compose.animation.slideOutVertically
++import androidx.compose.foundation.background
++import androidx.compose.foundation.border
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.interaction.MutableInteractionSource
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.heightIn
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.layout.widthIn
++import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.foundation.lazy.items
++import androidx.compose.material3.CircularProgressIndicator
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.remember
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.text.font.FontWeight
++import com.nuvio.app.core.ui.NuvioTokens
++import com.nuvio.app.core.ui.nuvio
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.action_close
++import org.jetbrains.compose.resources.stringResource
++import androidx.compose.foundation.background
++import androidx.compose.ui.unit.dp
++
++@Composable
++internal fun PlayerQualityPanel(
++    visible: Boolean,
++    state: PlayerQualitySelectionState,
++    selectedQualityId: String?,
++    currentResolutionLabel: String? = null,
++    onQualitySelected: (String?) -> Unit,
++    onDismiss: () -> Unit,
++    modifier: Modifier = Modifier,
++) {
++    val tokens = MaterialTheme.nuvio
++
++    AnimatedVisibility(
++        visible = visible,
++        enter = fadeIn(tween(NuvioTokens.Motion.normalMillis)),
++        exit = fadeOut(tween(NuvioTokens.Motion.normalMillis)),
++    ) {
++        Box(
++            modifier = modifier
++                .fillMaxSize()
++                .clickable(
++                    indication = null,
++                    interactionSource = remember { MutableInteractionSource() },
++                    onClick = onDismiss,
++                )
++                .background(tokens.colors.overlayScrim.copy(alpha = tokens.opacity.medium)),
++            contentAlignment = Alignment.Center,
++        ) {
++            AnimatedVisibility(
++                visible = visible,
++                enter = slideInVertically(tween(NuvioTokens.Motion.sheetEnterMillis)) { it / 3 } +
++                    fadeIn(tween(NuvioTokens.Motion.sheetEnterMillis)),
++                exit = slideOutVertically(tween(NuvioTokens.Motion.sheetExitMillis)) { it / 3 } +
++                    fadeOut(tween(NuvioTokens.Motion.sheetExitMillis)),
++            ) {
++                Box(
++                    modifier = Modifier
++                        .widthIn(max = tokens.components.playerPanelMaxWidth)
++                        .fillMaxWidth(0.92f)
++                        .heightIn(max = tokens.components.dialogMaxWidth)
++                        .clip(tokens.shapes.playerPanel)
++                        .background(tokens.colors.surfaceSheet)
++                        .border(tokens.borders.thin, tokens.colors.borderDefault, tokens.shapes.playerPanel)
++                        .clickable(
++                            indication = null,
++                            interactionSource = remember { MutableInteractionSource() },
++                            onClick = {},
++                        ),
++                ) {
++                    Column {
++                        Row(
++                            modifier = Modifier
++                                .fillMaxWidth()
++                                .padding(horizontal = tokens.spacing.sheetPadding, vertical = tokens.spacing.cardPadding),
++                            horizontalArrangement = Arrangement.SpaceBetween,
++                            verticalAlignment = Alignment.CenterVertically,
++                        ) {
++                            Text(
++                                text = "Quality",
++                                color = tokens.colors.textPrimary,
++                                style = MaterialTheme.typography.titleSmall,
++                                fontWeight = FontWeight.Bold,
++                            )
++                            PlayerDialogButton(
++                                label = stringResource(Res.string.action_close),
++                                onClick = onDismiss,
++                            )
++                        }
++
++                        when {
++                            state.isLoading -> {
++                                Box(
++                                    modifier = Modifier
++                                        .fillMaxWidth()
++                                        .padding(vertical = NuvioTokens.Space.s40),
++                                    contentAlignment = Alignment.Center,
++                                ) {
++                                    CircularProgressIndicator(
++                                        color = tokens.colors.accent,
++                                        strokeWidth = tokens.borders.medium,
++                                        modifier = Modifier.size(tokens.icons.lg + NuvioTokens.Space.s4),
++                                    )
++                                }
++                            }
++
++                            !state.hasSelectableQualities -> {
++                                Column(
++                                    modifier = Modifier
++                                        .fillMaxWidth()
++                                        .padding(horizontal = tokens.spacing.sheetPadding)
++                                        .padding(bottom = tokens.spacing.sheetPadding),
++                                    verticalArrangement = Arrangement.spacedBy(NuvioTokens.Space.s10),
++                                ) {
++                                    val currentQualityTitle = currentResolutionLabel
++                                        ?.takeIf { it.isNotBlank() }
++                                        ?: "Current quality"
++                                    QualityOptionRow(
++                                        title = currentQualityTitle,
++                                        subtitle = "Currently playing",
++                                        isSelected = true,
++                                        hasWarning = false,
++                                        enabled = false,
++                                        onClick = {},
++                                    )
++                                    Text(
++                                        text = state.errorMessage
++                                            ?: "This stream does not expose selectable quality variants.",
++                                        color = tokens.colors.textMuted,
++                                        style = MaterialTheme.typography.bodyMedium,
++                                    )
++                                }
++                            }
++
++                            else -> {
++                                LazyColumn(
++                                    modifier = Modifier.padding(horizontal = tokens.spacing.cardPadding),
++                                    verticalArrangement = Arrangement.spacedBy(NuvioTokens.Space.s6),
++                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
++                                        bottom = tokens.spacing.cardPadding,
++                                    ),
++                                ) {
++                                    item(key = "auto") {
++                                        QualityOptionRow(
++                                            title = state.labelFor(null)?.let { "Auto ($it)" } ?: "Auto",
++                                            subtitle = "Recommended compatible quality",
++                                            isSelected = selectedQualityId == null,
++                                            hasWarning = false,
++                                            onClick = { onQualitySelected(null) },
++                                        )
++                                    }
++                                    items(
++                                        items = state.variants,
++                                        key = { it.id },
++                                    ) { variant ->
++                                        QualityOptionRow(
++                                            title = variant.qualityName,
++                                            subtitle = variant.displayLabel.removePrefix(variant.qualityName).trimStart(' ', '·'),
++                                            isSelected = selectedQualityId == variant.id,
++                                            hasWarning = !variant.isLikelyHardwareDecodable,
++                                            onClick = { onQualitySelected(variant.id) },
++                                        )
++                                    }
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++        }
++    }
++}
++
++@Composable
++private fun QualityOptionRow(
++    title: String,
++    subtitle: String,
++    isSelected: Boolean,
++    hasWarning: Boolean,
++    enabled: Boolean = true,
++    onClick: () -> Unit,
++) {
++    val tokens = MaterialTheme.nuvio
++
++    Row(
++        modifier = Modifier
++            .fillMaxWidth()
++            .clip(tokens.shapes.compactCard)
++            .background(if (isSelected) tokens.colors.overlaySelected else tokens.colors.surfacePopover)
++            .border(
++                tokens.borders.thin,
++                if (isSelected) tokens.colors.borderSelected else tokens.colors.borderSubtle,
++                tokens.shapes.compactCard,
++            )
++            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
++            .padding(horizontal = NuvioTokens.Space.s14, vertical = NuvioTokens.Space.s12),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        Column(modifier = Modifier.weight(1f)) {
++            Text(
++                text = title,
++                color = tokens.colors.textPrimary,
++                style = MaterialTheme.typography.bodyMedium,
++                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
++            )
++            if (subtitle.isNotBlank()) {
++                Text(
++                    text = subtitle,
++                    color = if (hasWarning) tokens.colors.danger else tokens.colors.textMuted,
++                    style = MaterialTheme.typography.labelMedium,
++                )
++            }
++        }
++        if (isSelected) {
++            Spacer(modifier = Modifier.width(NuvioTokens.Space.s10))
++            Text(
++                text = "Selected",
++                color = tokens.colors.accent,
++                style = MaterialTheme.typography.labelMedium,
++                fontWeight = FontWeight.SemiBold,
++            )
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerQualitySelector.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerQualitySelector.kt
+new file mode 100644
+index 00000000..3b9160af
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerQualitySelector.kt
+@@ -0,0 +1,433 @@
++package com.nuvio.app.features.player
++
++import co.touchlab.kermit.Logger
++import com.nuvio.app.core.logging.InAppLogger
++import com.nuvio.app.features.addons.httpGetText
++import com.nuvio.app.features.addons.httpGetTextWithHeaders
++
++internal const val PlayerQualityAutoId = "auto"
++
++data class PlayerQualityVariant(
++    val id: String,
++    val name: String,
++    val width: Int?,
++    val height: Int?,
++    val bandwidth: Long?,
++    val codecs: String,
++    val audioGroupId: String?,
++    val absoluteUri: String,
++    val playbackUrl: String,
++) {
++    val isAv1: Boolean
++        get() = codecs.split(',').any { codec -> codec.trim().startsWith("av01", ignoreCase = true) }
++
++    val isLikelyHardwareDecodable: Boolean
++        get() = !isAv1
++
++    val sortHeight: Int
++        get() = height ?: name.filter { it.isDigit() }.toIntOrNull() ?: 0
++
++    val displayLabel: String
++        get() = buildString {
++            append(qualityName)
++            codecLabel.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }
++            bandwidthLabel.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }
++            if (!isLikelyHardwareDecodable) append(" · Software decode")
++        }
++
++    val qualityName: String
++        get() = when {
++            name.isNotBlank() -> if (name.endsWith("p", ignoreCase = true)) name else "${name}p"
++            height != null -> "${height}p"
++            width != null -> "${width}w"
++            else -> "Unknown"
++        }
++
++    val buttonQualityName: String
++        get() = qualityName.toPlayerQualityButtonName()
++
++    private val codecLabel: String
++        get() = when {
++            isAv1 -> "AV1"
++            codecs.contains("hvc1", ignoreCase = true) || codecs.contains("hev1", ignoreCase = true) -> "HEVC"
++            codecs.contains("avc1", ignoreCase = true) || codecs.contains("avc3", ignoreCase = true) -> "H.264"
++            codecs.isNotBlank() -> codecs.split(',').lastOrNull()?.trim().orEmpty()
++            else -> ""
++        }
++
++    private val bandwidthLabel: String
++        get() {
++            val value = bandwidth ?: return ""
++            if (value <= 0L) return ""
++            val mbps = value / 1_000_000.0
++            return if (mbps >= 1.0) {
++                "${formatOneDecimal(mbps)} Mbps"
++            } else {
++                "${formatOneDecimal(value / 1_000.0)} Kbps"
++            }
++        }
++}
++
++data class PlayerQualitySelectionState(
++    val isLoading: Boolean = false,
++    val sourceUrl: String = "",
++    val variants: List<PlayerQualityVariant> = emptyList(),
++    val recommendedVariantId: String? = null,
++    val errorMessage: String? = null,
++) {
++    val hasSelectableQualities: Boolean
++        get() = variants.size > 1
++
++    fun selectedVariantFor(selectedVariantId: String?): PlayerQualityVariant? =
++        when {
++            selectedVariantId.isNullOrBlank() || selectedVariantId == PlayerQualityAutoId -> {
++                variants.firstOrNull { it.id == recommendedVariantId }
++            }
++            else -> variants.firstOrNull { it.id == selectedVariantId }
++        }
++
++    fun playbackUrlFor(selectedVariantId: String?): String? =
++        selectedVariantFor(selectedVariantId)?.playbackUrl ?: sourceUrl.takeIf { it.isNotBlank() }
++
++    fun labelFor(selectedVariantId: String?, forButton: Boolean = false): String? {
++        val selected = selectedVariantFor(selectedVariantId)
++        return if (forButton) {
++            selected?.buttonQualityName
++        } else {
++            selected?.qualityName
++        }
++    }
++}
++
++internal object PlayerQualityResolver {
++    private val log = Logger.withTag("PlayerQuality")
++
++    suspend fun resolve(
++        sourceUrl: String,
++        requestHeaders: Map<String, String> = emptyMap(),
++    ): PlayerQualitySelectionState {
++        val normalizedUrl = sourceUrl.trim()
++        if (!looksLikeHlsPlaylist(normalizedUrl)) {
++            InAppLogger.debug(
++                "Player/Quality",
++                "skip HLS quality inspection url=${InAppLogger.redactUrl(normalizedUrl)}",
++            )
++            return PlayerQualitySelectionState(sourceUrl = normalizedUrl)
++        }
++
++        InAppLogger.info(
++            "Player/Quality",
++            "inspect HLS master url=${InAppLogger.redactUrl(normalizedUrl)} " +
++                "requestHeaders=${InAppLogger.headerKeys(requestHeaders)}",
++        )
++
++        val playlistText = runCatching {
++            if (requestHeaders.isEmpty()) {
++                httpGetText(normalizedUrl)
++            } else {
++                httpGetTextWithHeaders(url = normalizedUrl, headers = requestHeaders)
++            }
++        }.onFailure { error ->
++            log.w(error) { "Failed to fetch HLS master playlist for quality detection" }
++            InAppLogger.warn(
++                "Player/Quality",
++                "inspect HLS master failed url=${InAppLogger.redactUrl(normalizedUrl)} " +
++                    "error=${InAppLogger.throwableSummary(error)}",
++            )
++        }.getOrNull() ?: return PlayerQualitySelectionState(
++            sourceUrl = normalizedUrl,
++            errorMessage = "Unable to inspect HLS quality variants.",
++        )
++
++        if (!playlistText.contains("#EXT-X-STREAM-INF", ignoreCase = true)) {
++            InAppLogger.debug(
++                "Player/Quality",
++                "HLS playlist is not a master playlist url=${InAppLogger.redactUrl(normalizedUrl)} " +
++                    "chars=${playlistText.length}",
++            )
++            return PlayerQualitySelectionState(sourceUrl = normalizedUrl)
++        }
++
++        val parsed = HlsMasterPlaylist.parse(normalizedUrl, playlistText)
++        if (parsed.variants.isEmpty()) {
++            InAppLogger.warn(
++                "Player/Quality",
++                "HLS master parsed with no variants url=${InAppLogger.redactUrl(normalizedUrl)} chars=${playlistText.length}",
++            )
++            return PlayerQualitySelectionState(sourceUrl = normalizedUrl)
++        }
++
++        val variants = parsed.variants.mapIndexedNotNull { index, variant ->
++            val sanitized = parsed.buildSanitizedMasterPlaylist(variant)
++            val playbackUrl = writeTemporaryHlsPlaylist(sanitized)
++            if (playbackUrl == null) {
++                log.w { "Failed to write sanitized HLS playlist for variant=${variant.name.ifBlank { variant.id }}" }
++                InAppLogger.warn(
++                    "Player/Quality",
++                    "failed to write temporary playlist variant=${variant.name.ifBlank { variant.id }} " +
++                        "declared=${variant.width ?: 0}x${variant.height ?: 0}",
++                )
++                null
++            } else {
++                variant.toUiVariant(index = index, playbackUrl = playbackUrl)
++            }
++        }
++
++        if (variants.isEmpty()) {
++            InAppLogger.warn(
++                "Player/Quality",
++                "HLS variants detected but none prepared url=${InAppLogger.redactUrl(normalizedUrl)} " +
++                    "rawVariants=${parsed.variants.size}",
++            )
++            return PlayerQualitySelectionState(
++                sourceUrl = normalizedUrl,
++                errorMessage = "Unable to prepare HLS quality variants.",
++            )
++        }
++
++        val recommended = chooseRecommendedVariant(variants)
++        log.i {
++            "Detected HLS qualities count=${variants.size} recommended=${recommended?.displayLabel.orEmpty()} url=${redactUrl(normalizedUrl)}"
++        }
++        InAppLogger.info(
++            "Player/Quality",
++            "detected HLS qualities count=${variants.size} recommended=${recommended?.qualityName.orEmpty()} " +
++                "variants=${variants.joinToString(separator = ",") { it.qualityName }} " +
++                "url=${InAppLogger.redactUrl(normalizedUrl)}",
++        )
++        return PlayerQualitySelectionState(
++            sourceUrl = normalizedUrl,
++            variants = variants,
++            recommendedVariantId = recommended?.id,
++        )
++    }
++
++    private fun chooseRecommendedVariant(variants: List<PlayerQualityVariant>): PlayerQualityVariant? {
++        val compatible = variants.filter { it.isLikelyHardwareDecodable }
++        val pool = compatible.ifEmpty { variants }
++        return pool.maxWithOrNull(compareBy<PlayerQualityVariant> { it.sortHeight }.thenBy { it.bandwidth ?: 0L })
++    }
++}
++
++private data class HlsMasterPlaylist(
++    val baseUrl: String,
++    val headerLines: List<String>,
++    val mediaLines: List<HlsMediaLine>,
++    val variants: List<HlsVariant>,
++) {
++    fun buildSanitizedMasterPlaylist(selected: HlsVariant): String = buildString {
++        val sanitizedHeaderLines = headerLines.ifEmpty { listOf("#EXTM3U") }
++        sanitizedHeaderLines.forEach { line ->
++            append(line).append('\n')
++        }
++
++        val selectedAudioGroup = selected.audioGroupId
++        mediaLines
++            .filter { media ->
++                selectedAudioGroup == null || media.groupId == selectedAudioGroup || media.type != "AUDIO"
++            }
++            .forEach { media ->
++                append(media.rewrittenLine).append('\n')
++            }
++
++        append(selected.streamInfoLine).append('\n')
++        append(selected.absoluteUri).append('\n')
++    }
++
++    companion object {
++        fun parse(baseUrl: String, playlistText: String): HlsMasterPlaylist {
++            val headerLines = mutableListOf<String>()
++            val mediaLines = mutableListOf<HlsMediaLine>()
++            val variants = mutableListOf<HlsVariant>()
++            val lines = playlistText
++                .replace("\r\n", "\n")
++                .replace('\r', '\n')
++                .lines()
++                .map { it.trim() }
++                .filter { it.isNotEmpty() }
++
++            var index = 0
++            while (index < lines.size) {
++                val line = lines[index]
++                when {
++                    line.startsWith("#EXT-X-MEDIA", ignoreCase = true) -> {
++                        val attributes = parseAttributes(line.substringAfter(':', ""))
++                        val uri = attributes["URI"]
++                        mediaLines += HlsMediaLine(
++                            type = attributes["TYPE"].orEmpty(),
++                            groupId = attributes["GROUP-ID"],
++                            rewrittenLine = if (uri != null) {
++                                rewriteAttribute(line, "URI", absolutizeHlsUri(baseUrl, uri))
++                            } else {
++                                line
++                            },
++                        )
++                    }
++                    line.startsWith("#EXT-X-STREAM-INF", ignoreCase = true) -> {
++                        val attributes = parseAttributes(line.substringAfter(':', ""))
++                        val uriIndex = (index + 1 until lines.size)
++                            .firstOrNull { candidate -> !lines[candidate].startsWith("#") }
++                        if (uriIndex != null) {
++                            val variantUri = lines[uriIndex]
++                            variants += HlsVariant(
++                                id = "q${variants.size}",
++                                streamInfoLine = line,
++                                name = attributes["NAME"].orEmpty().trim('"'),
++                                width = attributes["RESOLUTION"]?.substringBefore('x')?.toIntOrNull(),
++                                height = attributes["RESOLUTION"]?.substringAfter('x', "")?.toIntOrNull(),
++                                bandwidth = attributes["BANDWIDTH"]?.toLongOrNull(),
++                                codecs = attributes["CODECS"].orEmpty(),
++                                audioGroupId = attributes["AUDIO"],
++                                absoluteUri = absolutizeHlsUri(baseUrl, variantUri),
++                            )
++                            index = uriIndex
++                        }
++                    }
++                    line.startsWith("#EXTM3U", ignoreCase = true) ||
++                        line.startsWith("#EXT-X-VERSION", ignoreCase = true) ||
++                        line.startsWith("#EXT-X-INDEPENDENT-SEGMENTS", ignoreCase = true) ||
++                        line.startsWith("#EXT-X-START", ignoreCase = true) -> {
++                        headerLines += line
++                    }
++                }
++                index++
++            }
++
++            return HlsMasterPlaylist(
++                baseUrl = baseUrl,
++                headerLines = headerLines.distinct(),
++                mediaLines = mediaLines,
++                variants = variants,
++            )
++        }
++    }
++}
++
++private data class HlsMediaLine(
++    val type: String,
++    val groupId: String?,
++    val rewrittenLine: String,
++)
++
++private data class HlsVariant(
++    val id: String,
++    val streamInfoLine: String,
++    val name: String,
++    val width: Int?,
++    val height: Int?,
++    val bandwidth: Long?,
++    val codecs: String,
++    val audioGroupId: String?,
++    val absoluteUri: String,
++) {
++    fun toUiVariant(index: Int, playbackUrl: String): PlayerQualityVariant = PlayerQualityVariant(
++        id = id.ifBlank { "q$index" },
++        name = name,
++        width = width,
++        height = height,
++        bandwidth = bandwidth,
++        codecs = codecs,
++        audioGroupId = audioGroupId,
++        absoluteUri = absoluteUri,
++        playbackUrl = playbackUrl,
++    )
++}
++
++internal expect fun writeTemporaryHlsPlaylist(playlistText: String): String?
++
++private fun looksLikeHlsPlaylist(url: String): Boolean {
++    val path = url.substringBefore('?').substringBefore('#').lowercase()
++    return path.endsWith(".m3u8") || url.contains(".m3u8", ignoreCase = true)
++}
++
++internal fun playerQualityNameForResolution(
++    width: Int?,
++    height: Int?,
++    forButton: Boolean = false,
++): String? {
++    val w = width?.takeIf { it > 0 } ?: 0
++    val h = height?.takeIf { it > 0 } ?: 0
++    if (w <= 0 && h <= 0) return null
++    val label = when {
++        w >= 3840 || h >= 2160 -> "2160p"
++        w >= 2560 || h >= 1440 -> "1440p"
++        w >= 1920 || h >= 1080 -> "1080p"
++        w >= 1280 || h >= 720 -> "720p"
++        w >= 854 || h >= 480 -> "480p"
++        w >= 640 || h >= 360 -> "360p"
++        h > 0 -> "${h}p"
++        else -> "${w}w"
++    }
++    return if (forButton) label.toPlayerQualityButtonName() else label
++}
++
++internal fun playerQualityNameForHeight(height: Int?, forButton: Boolean = false): String? =
++    playerQualityNameForResolution(width = null, height = height, forButton = forButton)
++
++internal fun String.toPlayerQualityButtonName(): String =
++    if (equals("2160p", ignoreCase = true)) "4K UHD" else this
++
++private fun parseAttributes(attributeText: String): Map<String, String> {
++    val attributes = linkedMapOf<String, String>()
++    var index = 0
++    while (index < attributeText.length) {
++        while (index < attributeText.length && (attributeText[index] == ',' || attributeText[index].isWhitespace())) index++
++        val keyStart = index
++        while (index < attributeText.length && attributeText[index] != '=') index++
++        if (index >= attributeText.length) break
++        val key = attributeText.substring(keyStart, index).trim().uppercase()
++        index++
++        val value = if (index < attributeText.length && attributeText[index] == '"') {
++            index++
++            val valueStart = index
++            while (index < attributeText.length && attributeText[index] != '"') index++
++            val quoted = attributeText.substring(valueStart, index)
++            if (index < attributeText.length && attributeText[index] == '"') index++
++            quoted
++        } else {
++            val valueStart = index
++            while (index < attributeText.length && attributeText[index] != ',') index++
++            attributeText.substring(valueStart, index).trim()
++        }
++        if (key.isNotBlank()) attributes[key] = value
++        while (index < attributeText.length && attributeText[index] != ',') index++
++    }
++    return attributes
++}
++
++private fun rewriteAttribute(line: String, attributeName: String, value: String): String {
++    val pattern = Regex("$attributeName=\"[^\"]*\"", RegexOption.IGNORE_CASE)
++    return if (pattern.containsMatchIn(line)) {
++        pattern.replace(line, "$attributeName=\"$value\"")
++    } else {
++        "$line,$attributeName=\"$value\""
++    }
++}
++
++private fun absolutizeHlsUri(baseUrl: String, uri: String): String {
++    val trimmed = uri.trim().trim('"')
++    if (trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) {
++        return trimmed
++    }
++
++    val schemeSeparator = baseUrl.indexOf("://")
++    if (schemeSeparator <= 0) return trimmed
++    val scheme = baseUrl.substring(0, schemeSeparator)
++    val afterScheme = baseUrl.substring(schemeSeparator + 3)
++    val hostEnd = afterScheme.indexOf('/').let { if (it < 0) afterScheme.length else it }
++    val origin = "$scheme://${afterScheme.substring(0, hostEnd)}"
++
++    if (trimmed.startsWith("//")) return "$scheme:$trimmed"
++    if (trimmed.startsWith('/')) return origin + trimmed
++
++    val directory = baseUrl.substringBeforeLast('/', missingDelimiterValue = baseUrl)
++    return "$directory/$trimmed"
++}
++
++private fun formatOneDecimal(value: Double): String {
++    val rounded = kotlin.math.round(value * 10.0) / 10.0
++    val asText = rounded.toString()
++    return if (asText.endsWith(".0")) asText.dropLast(2) else asText
++}
++
++private fun redactUrl(url: String): String = url.substringBefore('?')
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt
+index 299dd1be..baecfeeb 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt
+@@ -26,6 +26,12 @@ internal fun PlayerScreenModalHosts(
+     onAudioModalDismissed: () -> Unit,
+     showQualityModal: Boolean = false,
+     onQualityModalDismissed: () -> Unit = {},
++    showQualityPanel: Boolean = false,
++    playerQualityState: PlayerQualitySelectionState = PlayerQualitySelectionState(),
++    selectedPlayerQualityId: String? = null,
++    currentQualityLabel: String? = null,
++    onPlayerQualitySelected: (String?) -> Unit = {},
++    onQualityPanelDismissed: () -> Unit = {},
+     videoController: PlayerEngineController? = null,
+     castAvailable: Boolean = false,
+     castDeviceName: String? = null,
+@@ -130,6 +136,15 @@ internal fun PlayerScreenModalHosts(
+         castDeviceName = castDeviceName,
+     )
+ 
++    PlayerQualityPanel(
++        visible = showQualityPanel,
++        state = playerQualityState,
++        selectedQualityId = selectedPlayerQualityId,
++        currentResolutionLabel = currentQualityLabel,
++        onQualitySelected = onPlayerQualitySelected,
++        onDismiss = onQualityPanelDismissed,
++    )
++
+     VideoQualityModal(
+         visible = showQualityModal,
+         videoController = videoController,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
+index c4e09f8c..cc81b993 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
+@@ -68,6 +68,7 @@ internal fun PlayerScreenRuntime.lockPlayerControls() {
+     renderedGestureFeedback = null
+     showAudioModal = false
+     showQualityModal = false
++    showQualityPanel = false
+     showUserRatingSheet = false
+     showSubtitleModal = false
+     showVideoSettingsModal = false
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSourceActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSourceActions.kt
+index 1488ec0e..55763bb1 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSourceActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSourceActions.kt
+@@ -622,3 +622,18 @@ private fun PlayerScreenRuntime.saveDirectStreamForReuse(
+         contentLanguage = contentLanguage,
+     )
+ }
++
++/** Fork: switches the HLS variant from the Quality panel and keeps the current position. */
++internal fun PlayerScreenRuntime.selectPlayerQuality(qualityId: String?) {
++    selectedPlayerQualityId = qualityId.takeUnless { it == PlayerQualityAutoId }
++    qualityPlaybackUrl = selectedPlayerQualityId?.let { playerQualityState.playbackUrlFor(it) }
++        ?.takeIf { it != activeSourceUrl }
++    activeInitialPositionMs = playbackSnapshot.positionMs
++    initialSeekApplied = false
++    playbackSnapshot = playbackSnapshot.copy(isLoading = true, videoWidth = 0, videoHeight = 0)
++    initialLoadCompleted = false
++    errorMessage = null
++    shouldPlay = true
++    showQualityPanel = false
++    controlsVisible = true
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
+index ce1d0be0..46f0cc27 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
+@@ -200,6 +200,10 @@ internal class PlayerScreenRuntime(
+ 
+     var showAudioModal by mutableStateOf(false)
+     var showQualityModal by mutableStateOf(false)
++    var showQualityPanel by mutableStateOf(false)
++    var selectedPlayerQualityId by mutableStateOf<String?>(null)
++    var qualityPlaybackUrl by mutableStateOf<String?>(null)
++    var playerQualityState by mutableStateOf(PlayerQualitySelectionState())
+     var showUserRatingSheet by mutableStateOf(false)
+     var isMiniPresentation by mutableStateOf(false)
+     var showSubtitleModal by mutableStateOf(false)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+index 1d813255..234a77d7 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+@@ -128,6 +128,22 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+ 
+     BindAutoSyncRuntimeEffects() // AutoSync hook
+ 
++    // Fork: HLS master playlist variants for the Quality button (resolved in the background).
++    LaunchedEffect(activeSourceUrl, activeSourceAudioUrl, activeSourceHeaders, activeTorrentInfoHash) {
++        val resolvingSourceUrl = activeSourceUrl
++        qualityPlaybackUrl = null
++        selectedPlayerQualityId = null
++        val shouldInspectHls = activeTorrentInfoHash == null &&
++            activeSourceAudioUrl == null &&
++            resolvingSourceUrl.contains(".m3u8", ignoreCase = true)
++        playerQualityState = PlayerQualitySelectionState(isLoading = shouldInspectHls, sourceUrl = resolvingSourceUrl)
++        if (!shouldInspectHls) return@LaunchedEffect
++        val resolved = runCatching {
++            PlayerQualityResolver.resolve(sourceUrl = resolvingSourceUrl, requestHeaders = activeSourceHeaders)
++        }.getOrElse { PlayerQualitySelectionState(sourceUrl = resolvingSourceUrl) }
++        if (activeSourceUrl == resolvingSourceUrl) playerQualityState = resolved
++    }
++
+     Box(
+         modifier = Modifier
+             .fillMaxSize()
+@@ -161,7 +177,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+                 commitHorizontalSeekState = gestureCallbacks.commitHorizontalSeek,
+             ),
+     ) {
+-        val playerSurfaceSourceUrl = if (isP2pPlaybackActive) p2pResolvedSourceUrl else activeSourceUrl
++        val playerSurfaceSourceUrl = if (isP2pPlaybackActive) p2pResolvedSourceUrl else (qualityPlaybackUrl ?: activeSourceUrl)
+         val playbackKey = activePlaybackKey
+         val initialPositionRequestKey = currentInitialPositionRequestKey()
+         if (playerSurfaceSourceUrl != null) {
+@@ -301,9 +317,6 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+     val userRatingTarget = currentUserRatingTarget()
+     val canRate = rememberCanRate(userRatingTarget)
+     val userRating = rememberUserRating(userRatingTarget.takeIf { canRate })
+-    val hasVideoQualities = remember(playerController, audioTracks, playbackSnapshot.durationMs) {
+-        playerController?.getVideoQualities().orEmpty().size > 1
+-    }
+     AnimatedVisibility(
+         visible = (controlsVisible || showParentalGuide) && !playerControlsLocked && !isInPip && !seekPreview.showSyncPanel,
+         enter = fadeIn(),
+@@ -443,10 +456,10 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+                 null
+             },
+             userRating = userRating,
+-            onQualityClick = if (hasVideoQualities) {
++            onQualityClick = if (!isIos) {
+                 {
+                     refreshTracks()
+-                    showQualityModal = true
++                    if (playerQualityState.hasSelectableQualities) showQualityPanel = true else showQualityModal = true
+                 }
+             } else {
+                 null
+@@ -598,6 +611,18 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
+         onAudioModalDismissed = { showAudioModal = false },
+         showQualityModal = showQualityModal,
+         onQualityModalDismissed = { showQualityModal = false },
++        showQualityPanel = showQualityPanel,
++        playerQualityState = playerQualityState,
++        selectedPlayerQualityId = selectedPlayerQualityId,
++        currentQualityLabel = playerQualityNameForResolution(
++            width = playbackSnapshot.videoWidth,
++            height = playbackSnapshot.videoHeight,
++        ) ?: playerQualityState.labelFor(selectedPlayerQualityId),
++        onPlayerQualitySelected = { qualityId -> selectPlayerQuality(qualityId) },
++        onQualityPanelDismissed = {
++            showQualityPanel = false
++            controlsVisible = true
++        },
+         videoController = playerController,
+         castAvailable = playbackSnapshot.castAvailable,
+         castDeviceName = playbackSnapshot.castDeviceName,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/simkl/SimklAuthRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/simkl/SimklAuthRepository.kt
+index d4081682..12f7cdab 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/simkl/SimklAuthRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/simkl/SimklAuthRepository.kt
+@@ -51,6 +51,7 @@ object SimklAuthRepository : TrackingAuthProvider {
+             TrackingCapability.PROGRESS_READ,
+             TrackingCapability.PROGRESS_WRITE,
+             TrackingCapability.SCROBBLE,
++            TrackingCapability.RATINGS,
+         ),
+     )
+ 
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/simkl/SimklRatingsProvider.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/simkl/SimklRatingsProvider.kt
+new file mode 100644
+index 00000000..b9d09e49
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/simkl/SimklRatingsProvider.kt
+@@ -0,0 +1,127 @@
++package com.nuvio.app.features.simkl
++
++import com.nuvio.app.features.profiles.ProfileRepository
++import com.nuvio.app.features.tracking.TrackingMediaKind
++import com.nuvio.app.features.tracking.TrackingProviderId
++import com.nuvio.app.features.tracking.TrackingRatingException
++import com.nuvio.app.features.tracking.TrackingRatingProvider
++import com.nuvio.app.features.tracking.TrackingRatingRecord
++import com.nuvio.app.features.tracking.TrackingRatingScope
++import com.nuvio.app.features.tracking.TrackingRatingTarget
++import com.nuvio.app.features.tracking.arrayOrEmpty
++import com.nuvio.app.features.tracking.countersTotal
++import com.nuvio.app.features.tracking.intOrNull
++import com.nuvio.app.features.tracking.notFoundTotal
++import com.nuvio.app.features.tracking.objectOrNull
++import com.nuvio.app.features.tracking.toTrackingExternalIds
++import kotlinx.coroutines.CancellationException
++import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.JsonArray
++import kotlinx.serialization.json.JsonElement
++import kotlinx.serialization.json.JsonObject
++import kotlinx.serialization.json.buildJsonObject
++import kotlinx.serialization.json.put
++
++private const val SIMKL_ALL_RATINGS = "1,2,3,4,5,6,7,8,9,10"
++
++/**
++ * Simkl personal ratings. Simkl only rates whole titles (movies, shows and anime), so season and
++ * episode ratings are not offered for Simkl.
++ */
++object SimklRatingsProvider : TrackingRatingProvider {
++    override val providerId = TrackingProviderId.SIMKL
++    override val supportedScopes = setOf(TrackingRatingScope.MOVIE, TrackingRatingScope.SHOW)
++
++    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
++
++    override fun canRate(target: TrackingRatingTarget): Boolean =
++        target.scope in supportedScopes &&
++            (target.ids.toSimklJsonObjectOrNull() != null || !target.title.isNullOrBlank())
++
++    override suspend fun fetchRatings(profileId: Int, scope: TrackingRatingScope): List<TrackingRatingRecord> {
++        if (scope !in supportedScopes) return emptyList()
++        checkProfile(profileId)
++        val types = if (scope == TrackingRatingScope.MOVIE) listOf("movies") else listOf("shows", "anime")
++        return types.flatMap { type ->
++            val response = SimklApi.client.execute(
++                SimklApiRequest(
++                    method = SimklHttpMethod.GET,
++                    path = "/sync/ratings/$type/$SIMKL_ALL_RATINGS",
++                ),
++            )
++            checkProfile(profileId)
++            parseRows(json.parseToJsonElement(response.body.ifBlank { "{}" }))
++                .mapNotNull { row -> row.toRecord(scope) }
++        }
++    }
++
++    override suspend fun setRating(profileId: Int, target: TrackingRatingTarget, rating: Int) {
++        checkProfile(profileId)
++        val response = SimklApi.client.execute(
++            SimklApiRequest(
++                method = SimklHttpMethod.POST,
++                path = "/sync/ratings",
++                body = buildBody(target, rating).toString(),
++                retryPolicy = SimklRetryPolicy.SYNC_WRITE,
++            ),
++        )
++        val payload = json.parseToJsonElement(response.body.ifBlank { "{}" }).objectOrNull()
++        val added = payload?.get("added").countersTotal()
++        if (payload?.get("not_found").notFoundTotal() > 0 || (payload?.containsKey("added") == true && added <= 0)) {
++            throw TrackingRatingException("Simkl did not find this item")
++        }
++    }
++
++    override suspend fun removeRating(profileId: Int, target: TrackingRatingTarget) {
++        checkProfile(profileId)
++        val response = SimklApi.client.execute(
++            SimklApiRequest(
++                method = SimklHttpMethod.POST,
++                path = "/sync/ratings/remove",
++                body = buildBody(target, null).toString(),
++                retryPolicy = SimklRetryPolicy.SYNC_WRITE,
++            ),
++        )
++        val payload = json.parseToJsonElement(response.body.ifBlank { "{}" }).objectOrNull()
++        if (payload?.get("not_found").notFoundTotal() > 0) {
++            throw TrackingRatingException("Simkl did not find this item")
++        }
++    }
++
++    private fun buildBody(target: TrackingRatingTarget, rating: Int?): JsonObject {
++        if (target.scope !in supportedScopes) throw TrackingRatingException("Simkl cannot rate ${target.scope}")
++        val item = buildJsonObject {
++            rating?.let { put("rating", it) }
++            target.ids.toSimklJsonObjectOrNull()?.let { put("ids", it) }
++            target.title?.takeIf(String::isNotBlank)?.let { put("title", it) }
++            target.year?.let { put("year", it) }
++        }
++        val group = when {
++            target.scope == TrackingRatingScope.MOVIE -> "movies"
++            target.kind == TrackingMediaKind.ANIME -> "anime"
++            else -> "shows"
++        }
++        return buildJsonObject { put(group, JsonArray(listOf(item))) }
++    }
++
++    private fun parseRows(root: JsonElement): List<JsonObject> = when (root) {
++        is JsonArray -> root.mapNotNull { it.objectOrNull() }
++        is JsonObject -> listOf("movies", "shows", "anime").flatMap { key ->
++            root[key].arrayOrEmpty().mapNotNull { it.objectOrNull() }
++        }
++        else -> emptyList()
++    }
++
++    private fun JsonObject.toRecord(scope: TrackingRatingScope): TrackingRatingRecord? {
++        val rating = intOrNull("user_rating") ?: intOrNull("rating") ?: return null
++        val media = listOf("movie", "show", "anime").firstNotNullOfOrNull { key -> get(key).objectOrNull() }
++            ?: return null
++        val ids = media["ids"].toTrackingExternalIds()
++        if (!ids.hasAny) return null
++        return TrackingRatingRecord(scope = scope, ids = ids, rating = rating)
++    }
++
++    private fun checkProfile(profileId: Int) {
++        if (profileId != ProfileRepository.activeProfileId) throw CancellationException("Simkl profile changed")
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/trakt/TraktAuthRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/trakt/TraktAuthRepository.kt
+index 548e4af3..6b3893e1 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/trakt/TraktAuthRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/trakt/TraktAuthRepository.kt
+@@ -66,6 +66,7 @@ object TraktAuthRepository : TrackingAuthProvider {
+             TrackingCapability.SCROBBLE,
+             TrackingCapability.COMMENTS,
+             TrackingCapability.RECOMMENDATIONS,
++            TrackingCapability.RATINGS,
+         ),
+     )
+ 
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/trakt/TraktRatingsProvider.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/trakt/TraktRatingsProvider.kt
+new file mode 100644
+index 00000000..10119e43
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/trakt/TraktRatingsProvider.kt
+@@ -0,0 +1,251 @@
++package com.nuvio.app.features.trakt
++
++import com.nuvio.app.features.addons.RawHttpResponse
++import com.nuvio.app.features.addons.httpRequestRaw
++import com.nuvio.app.features.player.skip.SimklIdResolver
++import com.nuvio.app.features.profiles.ProfileRepository
++import com.nuvio.app.features.tracking.TrackingExternalIds
++import com.nuvio.app.features.tracking.TrackingMediaKind
++import com.nuvio.app.features.tracking.TrackingProviderId
++import com.nuvio.app.features.tracking.TrackingRatingException
++import com.nuvio.app.features.tracking.TrackingRatingProvider
++import com.nuvio.app.features.tracking.TrackingRatingRecord
++import com.nuvio.app.features.tracking.TrackingRatingScope
++import com.nuvio.app.features.tracking.TrackingRatingTarget
++import com.nuvio.app.features.tracking.arrayOrEmpty
++import com.nuvio.app.features.tracking.countersTotal
++import com.nuvio.app.features.tracking.intOrNull
++import com.nuvio.app.features.tracking.notFoundTotal
++import com.nuvio.app.features.tracking.objectOrNull
++import com.nuvio.app.features.tracking.parseTrackingExternalIds
++import com.nuvio.app.features.tracking.toTrackingExternalIds
++import kotlinx.coroutines.CancellationException
++import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.JsonArray
++import kotlinx.serialization.json.JsonElement
++import kotlinx.serialization.json.JsonObject
++import kotlinx.serialization.json.buildJsonObject
++import kotlinx.serialization.json.put
++
++private const val TRAKT_RATINGS_BASE_URL = "https://api.trakt.tv"
++private const val TRAKT_RATINGS_MAX_PAGES = 50
++
++/**
++ * Trakt personal ratings: `GET /sync/ratings/{type}`, `POST /sync/ratings` and
++ * `POST /sync/ratings/remove`. Trakt rates movies, shows, seasons and episodes on 1–10.
++ */
++object TraktRatingsProvider : TrackingRatingProvider {
++    override val providerId = TrackingProviderId.TRAKT
++    override val supportedScopes = TrackingRatingScope.entries.toSet()
++
++    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
++
++    override fun canRate(target: TrackingRatingTarget): Boolean = target.ids.traktRequestIds() != null
++
++    override suspend fun normalize(target: TrackingRatingTarget): TrackingRatingTarget {
++        if (target.scope != TrackingRatingScope.EPISODE) return animeTarget(target)
++        val catalog = target.catalog ?: return target
++        val mapped = try {
++            TraktEpisodeMappingService.resolveEpisodeMapping(
++                contentId = catalog.contentId,
++                contentType = catalog.contentType,
++                videoId = catalog.videoId,
++                season = target.season,
++                episode = target.episode,
++                episodeTitle = target.episodeTitle,
++            )
++        } catch (error: CancellationException) {
++            throw error
++        } catch (_: Throwable) {
++            null
++        } ?: return target
++        return target.copy(season = mapped.season, episode = mapped.episode)
++    }
++
++    private suspend fun animeTarget(target: TrackingRatingTarget): TrackingRatingTarget {
++        if (target.kind != TrackingMediaKind.ANIME) return target
++        val catalog = target.catalog ?: return target
++        val catalogType = catalog.contentType.trim().lowercase()
++        if (target.scope == TrackingRatingScope.SHOW && (catalogType == "movie" || catalogType == "film")) {
++            return target.copy(scope = TrackingRatingScope.MOVIE)
++        }
++        val remapsSeason = target.scope == TrackingRatingScope.SHOW ||
++            (target.scope == TrackingRatingScope.SEASON && target.season == 1)
++        if (!remapsSeason) return target
++        val catalogIds = parseTrackingExternalIds(catalog.contentId)
++        if (!catalogIds.imdb.isNullOrBlank() || catalogIds.tmdb != null || !catalogIds.tvdb.isNullOrBlank() || catalogIds.trakt != null) {
++            return target
++        }
++        val (source, id) = when {
++            catalogIds.kitsu != null -> "kitsu" to catalogIds.kitsu
++            catalogIds.mal != null -> "mal" to catalogIds.mal
++            catalogIds.anilist != null -> "anilist" to catalogIds.anilist
++            catalogIds.anidb != null -> "anidb" to catalogIds.anidb
++            else -> return target
++        }
++        val resolved = try {
++            SimklIdResolver.resolveIds(source, id.toString(), "anime")
++        } catch (error: CancellationException) {
++            throw error
++        } catch (_: Exception) {
++            null
++        } ?: return target
++        val season = resolved.tvdbSeason?.takeIf { it > 1 } ?: return target
++        val imdb = resolved.imdb?.trim()?.takeIf { it.startsWith("tt", ignoreCase = true) }
++        return target.copy(
++            scope = TrackingRatingScope.SEASON,
++            season = season,
++            ids = target.ids.mergeMissing(TrackingExternalIds(imdb = imdb)),
++        )
++    }
++
++    override suspend fun fetchRatings(profileId: Int, scope: TrackingRatingScope): List<TrackingRatingRecord> {
++        val headers = headers(profileId)
++        val type = when (scope) {
++            TrackingRatingScope.MOVIE -> "movies"
++            TrackingRatingScope.SHOW -> "shows"
++            TrackingRatingScope.SEASON -> "seasons"
++            TrackingRatingScope.EPISODE -> "episodes"
++        }
++        val rows = mutableListOf<JsonElement>()
++        val first = request("GET", "$TRAKT_RATINGS_BASE_URL/sync/ratings/$type", headers)
++        rows += json.parseToJsonElement(first.body.ifBlank { "[]" }).arrayOrEmpty()
++        val pageCount = first.header("X-Pagination-Page-Count")?.toIntOrNull() ?: 1
++        val limit = first.header("X-Pagination-Limit")?.toIntOrNull()
++        for (page in 2..pageCount.coerceAtMost(TRAKT_RATINGS_MAX_PAGES)) {
++            val limitQuery = limit?.let { "&limit=$it" }.orEmpty()
++            val response = request("GET", "$TRAKT_RATINGS_BASE_URL/sync/ratings/$type?page=$page$limitQuery", headers)
++            rows += json.parseToJsonElement(response.body.ifBlank { "[]" }).arrayOrEmpty()
++        }
++        return rows.mapNotNull { row -> row.objectOrNull()?.toRecord(scope) }
++    }
++
++    override suspend fun setRating(profileId: Int, target: TrackingRatingTarget, rating: Int) {
++        val response = request(
++            method = "POST",
++            url = "$TRAKT_RATINGS_BASE_URL/sync/ratings",
++            headers = headers(profileId),
++            body = buildBody(target, rating).toString(),
++        )
++        val payload = json.parseToJsonElement(response.body.ifBlank { "{}" }).objectOrNull()
++        val added = payload?.get("added").countersTotal()
++        if (added <= 0 || payload?.get("not_found").notFoundTotal() > 0) {
++            throw TrackingRatingException("Trakt did not find this item")
++        }
++    }
++
++    override suspend fun removeRating(profileId: Int, target: TrackingRatingTarget) {
++        val response = request(
++            method = "POST",
++            url = "$TRAKT_RATINGS_BASE_URL/sync/ratings/remove",
++            headers = headers(profileId),
++            body = buildBody(target, null).toString(),
++        )
++        val payload = json.parseToJsonElement(response.body.ifBlank { "{}" }).objectOrNull()
++        if (payload?.get("not_found").notFoundTotal() > 0) {
++            throw TrackingRatingException("Trakt did not find this item")
++        }
++    }
++
++    private fun buildBody(target: TrackingRatingTarget, rating: Int?): JsonObject {
++        val ids = target.ids.traktRequestIds() ?: throw TrackingRatingException("Missing Trakt ids")
++        val item = buildJsonObject {
++            target.title?.let { put("title", it) }
++            target.year?.let { put("year", it) }
++            put("ids", ids)
++            when (target.scope) {
++                TrackingRatingScope.MOVIE, TrackingRatingScope.SHOW -> rating?.let { put("rating", it) }
++                TrackingRatingScope.SEASON -> put(
++                    "seasons",
++                    JsonArray(listOf(buildJsonObject {
++                        put("number", requireNotNull(target.season))
++                        rating?.let { put("rating", it) }
++                    })),
++                )
++                TrackingRatingScope.EPISODE -> put(
++                    "seasons",
++                    JsonArray(listOf(buildJsonObject {
++                        put("number", requireNotNull(target.season))
++                        put("episodes", JsonArray(listOf(buildJsonObject {
++                            put("number", requireNotNull(target.episode))
++                            rating?.let { put("rating", it) }
++                        })))
++                    })),
++                )
++            }
++        }
++        val group = if (target.scope == TrackingRatingScope.MOVIE) "movies" else "shows"
++        return buildJsonObject { put(group, JsonArray(listOf(item))) }
++    }
++
++    private fun JsonObject.toRecord(scope: TrackingRatingScope): TrackingRatingRecord? {
++        val rating = intOrNull("rating") ?: return null
++        return when (scope) {
++            TrackingRatingScope.MOVIE -> TrackingRatingRecord(
++                scope, get("movie").objectOrNull()?.get("ids").toTrackingExternalIds(), rating,
++            )
++            TrackingRatingScope.SHOW -> TrackingRatingRecord(
++                scope, get("show").objectOrNull()?.get("ids").toTrackingExternalIds(), rating,
++            )
++            TrackingRatingScope.SEASON -> {
++                val season = get("season").objectOrNull()?.intOrNull("number") ?: return null
++                TrackingRatingRecord(
++                    scope, get("show").objectOrNull()?.get("ids").toTrackingExternalIds(), rating, season = season,
++                )
++            }
++            TrackingRatingScope.EPISODE -> {
++                val episode = get("episode").objectOrNull() ?: return null
++                TrackingRatingRecord(
++                    scope,
++                    get("show").objectOrNull()?.get("ids").toTrackingExternalIds(),
++                    rating,
++                    season = episode.intOrNull("season") ?: return null,
++                    episode = episode.intOrNull("number") ?: return null,
++                )
++            }
++        }
++    }
++
++    private fun TrackingExternalIds.traktRequestIds(): JsonObject? {
++        val value = buildJsonObject {
++            trakt?.let { put("trakt", it) }
++            imdb?.trim()?.takeIf { it.startsWith("tt", ignoreCase = true) }?.let { put("imdb", it) }
++            tmdb?.let { put("tmdb", it) }
++            tvdb?.trim()?.toLongOrNull()?.let { put("tvdb", it) }
++        }
++        return value.takeIf { it.isNotEmpty() }
++    }
++
++    private suspend fun headers(profileId: Int): Map<String, String> {
++        if (profileId != ProfileRepository.activeProfileId) throw CancellationException("Trakt profile changed")
++        return TraktAuthRepository.authorizedHeaders()
++            ?: throw TrackingRatingException("Trakt is not connected")
++    }
++
++    private suspend fun request(
++        method: String,
++        url: String,
++        headers: Map<String, String>,
++        body: String = "",
++    ): RawHttpResponse {
++        val response = httpRequestRaw(
++            method = method,
++            url = url,
++            headers = mapOf(
++                "Accept" to "application/json",
++                "Content-Type" to "application/json",
++            ) + headers,
++            body = body,
++        )
++        if (response.status !in 200..299) {
++            throw TrackingRatingException("Trakt request failed (HTTP ${response.status})")
++        }
++        return response
++    }
++
++    private fun RawHttpResponse.header(name: String): String? =
++        headers.entries.firstOrNull { (key, _) -> key.equals(name, ignoreCase = true) }
++            ?.value
++            ?.substringBefore(',')
++            ?.trim()
++}
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerTemporaryPlaylistStore.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerTemporaryPlaylistStore.ios.kt
+new file mode 100644
+index 00000000..cafc04cb
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerTemporaryPlaylistStore.ios.kt
+@@ -0,0 +1,22 @@
++package com.nuvio.app.features.player
++
++import kotlinx.cinterop.ExperimentalForeignApi
++import platform.Foundation.NSString
++import platform.Foundation.NSTemporaryDirectory
++import platform.Foundation.NSUTF8StringEncoding
++import platform.Foundation.NSUUID
++import platform.Foundation.writeToFile
++
++@OptIn(ExperimentalForeignApi::class)
++internal actual fun writeTemporaryHlsPlaylist(playlistText: String): String? {
++    val directory = NSTemporaryDirectory().trimEnd('/')
++    val filename = "nuvio_player_quality_${NSUUID().UUIDString}.m3u8"
++    val path = "$directory/$filename"
++    val success = (playlistText as NSString).writeToFile(
++        path,
++        atomically = true,
++        encoding = NSUTF8StringEncoding,
++        error = null,
++    )
++    return if (success) "file://$path" else null
++}
