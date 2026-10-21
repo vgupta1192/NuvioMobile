@@ -48,19 +48,6 @@ index 00000000..1002dc28
 +        preferences()?.edit()?.putBoolean(WIFI_ONLY_KEY, enabled)?.apply()
 +    }
 +}
-diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt
-index 1f6484c5..9b25160c 100644
---- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt
-+++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt
-@@ -23,6 +23,8 @@ internal actual object DownloadsPlatformDownloader {
-         scheduler(context)
-     }
- 
-+    internal fun applicationContextOrNull(): Context? = appContext
-+
-     @Synchronized
-     internal fun scheduler(context: Context): AndroidDownloadScheduler {
-         appContext = context.applicationContext
 diff --git a/composeApp/src/commonMain/composeResources/values/strings_downloads_wifi.xml b/composeApp/src/commonMain/composeResources/values/strings_downloads_wifi.xml
 new file mode 100644
 index 00000000..5cb39c88

@@ -1,0 +1,31 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/core/storage/AppContextHolder.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/core/storage/AppContextHolder.kt
+new file mode 100644
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/core/storage/AppContextHolder.kt
+@@ -0,0 +1,14 @@
++package com.nuvio.app.core.storage
++
++import android.content.Context
++import com.nuvio.app.features.downloads.DownloadsPlatformDownloader
++
++/**
++ * Application context for platform storages that the fork's feature ports add. MainActivity already
++ * initializes the downloads platform with the application context at startup, so those storages can
++ * read it from here instead of needing their own MainActivity initialize() call (which would break
++ * every time upstream reshuffles MainActivity).
++ */
++internal object AppContextHolder {
++    fun get(): Context? = DownloadsPlatformDownloader.applicationContextOrNull()
++}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt
+@@ -23,6 +23,8 @@ internal actual object DownloadsPlatformDownloader {
+         scheduler(context)
+     }
+ 
++    internal fun applicationContextOrNull(): Context? = appContext
++
+     @Synchronized
+     internal fun scheduler(context: Context): AndroidDownloadScheduler {
+         appContext = context.applicationContext

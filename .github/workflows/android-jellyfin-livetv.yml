@@ -164,7 +164,7 @@ jobs:
         if: steps.ver.outputs.should_build == 'true'
         run: |
           # enhanced-ports
-          for P in livetv-iptv-sources instant-home streams-pin-search episode-navigator downloads-wifi-only; do
+          for P in enhanced-base livetv-iptv-sources instant-home streams-pin-search episode-navigator downloads-wifi-only trackers-anilist-wetrakr; do
             if git apply "fork-src/.github/patches/$P.patch"; then
               echo "applied $P.patch"
             else
