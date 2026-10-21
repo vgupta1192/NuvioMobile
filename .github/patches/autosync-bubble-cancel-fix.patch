@@ -1,0 +1,31 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt
+index 238b44fa..064dbb00 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt
+@@ -139,6 +139,9 @@ internal class AutoSyncPlayerCoordinator(
+ 
+     fun cancel() {
+         audioFallback.stop()
++        // Switching subtitles cancels a running sync; its "Analyzing" bubble has no run left to end it.
++        AutoSyncMessageOrder.invalidatePending()
++        AutoSyncBubbleToasts.dismissWorking()
+         job?.cancel()
+         job = null
+         selectedBodyJob?.cancel()
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/bubble/AutoSyncBubbleToastsAndroid.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/bubble/AutoSyncBubbleToastsAndroid.kt
+index d7aa5d08..c0eea612 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/bubble/AutoSyncBubbleToastsAndroid.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/bubble/AutoSyncBubbleToastsAndroid.kt
+@@ -30,6 +30,12 @@ internal object AutoSyncMessageOrder {
+     @Synchronized
+     fun ticket(): Long = ++issued
+ 
++    /** Drops every message still resolving, so a cancelled run cannot post after it. */
++    @Synchronized
++    fun invalidatePending() {
++        shown = issued + 1
++    }
++
+     @Synchronized
+     fun shouldShow(ticket: Long): Boolean {
+         if (ticket < shown) return false
