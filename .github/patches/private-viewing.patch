@@ -1,0 +1,133 @@
+diff --git a/composeApp/src/commonMain/composeResources/values/strings_private_viewing.xml b/composeApp/src/commonMain/composeResources/values/strings_private_viewing.xml
+new file mode 100644
+index 00000000..11468c11
+--- /dev/null
++++ b/composeApp/src/commonMain/composeResources/values/strings_private_viewing.xml
+@@ -0,0 +1,5 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <string name="settings_private_viewing_title">Private viewing</string>
++    <string name="settings_private_viewing_description">Do not save watch progress or Continue Watching and do not scrobble to Trakt, Simkl, AniList or WeTrakr while this is on.</string>
++</resources>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ExternalPlaybackProgress.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ExternalPlaybackProgress.kt
+index fe2e8ffb..438f81d9 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ExternalPlaybackProgress.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ExternalPlaybackProgress.kt
+@@ -34,6 +34,7 @@ internal suspend fun recordExternalPlaybackProgress(
+     result: ExternalPlaybackResult,
+     fallbackSession: WatchProgressPlaybackSession?,
+ ) {
++    if (PrivateViewing.isEnabled()) return
+     val session = result.playbackSession ?: fallbackSession ?: return
+     // A completed playback may carry no position at all (MX Player), so only drop position-less
+     // results that were not reported as played to the end.
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PrivateViewing.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PrivateViewing.kt
+new file mode 100644
+index 00000000..e6a8d137
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PrivateViewing.kt
+@@ -0,0 +1,44 @@
++package com.nuvio.app.features.player
++
++import com.nuvio.app.core.storage.AppFileCache
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++
++/**
++ * Private viewing (ported idea from NuvioMobile-Enhanced): while on, playback is not written to
++ * watch progress / Continue Watching and is not scrobbled to Trakt, Simkl, AniList, WeTrakr or MDBList.
++ * Per device; kept in the app file cache.
++ */
++object PrivateViewing {
++    private const val PATH = "settings/private_viewing"
++
++    private val _enabled = MutableStateFlow(false)
++    val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
++
++    private var loaded = false
++
++    private fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        _enabled.value = AppFileCache.read(PATH)?.trim() == "1"
++    }
++
++    fun isEnabled(): Boolean {
++        ensureLoaded()
++        return _enabled.value
++    }
++
++    fun set(enabled: Boolean) {
++        ensureLoaded()
++        if (_enabled.value == enabled) return
++        _enabled.value = enabled
++        runCatching { AppFileCache.write(PATH, if (enabled) "1" else "0") }
++    }
++
++    /** Collect from Compose so the settings switch reflects the stored value. */
++    fun state(): StateFlow<Boolean> {
++        ensureLoaded()
++        return enabled
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+index ab2ed47f..93b6f22c 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+@@ -390,6 +390,15 @@ private fun PlaybackSettingsSection(
+             isTablet = isTablet,
+         ) {
+             SettingsGroup(isTablet = isTablet) {
++                val privateViewing by com.nuvio.app.features.player.PrivateViewing.state().collectAsStateWithLifecycle()
++                SettingsSwitchRow(
++                    title = stringResource(Res.string.settings_private_viewing_title),
++                    description = stringResource(Res.string.settings_private_viewing_description),
++                    checked = privateViewing,
++                    isTablet = isTablet,
++                    onCheckedChange = com.nuvio.app.features.player.PrivateViewing::set,
++                )
++                SettingsGroupDivider(isTablet = isTablet)
+                 SettingsSwitchRow(
+                     title = stringResource(Res.string.settings_playback_legacy_layout),
+                     description = stringResource(Res.string.settings_playback_legacy_layout_description),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tracking/TrackingScrobbleCoordinator.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tracking/TrackingScrobbleCoordinator.kt
+index 58c38637..8d4f1b21 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tracking/TrackingScrobbleCoordinator.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tracking/TrackingScrobbleCoordinator.kt
+@@ -21,6 +21,7 @@ object TrackingScrobbleCoordinator {
+         event: TrackingScrobbleEvent,
+     ): List<TrackingScrobbleFailure> {
+         if (profileId != ProfileRepository.activeProfileId) return emptyList()
++        if (com.nuvio.app.features.player.PrivateViewing.isEnabled()) return emptyList()
+         TrackingProviderRegistry.ensureLoaded()
+         val failures = dispatchTrackingScrobble(
+             scrobblers = TrackingProviderRegistry.connectedScrobblers(),
+@@ -42,6 +43,7 @@ object TrackingScrobbleCoordinator {
+         event: TrackingScrobbleEvent,
+     ): List<TrackingScrobbleFailure> {
+         if (profileId != ProfileRepository.activeProfileId) return emptyList()
++        if (com.nuvio.app.features.player.PrivateViewing.isEnabled()) return emptyList()
+         TrackingProviderRegistry.ensureLoaded()
+         val failures = dispatchTrackingSeekScrobble(
+             scrobblers = TrackingProviderRegistry.connectedScrobblers(),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt
+index 1fc1faf9..bc82adfc 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt
+@@ -1098,6 +1098,7 @@ object WatchProgressRepository {
+         snapshot: PlayerPlaybackSnapshot,
+         syncRemote: Boolean = true,
+     ) {
++        if (com.nuvio.app.features.player.PrivateViewing.isEnabled()) return
+         ensureLoaded()
+         upsert(session = session, snapshot = snapshot, persist = true, syncRemote = syncRemote)
+     }
+@@ -1107,6 +1108,7 @@ object WatchProgressRepository {
+         snapshot: PlayerPlaybackSnapshot,
+         syncRemote: Boolean = true,
+     ) {
++        if (com.nuvio.app.features.player.PrivateViewing.isEnabled()) return
+         ensureLoaded()
+         upsert(session = session, snapshot = snapshot, persist = true, syncRemote = syncRemote)
+     }
