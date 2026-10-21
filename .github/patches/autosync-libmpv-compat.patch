@@ -1,0 +1,36 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncLibmpvCoordinator.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncLibmpvCoordinator.android.kt
+index 764d46e3..ca4fa30d 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncLibmpvCoordinator.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncLibmpvCoordinator.android.kt
+@@ -15,6 +15,9 @@ import kotlinx.coroutines.CoroutineScope
+ import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.Job
+ import kotlinx.coroutines.currentCoroutineContext
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
+ import kotlinx.coroutines.ensureActive
+ import kotlinx.coroutines.launch
+ import kotlinx.coroutines.withContext
+@@ -236,6 +239,12 @@ private class AutoSyncLibmpvEngineController(
+     private val replaceExternalSubtitle: (replacedUrl: String, path: String) -> Unit,
+ ) : PlayerEngineController by base, AutoSyncPlayerController {
+ 
++    // Fork: the retry flow belongs to the Media3 controller; libmpv has no alternative references.
++    override val autoSyncRetryState: StateFlow<AutoSyncRetryUiState> =
++        MutableStateFlow(AutoSyncRetryUiState()).asStateFlow()
++
++    override fun retryWithAnotherReference() = Unit
++
+     override fun setAutoSyncSubtitleCandidates(candidates: List<AutoSyncSubtitleCandidate>) =
+         coordinator.setCandidates(candidates)
+ 
+@@ -269,7 +278,7 @@ private class AutoSyncLibmpvEngineController(
+         base.clearExternalSubtitleAndSelect(trackIndex)
+     }
+ 
+-    override fun cancelForManualSubtitleDelay() {
++    fun cancelForManualSubtitleDelay() {
+         coordinator.cancel()
+         AutoSyncSyncedSubtitle.clear()
+     }
