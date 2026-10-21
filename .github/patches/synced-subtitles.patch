@@ -1,5 +1,5 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
-index 8bcc5e5b..73dcae99 100644
+index 7612799b..024e5524 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 @@ -107,6 +107,7 @@ open class MainActivity : AppCompatActivity() {
@@ -726,7 +726,7 @@ index 00000000..94e9b375
 +/** The video id whose synced streams a stream list marks; null shows no marks. */
 +val LocalSyncedSubtitleVideoId = compositionLocalOf<String?> { null }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamCard.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamCard.kt
-index 4f49b637..6c009048 100644
+index 5dffa35c..109be6d9 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamCard.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamCard.kt
 @@ -28,6 +28,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
@@ -738,10 +738,10 @@ index 4f49b637..6c009048 100644
  import androidx.compose.runtime.remember
  import androidx.compose.runtime.staticCompositionLocalOf
  import androidx.compose.ui.Alignment
-@@ -70,6 +72,12 @@ internal fun StreamCard(
-     val highlightLabel = if (isCurrent) null else LocalStreamHighlight.current(stream)
-     val marked = isCurrent || highlightLabel != null
-     val markedLabel = if (isCurrent) currentLabel else highlightLabel
+@@ -69,6 +71,12 @@ internal fun StreamCard(
+     outlined: Boolean = false,
+ ) {
+     val partyLabel = if (isCurrent) null else LocalStreamHighlight.current(stream)
 +    // Synced subtitles hook: this stream has a subtitle already synced to it.
 +    val syncedVideoId = com.nuvio.app.features.player.LocalSyncedSubtitleVideoId.current
 +    val syncedMarks by com.nuvio.app.features.player.SyncedSubtitles.marks.collectAsState()
@@ -751,9 +751,9 @@ index 4f49b637..6c009048 100644
      val cardShape = RoundedCornerShape(12.dp)
      val badgeImages = stream.badges.filter { it.imageURL.isNotBlank() }
      val hasBadges = badgeImages.isNotEmpty() || (showFileSizeBadges && stream.behaviorHints.videoSize != null)
-@@ -128,6 +136,10 @@ internal fun StreamCard(
-                     Spacer(modifier = Modifier.width(8.dp))
-                     CurrentStreamBadge(label = markedLabel)
+@@ -138,6 +146,10 @@ internal fun StreamCard(
+                         overflow = TextOverflow.Ellipsis,
+                     )
                  }
 +                if (hasSyncedSubtitles) {
 +                    Spacer(modifier = Modifier.width(8.dp))
@@ -762,7 +762,7 @@ index 4f49b637..6c009048 100644
              }
  
              val subtitle = stream.streamSubtitle
-@@ -275,6 +287,26 @@ private fun StreamNameWithInstantService(
+@@ -285,6 +297,26 @@ private fun StreamNameWithInstantService(
      }
  }
  
@@ -790,7 +790,7 @@ index 4f49b637..6c009048 100644
  private fun CurrentStreamBadge(label: String) {
      Box(
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt
-index 8b31987c..a7e4bdcd 100644
+index 423d2cff..4ffdd1cd 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt
 @@ -225,6 +225,9 @@ fun StreamsScreen(

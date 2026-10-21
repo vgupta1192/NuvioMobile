@@ -19309,14 +19309,17 @@ index 00000000..7941fa1c
 +    <string name="autosync_label_synced">סונכרן אוטומטית</string>
 +</resources>
 diff --git a/composeApp/src/commonMain/composeResources/values-hu/autosync_toast_strings.xml b/composeApp/src/commonMain/composeResources/values-hu/autosync_toast_strings.xml
-new file mode 100644
-index 00000000..52209614
---- /dev/null
-+++ b/composeApp/src/commonMain/composeResources/values-hu/autosync_toast_strings.xml
-@@ -0,0 +1,16 @@
-+<?xml version="1.0" encoding="utf-8"?>
+index ad1a64c9..52209614 100644
+--- a/composeApp/src/commonMain/composeResources/values-hu/autosync_toast_strings.xml
++++ bcomposeApp/src/commonMain/composeResources/values-hu/autosync_toast_strings.xml
+@@ -1,7 +1,16 @@
+ <?xml version="1.0" encoding="utf-8"?>
 +<!-- AutoSync toasts and the "Auto synced" label. Keep keys in sync across locales. -->
-+<resources>
+ <resources>
+-    <string name="autosync_toast_failed">Szinkronizálás sikertelen: Az auto szinkron nem tudta illeszteni ezt a feliratot a videóhoz.</string>
+-    <string name="autosync_toast_failed_no_reference">Szinkronizálás sikertelen: Nincs használható beágyazott felirat az összehasonlításhoz.</string>
+-    <string name="autosync_toast_failed_unsupported">Szinkronizálás sikertelen: Ez a feliratformátum nem támogatott.</string>
+-    <string name="autosync_label_synced">Auto szinkronizálva</string>
 +    <string name="autosync_toast_analyzing">Auto Sync • Elemzés…</string>
 +    <string name="autosync_toast_synced">Auto Sync • Feliratok szinkronizálva</string>
 +    <string name="autosync_toast_synced_replaced">Auto Sync • Váltás egy jobban illeszkedő feliratra</string>
@@ -19329,7 +19332,7 @@ index 00000000..52209614
 +    <string name="autosync_toast_retry_none">Auto Sync • Nem található jobb referencia</string>
 +    <string name="autosync_toast_retry_failed">Auto Sync • Az újrapróbálkozás másik referenciával sikertelen • jelenlegi szinkron megtartva</string>
 +    <string name="autosync_label_synced">Automatikusan szinkronizálva</string>
-+</resources>
+ </resources>
 diff --git a/composeApp/src/commonMain/composeResources/values-id/autosync_toast_strings.xml b/composeApp/src/commonMain/composeResources/values-id/autosync_toast_strings.xml
 new file mode 100644
 index 00000000..2a9ad012
@@ -19488,14 +19491,17 @@ index 00000000..eaef7b7b
 +    <string name="autosync_label_synced">Zsynchronizowano automatycznie</string>
 +</resources>
 diff --git a/composeApp/src/commonMain/composeResources/values-pt-rBR/autosync_toast_strings.xml b/composeApp/src/commonMain/composeResources/values-pt-rBR/autosync_toast_strings.xml
-new file mode 100644
-index 00000000..43f3fecd
---- /dev/null
-+++ b/composeApp/src/commonMain/composeResources/values-pt-rBR/autosync_toast_strings.xml
-@@ -0,0 +1,16 @@
+index 6243c7ee..43f3fecd 100644
+--- a/composeApp/src/commonMain/composeResources/values-pt-rBR/autosync_toast_strings.xml
++++ bcomposeApp/src/commonMain/composeResources/values-pt-rBR/autosync_toast_strings.xml
+@@ -1,6 +1,16 @@
 +<?xml version="1.0" encoding="utf-8"?>
 +<!-- AutoSync toasts and the "Auto synced" label. Keep keys in sync across locales. -->
-+<resources>
+ <resources>
+-    <string name="autosync_toast_failed">Falha na sincronização: A sincronização automática não conseguiu corresponder esta legenda ao vídeo.</string>
+-    <string name="autosync_toast_failed_no_reference">Falha na sincronização: Nenhuma legenda incorporada utilizável para comparação.</string>
+-    <string name="autosync_toast_failed_unsupported">Falha na sincronização: Este formato de legenda não é compatível.</string>
+-    <string name="autosync_label_synced">Sincronizado automaticamente</string>
 +    <string name="autosync_toast_analyzing">Auto Sync • Analisando…</string>
 +    <string name="autosync_toast_synced">Auto Sync • Legendas sincronizadas</string>
 +    <string name="autosync_toast_synced_replaced">Auto Sync • Trocada por uma legenda com melhor correspondência</string>
@@ -19508,7 +19514,7 @@ index 00000000..43f3fecd
 +    <string name="autosync_toast_retry_none">Auto Sync • Nenhuma referência melhor encontrada</string>
 +    <string name="autosync_toast_retry_failed">Auto Sync • Falha ao tentar outra referência • sincronização atual mantida</string>
 +    <string name="autosync_label_synced">Sincronizada automaticamente</string>
-+</resources>
+ </resources>
 diff --git a/composeApp/src/commonMain/composeResources/values-pt/autosync_toast_strings.xml b/composeApp/src/commonMain/composeResources/values-pt/autosync_toast_strings.xml
 new file mode 100644
 index 00000000..10f37d13
@@ -19620,14 +19626,16 @@ index 00000000..17beb554
 +    <string name="autosync_label_synced">Otomatik eşitlendi</string>
 +</resources>
 diff --git a/composeApp/src/commonMain/composeResources/values-vi/autosync_toast_strings.xml b/composeApp/src/commonMain/composeResources/values-vi/autosync_toast_strings.xml
-new file mode 100644
-index 00000000..8cb0ebb8
---- /dev/null
-+++ b/composeApp/src/commonMain/composeResources/values-vi/autosync_toast_strings.xml
-@@ -0,0 +1,16 @@
-+<?xml version="1.0" encoding="utf-8"?>
+index a6994cd1..8cb0ebb8 100644
+--- a/composeApp/src/commonMain/composeResources/values-vi/autosync_toast_strings.xml
++++ bcomposeApp/src/commonMain/composeResources/values-vi/autosync_toast_strings.xml
+@@ -1,7 +1,16 @@
+ <?xml version="1.0" encoding="utf-8"?>
 +<!-- AutoSync toasts and the "Auto synced" label. Keep keys in sync across locales. -->
-+<resources>
+ <resources>
+-    <string name="autosync_toast_failed">Đồng bộ thất bại: Tự động đồng bộ không thể khớp phụ đề này với video.</string>
+-    <string name="autosync_toast_failed_no_reference">Đồng bộ thất bại: video này không có phụ đề nhúng sẵn để so sánh.</string>
+-    <string name="autosync_toast_failed_unsupported">Đồng bộ thất bại: Tự động đồng bộ không hỗ trợ đồng bộ định dạng phụ đề này.</string>
 +    <string name="autosync_toast_analyzing">Auto Sync • Đang phân tích…</string>
 +    <string name="autosync_toast_synced">Auto Sync • Đã đồng bộ phụ đề</string>
 +    <string name="autosync_toast_synced_replaced">Auto Sync • Đã chuyển sang phụ đề khớp hơn</string>
@@ -19639,8 +19647,8 @@ index 00000000..8cb0ebb8
 +    <string name="autosync_toast_retry_synced">Auto Sync • Đã đồng bộ theo tham chiếu khác</string>
 +    <string name="autosync_toast_retry_none">Auto Sync • Không tìm thấy tham chiếu tốt hơn</string>
 +    <string name="autosync_toast_retry_failed">Auto Sync • Thử lại với tham chiếu khác thất bại • giữ nguyên đồng bộ hiện tại</string>
-+    <string name="autosync_label_synced">Đã tự động đồng bộ</string>
-+</resources>
+     <string name="autosync_label_synced">Đã tự động đồng bộ</string>
+ </resources>
 diff --git a/composeApp/src/commonMain/composeResources/values/audio_sync_strings.xml b/composeApp/src/commonMain/composeResources/values/audio_sync_strings.xml
 new file mode 100644
 index 00000000..1105221b
