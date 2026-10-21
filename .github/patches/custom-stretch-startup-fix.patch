@@ -1,0 +1,101 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/CustomStretch.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/CustomStretch.android.kt
+index c027ae97..5deb1eb1 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/CustomStretch.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/CustomStretch.android.kt
+@@ -78,6 +78,11 @@ internal fun PlayerView.applyCustomStretchTransform(rect: VideoContentRect?) {
+     val frame = findViewById<View>(androidx.media3.ui.R.id.exo_content_frame) ?: return
+     val frameWidth = frame.width
+     val frameHeight = frame.height
++    if (rect != null && (frameWidth <= 0 || frameHeight <= 0)) {
++        // Not laid out yet (stream just started): apply once the frame has a size.
++        post { applyCustomStretchTransform(rect) }
++        return
++    }
+     if (rect == null || frameWidth <= 0 || frameHeight <= 0 || rect.width <= 0f || rect.height <= 0f) {
+         frame.scaleX = 1f
+         frame.scaleY = 1f
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+index b244d685..a2bdcbe7 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+@@ -1796,6 +1796,13 @@ private class NuvioLibmpvView(
+             mpv.getPropertyInt("video-params/h") ?: 0,
+         )
+         mpv.setPropertyString("keepaspect", if (customStretchActive) "no" else "yes")
++        if (rect != null && crop.isEmpty() && (mpv.getPropertyInt("video-params/w") ?: 0) <= 0) {
++            // Picture area known before mpv reports the source size: apply it as soon as the size shows up.
++            mpvScope.launch {
++                delay(400)
++                executeMpv { applyCustomStretchNow() }
++            }
++        }
+         if (crop != appliedVideoCrop) {
+             mpv.setPropertyString("video-crop", crop)
+             appliedVideoCrop = crop
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
+index 42cc7a04..bc8bcbfd 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
+@@ -344,12 +344,19 @@ class BlackBarTracker {
+     private val thickness = FloatArray(4) { 1f }
+     private val observations = IntArray(4)
+     private var lastEvidence: IntArray? = null
++    /** Frames that counted as evidence (distinct shots, or a still shot seen long enough). */
+     private var samples = 0
++    /** Every usable sample taken, including repeats of the same shot. */
++    private var attempts = 0
++    private var staticRepeats = 0
+     private var committed: VideoContentRect? = null
+ 
+-    /** Sample faster until every edge is confirmed (or enough samples were taken). */
++    /**
++     * Sample faster until every edge is confirmed (or enough samples were taken). Repeats of one
++     * still shot (a title card, a paused start) use up attempts, not the evidence budget.
++     */
+     val isCalibrating: Boolean
+-        get() = samples < MAX_CALIBRATION_SAMPLES && observations.any { it < CONFIRMATIONS }
++        get() = attempts < MAX_CALIBRATION_ATTEMPTS && observations.any { it < CONFIRMATIONS }
+ 
+     val current: VideoContentRect? get() = committed
+ 
+@@ -358,16 +365,27 @@ class BlackBarTracker {
+         observations.fill(0)
+         lastEvidence = null
+         samples = 0
++        attempts = 0
++        staticRepeats = 0
+         committed = null
+     }
+ 
+     /** Feed one sample. Returns the new picture area when it changed, else null. */
+     fun offer(sample: BarSample?): VideoContentRect? {
+         if (sample == null) return null
++        attempts++
++        // A dark scene must not confirm itself, so a repeat of the same shot only counts after it
++        // was seen STATIC_CONFIRM_REPEATS more times. Bars are only trusted with a sharp edge, so a
++        // still frame that shows them (intro card, paused start) is real evidence.
++        if (sample.differsFrom(lastEvidence)) {
++            lastEvidence = sample.signature
++            staticRepeats = 0
++        } else {
++            staticRepeats++
++            if (staticRepeats < STATIC_CONFIRM_REPEATS) return null
++            staticRepeats = 0
++        }
+         samples++
+-        // The same (paused or static) shot counts once: a dark scene must not confirm itself.
+-        if (!sample.differsFrom(lastEvidence)) return null
+-        lastEvidence = sample.signature
+         val measured = sample.thickness
+         for (edge in 0 until 4) {
+             if (!sample.confident[edge]) continue
+@@ -392,7 +410,8 @@ class BlackBarTracker {
+     companion object {
+         const val CALIBRATION_SAMPLES = 3
+         const val CONFIRMATIONS = 2
+-        const val MAX_CALIBRATION_SAMPLES = 16
++        const val MAX_CALIBRATION_ATTEMPTS = 50
++        const val STATIC_CONFIRM_REPEATS = 2
+         const val SECOND_AXIS_MIN_BAR = 0.03f
+         const val CALIBRATION_INTERVAL_MS = 1_200L
+         const val STEADY_INTERVAL_MS = 8_000L
