@@ -27,12 +27,13 @@ index 1be97173..cde3736d 100644
              android:permission="android.permission.BIND_JOB_SERVICE"
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerCastBridge.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerCastBridge.android.kt
 new file mode 100644
-index 00000000..6683c6d1
+index 00000000..6dc9fd2f
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerCastBridge.android.kt
-@@ -0,0 +1,592 @@
+@@ -0,0 +1,607 @@
 +package com.nuvio.app.features.player
 +
++import com.nuvio.app.features.autosync.AutoSyncPlayerController
 +import android.app.Activity
 +import android.content.Context
 +import android.content.ContextWrapper
@@ -224,7 +225,14 @@ index 00000000..6683c6d1
 +
 +    fun onLocalControllerReady(controller: PlayerEngineController) {
 +        delegate = controller
-+        controllerSink(PlayerCastAwareController(controller, this))
++        // Keep AutoSync reachable: the UI finds it with `controller as? AutoSyncPlayerController`.
++        controllerSink(
++            if (controller is AutoSyncPlayerController) {
++                PlayerCastAwareAutoSyncController(controller, controller, this)
++            } else {
++                PlayerCastAwareController(controller, this)
++            },
++        )
 +        if (isCasting) controller.pause()
 +    }
 +
@@ -538,7 +546,7 @@ index 00000000..6683c6d1
 +    }
 +}
 +
-+private class PlayerCastAwareController(
++private open class PlayerCastAwareController(
 +    private val base: PlayerEngineController,
 +    private val bridge: PlayerCastBridge,
 +) : PlayerEngineController by base {
@@ -576,6 +584,13 @@ index 00000000..6683c6d1
 +        bridge.showDialog()
 +    }
 +}
++
++/** Same wrapper for an AutoSync-enabled controller, so AutoSync keeps working while the Cast bridge is in front. */
++private class PlayerCastAwareAutoSyncController(
++    base: PlayerEngineController,
++    autoSync: AutoSyncPlayerController,
++    bridge: PlayerCastBridge,
++) : PlayerCastAwareController(base, bridge), AutoSyncPlayerController by autoSync
 +
 +@Composable
 +internal fun rememberPlayerCastBridge(enabled: Boolean): PlayerCastBridge? {
