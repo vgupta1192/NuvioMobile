@@ -670,10 +670,10 @@ index 00000000..15962acb
 +    override fun getAdditionalSessionProviders(context: Context): List<SessionProvider>? = null
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index 649797fd..71984f5a 100644
+index 6f2fc62f..066835cd 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-@@ -134,6 +134,31 @@ actual fun PlatformPlayerSurface(
+@@ -138,6 +138,31 @@ actual fun PlatformPlayerSurface(
          useYoutubeChunkedPlayback,
          initialPositionRequestKey.orEmpty(),
      )
@@ -705,7 +705,7 @@ index 649797fd..71984f5a 100644
      val requestedEngine = playbackEngine ?: playerSettings.androidPlaybackEngine
      var activeEngine by remember(playerSourceKey, requestedEngine) {
          mutableStateOf(requestedEngine.initialAndroidEngine())
-@@ -149,14 +174,14 @@ actual fun PlatformPlayerSurface(
+@@ -153,14 +178,14 @@ actual fun PlatformPlayerSurface(
              streamType = streamType,
              useYoutubeChunkedPlayback = useYoutubeChunkedPlayback,
              modifier = modifier,
@@ -723,7 +723,7 @@ index 649797fd..71984f5a 100644
              onError = { message ->
                  if (message != null && requestedEngine == AndroidPlaybackEngine.Auto) {
                      Log.w(TAG, "ExoPlayer failed; falling back to libmpv: $message")
-@@ -166,7 +191,7 @@ actual fun PlatformPlayerSurface(
+@@ -170,7 +195,7 @@ actual fun PlatformPlayerSurface(
                      activeEngine = ResolvedAndroidPlaybackEngine.Libmpv
                      onError(null)
                  } else {
@@ -732,7 +732,7 @@ index 649797fd..71984f5a 100644
                  }
              },
          )
-@@ -182,17 +207,20 @@ actual fun PlatformPlayerSurface(
+@@ -186,18 +211,21 @@ actual fun PlatformPlayerSurface(
                  sourceHeaders = sourceHeaders,
                  externalSubtitles = externalSubtitles,
                  modifier = modifier,
@@ -742,6 +742,7 @@ index 649797fd..71984f5a 100644
                  videoOutput = playerSettings.androidLibmpvVideoOutput,
                  hardwareDecodingEnabled = playerSettings.androidLibmpvHardwareDecodingEnabled,
                  yuv420pEnabled = playerSettings.androidLibmpvYuv420pEnabled,
+                 preferredSubtitleLanguage = playerSettings.preferredSubtitleLanguage,
 -                onControllerReady = onControllerReady,
 -                onSnapshot = onSnapshot,
 -                onError = onError,

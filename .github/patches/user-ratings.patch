@@ -1,0 +1,1545 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/ratings/UserRatingsStorage.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/ratings/UserRatingsStorage.android.kt
+new file mode 100644
+index 00000000..67697e52
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/ratings/UserRatingsStorage.android.kt
+@@ -0,0 +1,23 @@
++package com.nuvio.app.features.ratings
++
++import android.content.Context
++import android.content.SharedPreferences
++
++internal actual object UserRatingsStorage {
++    private const val preferencesName = "nuvio_user_ratings"
++
++    private var preferences: SharedPreferences? = null
++
++    fun initialize(context: Context) {
++        preferences = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
++    }
++
++    private fun key(profileId: Int) = "disabled_providers_$profileId"
++
++    actual fun loadDisabledProviders(profileId: Int): String? =
++        preferences?.getString(key(profileId), null)
++
++    actual fun saveDisabledProviders(profileId: Int, value: String) {
++        preferences?.edit()?.putString(key(profileId), value)?.apply()
++    }
++}
+diff --git a/composeApp/src/commonMain/composeResources/values/strings_user_ratings.xml b/composeApp/src/commonMain/composeResources/values/strings_user_ratings.xml
+new file mode 100644
+index 00000000..47867462
+--- /dev/null
++++ b/composeApp/src/commonMain/composeResources/values/strings_user_ratings.xml
+@@ -0,0 +1,20 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <string name="user_rating_action_rate">Rate</string>
++    <string name="user_rating_action_rated">Rated %1$d/10</string>
++    <string name="user_rating_rate_episode">Rate episode</string>
++    <string name="user_rating_rate_season">Rate %1$s</string>
++    <string name="user_rating_rate_show">Rate show</string>
++    <string name="user_rating_rate_movie">Rate movie</string>
++    <string name="user_rating_value">%1$d/10</string>
++    <string name="user_rating_not_rated">Not rated yet</string>
++    <string name="user_rating_loading">Loading your rating…</string>
++    <string name="user_rating_remove">Remove rating</string>
++    <string name="user_rating_sync_to">Sync rating to</string>
++    <string name="user_rating_syncs_with">Syncs with %1$s</string>
++    <string name="user_rating_saved">Rated %1$d/10 on %2$s</string>
++    <string name="user_rating_removed">Rating removed from %1$s</string>
++    <string name="user_rating_sync_failed">Couldn't sync rating to %1$s</string>
++    <string name="user_rating_last_failed">Last change didn't reach %1$s. Try again.</string>
++    <string name="user_rating_no_provider">Turn on at least one service to save ratings</string>
++</resources>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailActionButtons.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailActionButtons.kt
+index c5df6055..85b37c47 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailActionButtons.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailActionButtons.kt
+@@ -8,9 +8,16 @@ import androidx.compose.foundation.clickable
+ import androidx.compose.foundation.combinedClickable
+ import androidx.compose.foundation.layout.Arrangement
+ import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
+ import androidx.compose.foundation.layout.Row
+ import androidx.compose.foundation.layout.Spacer
+ import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
++import com.nuvio.app.features.ratings.UserRatingSheet
++import com.nuvio.app.features.ratings.UserRatingStars
++import com.nuvio.app.features.ratings.rememberCanRate
++import com.nuvio.app.features.ratings.rememberUserRating
++import com.nuvio.app.features.ratings.userRatingTarget
+ import androidx.compose.foundation.layout.height
+ import androidx.compose.foundation.layout.size
+ import androidx.compose.foundation.layout.width
+@@ -258,7 +265,10 @@ fun DetailActions(
+     onSaveLongClick: (() -> Unit)?,
+     meta: com.nuvio.app.features.details.MetaDetails? = null,
+ ) {
+-    val ratingAction = rememberRatingAction(meta)
++    val ratingTarget = remember(meta) { meta?.userRatingTarget() }
++    val canRate = rememberCanRate(ratingTarget)
++    val userRating = rememberUserRating(ratingTarget.takeIf { canRate })
++    var showRatingSheet by remember(ratingTarget) { mutableStateOf(false) }
+     val shuffleAction = onShuffleClick?.let { onClick ->
+         DetailSecondaryAction(
+             label = stringResource(if (shuffleEnabled) Res.string.shuffle_stop else Res.string.random_episode_title),
+@@ -267,6 +277,7 @@ fun DetailActions(
+             onClick = onClick,
+         )
+     }
++    Column(modifier = Modifier.fillMaxWidth()) {
+     DetailActionButtons(
+         playLabel = if (playEnabled) playLabel else stringResource(Res.string.playback_unavailable),
+         playEnabled = playEnabled,
+@@ -290,12 +301,24 @@ fun DetailActions(
+                     onLongClick = onSaveLongClick,
+                 ),
+             )
+-            ratingAction?.let(::add)
+         },
+         isTablet = isTablet,
+         onPlayClick = onPlayClick,
+         onPlayLongClick = onPlayLongClick,
+     )
++    if (canRate && ratingTarget != null) {
++        Box(modifier = Modifier.fillMaxWidth().padding(top = 12.dp), contentAlignment = Alignment.Center) {
++            UserRatingStars(rating = userRating, onClick = { showRatingSheet = true })
++        }
++        if (showRatingSheet) {
++            UserRatingSheet(
++                target = ratingTarget,
++                title = meta?.name.orEmpty(),
++                onDismiss = { showRatingSheet = false },
++            )
++        }
++    }
++    }
+ }
+ 
+ @Composable
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
+index 4d18f06e..c4e09f8c 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
+@@ -68,6 +68,7 @@ internal fun PlayerScreenRuntime.lockPlayerControls() {
+     renderedGestureFeedback = null
+     showAudioModal = false
+     showQualityModal = false
++    showUserRatingSheet = false
+     showSubtitleModal = false
+     showVideoSettingsModal = false
+     showStreamInfo = false
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
+index 4a531d51..f24d9d23 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
+@@ -200,6 +200,7 @@ internal class PlayerScreenRuntime(
+ 
+     var showAudioModal by mutableStateOf(false)
+     var showQualityModal by mutableStateOf(false)
++    var showUserRatingSheet by mutableStateOf(false)
+     var showSubtitleModal by mutableStateOf(false)
+     var showVideoSettingsModal by mutableStateOf(false)
+     var showStreamInfo by mutableStateOf(false)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+index 0887a1fc..8fea712f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+@@ -8,6 +8,12 @@ import androidx.compose.foundation.layout.Box
+ import androidx.compose.foundation.layout.BoxScope
+ import androidx.compose.foundation.layout.fillMaxSize
+ import androidx.compose.runtime.Composable
++import com.nuvio.app.core.i18n.localizedSeasonEpisodeCode
++import com.nuvio.app.features.ratings.UserRatingPlayerOverlay
++import com.nuvio.app.features.ratings.rememberCanRate
++import com.nuvio.app.features.ratings.rememberUserRating
++import com.nuvio.app.features.ratings.toUserRatingTarget
++import com.nuvio.app.features.tracking.TrackingRatingTarget
+ import androidx.compose.runtime.DisposableEffect
+ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.key
+@@ -270,6 +276,13 @@ private val PlayerScreenRuntime.activeAddonLogo: String?
+         addon.manifest?.takeIf { addon.streamAddonInstanceId(it.id) == activeProviderAddonId }?.logoUrl
+     }
+ 
++/** The movie or episode currently playing, for in-player rating. */
++@Composable
++private fun PlayerScreenRuntime.currentUserRatingTarget(): TrackingRatingTarget? =
++    remember(parentMetaId, contentType, parentMetaType, activeVideoId, activeSeasonNumber, activeEpisodeNumber) {
++        currentTrackingMedia().toUserRatingTarget()
++    }
++
+ private fun PlayerScreenRuntime.currentInitialPositionRequestKey(): String? {
+     val positionMs = activeInitialPositionMs.takeIf { it > 0L } ?: return null
+     return "$activePlaybackIdentity:${activeVideoId.orEmpty()}:$positionMs"
+@@ -283,6 +296,9 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+     val playerBadges = rememberPlayerBadges()
+     val orientationToggleSupported by PlayerOrientationPreference.toggleSupported.collectAsStateWithLifecycle()
+     val portraitPlayback by PlayerOrientationPreference.portrait.collectAsStateWithLifecycle()
++    val userRatingTarget = currentUserRatingTarget()
++    val canRate = rememberCanRate(userRatingTarget)
++    val userRating = rememberUserRating(userRatingTarget.takeIf { canRate })
+     val hasVideoQualities = remember(playerController, audioTracks, playbackSnapshot.durationMs) {
+         playerController?.getVideoQualities().orEmpty().size > 1
+     }
+@@ -412,6 +428,12 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+                 null
+             },
+             isPortraitPlayback = portraitPlayback,
++            onRateClick = if (canRate) {
++                { showUserRatingSheet = true }
++            } else {
++                null
++            },
++            userRating = userRating,
+             onQualityClick = if (hasVideoQualities) {
+                 {
+                     refreshTracks()
+@@ -722,6 +744,26 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
+             showSubmitIntroModal = false
+         },
+     )
++    if (showUserRatingSheet) {
++        currentUserRatingTarget()?.let { target ->
++            UserRatingPlayerOverlay(
++                target = target,
++                title = activeEpisodeTitle?.takeIf { target.episode != null && it.isNotBlank() } ?: title,
++                subtitle = if (target.episode != null) {
++                    listOfNotNull(
++                        title,
++                        localizedSeasonEpisodeCode(target.season, target.episode),
++                    ).joinToString(" · ")
++                } else {
++                    null
++                },
++                onDismiss = {
++                    showUserRatingSheet = false
++                    controlsVisible = true
++                },
++            )
++        }
++    }
+     StreamInfoOverlay(
+         visible = showStreamInfo,
+         addonName = activeProviderName,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/ratings/UserRatingSheet.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/ratings/UserRatingSheet.kt
+new file mode 100644
+index 00000000..ee10b343
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/ratings/UserRatingSheet.kt
+@@ -0,0 +1,448 @@
++package com.nuvio.app.features.ratings
++
++import androidx.compose.animation.AnimatedContent
++import androidx.compose.animation.core.animateFloatAsState
++import androidx.compose.animation.core.spring
++import androidx.compose.animation.core.tween
++import androidx.compose.animation.fadeIn
++import androidx.compose.animation.fadeOut
++import androidx.compose.animation.scaleIn
++import androidx.compose.animation.scaleOut
++import androidx.compose.animation.togetherWith
++import androidx.compose.foundation.background
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.interaction.MutableInteractionSource
++import androidx.compose.foundation.horizontalScroll
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.aspectRatio
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.layout.widthIn
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.shape.CircleShape
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.rounded.Check
++import androidx.compose.material.icons.rounded.Star
++import androidx.compose.material.icons.rounded.StarBorder
++import androidx.compose.material3.CircularProgressIndicator
++import androidx.compose.material3.ExperimentalMaterial3Api
++import androidx.compose.material3.Icon
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Surface
++import androidx.compose.material3.Text
++import androidx.compose.material3.TextButton
++import androidx.compose.material3.rememberModalBottomSheetState
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.collectAsState
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.rememberCoroutineScope
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.graphics.graphicsLayer
++import androidx.compose.ui.semantics.Role
++import androidx.compose.ui.semantics.contentDescription
++import androidx.compose.ui.semantics.semantics
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.dp
++import com.nuvio.app.core.ui.NuvioModalBottomSheet
++import com.nuvio.app.core.ui.NuvioTokens
++import com.nuvio.app.core.ui.dismissNuvioBottomSheet
++import com.nuvio.app.core.ui.nuvioSafeBottomPadding
++import com.nuvio.app.features.tracking.TRACKING_RATING_MAX
++import com.nuvio.app.features.tracking.TRACKING_RATING_MIN
++import com.nuvio.app.features.tracking.TrackingProviderId
++import com.nuvio.app.features.tracking.TrackingProviderRegistry
++import com.nuvio.app.features.tracking.TrackingRatingTarget
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.launch
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.user_rating_last_failed
++import nuvio.composeapp.generated.resources.user_rating_loading
++import nuvio.composeapp.generated.resources.user_rating_no_provider
++import nuvio.composeapp.generated.resources.user_rating_not_rated
++import nuvio.composeapp.generated.resources.user_rating_remove
++import nuvio.composeapp.generated.resources.user_rating_sync_to
++import nuvio.composeapp.generated.resources.user_rating_syncs_with
++import nuvio.composeapp.generated.resources.user_rating_value
++import org.jetbrains.compose.resources.stringResource
++
++private const val RATING_SETTLE_MS = 560L
++
++/** Observes the current personal rating of [target], loading it on first use. */
++@Composable
++fun rememberUserRating(target: TrackingRatingTarget?): Int? {
++    val state by UserRatingsRepository.uiState.collectAsState()
++    val connected by TrackingProviderRegistry.connectedProviderIds.collectAsState()
++    if (target == null) return null
++    val providers = remember(target.key, connected) { UserRatingsRepository.providersFor(target) }
++    LaunchedEffect(target.key, providers) {
++        if (providers.isNotEmpty()) UserRatingsRepository.load(target)
++    }
++    if (providers.isEmpty()) return null
++    val enabled = providers.filterNot { it in state.disabledProviders }
++    return state.entries[UserRatingsRepository.entryKey(target)]?.ratingFor(enabled)
++}
++
++/** Whether any connected service can rate [target]; entry points hide themselves otherwise. */
++@Composable
++fun rememberCanRate(target: TrackingRatingTarget?): Boolean {
++    val connected by TrackingProviderRegistry.connectedProviderIds.collectAsState()
++    if (target == null) return false
++    return remember(target.key, connected) { UserRatingsRepository.providersFor(target).isNotEmpty() }
++}
++
++@OptIn(ExperimentalMaterial3Api::class)
++@Composable
++fun UserRatingSheet(
++    target: TrackingRatingTarget,
++    title: String,
++    subtitle: String? = null,
++    onDismiss: () -> Unit,
++) {
++    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
++    val coroutineScope = rememberCoroutineScope()
++    val close: () -> Unit = {
++        coroutineScope.launch { dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss) }
++    }
++    NuvioModalBottomSheet(onDismissRequest = close, sheetState = sheetState) {
++        UserRatingContent(
++            target = target,
++            title = title,
++            subtitle = subtitle,
++            onDone = close,
++            modifier = Modifier
++                .fillMaxWidth()
++                .padding(horizontal = 20.dp)
++                .padding(bottom = nuvioSafeBottomPadding(16.dp)),
++        )
++    }
++}
++
++/**
++ * In-player variant: a centred card over a dimmed scrim, matching the player's other overlays
++ * instead of presenting a system sheet on top of the video.
++ */
++@Composable
++fun UserRatingPlayerOverlay(
++    target: TrackingRatingTarget,
++    title: String,
++    subtitle: String?,
++    onDismiss: () -> Unit,
++) {
++    Box(
++        modifier = Modifier
++            .fillMaxSize()
++            .background(Color.Black.copy(alpha = 0.65f))
++            .clickable(
++                indication = null,
++                interactionSource = remember { MutableInteractionSource() },
++                onClick = onDismiss,
++            ),
++        contentAlignment = Alignment.Center,
++    ) {
++        Surface(
++            modifier = Modifier
++                .widthIn(max = 520.dp)
++                .fillMaxWidth(0.9f)
++                .clickable(
++                    indication = null,
++                    interactionSource = remember { MutableInteractionSource() },
++                    onClick = {},
++                ),
++            shape = RoundedCornerShape(24.dp),
++            color = MaterialTheme.colorScheme.surface,
++            tonalElevation = 6.dp,
++        ) {
++            UserRatingContent(
++                target = target,
++                title = title,
++                subtitle = subtitle,
++                onDone = onDismiss,
++                modifier = Modifier.padding(20.dp),
++            )
++        }
++    }
++}
++
++@Composable
++fun UserRatingContent(
++    target: TrackingRatingTarget,
++    title: String,
++    subtitle: String?,
++    onDone: () -> Unit,
++    modifier: Modifier = Modifier,
++) {
++    val state by UserRatingsRepository.uiState.collectAsState()
++    val connected by TrackingProviderRegistry.connectedProviderIds.collectAsState()
++    val providers = remember(target.key, connected) { UserRatingsRepository.providersFor(target) }
++    LaunchedEffect(target.key, providers) {
++        UserRatingsRepository.load(target, maxAgeMs = UserRatingsRepository.SHEET_REFRESH_AGE_MS)
++    }
++    val enabled = providers.filterNot { it in state.disabledProviders }
++    val entry = state.entries[UserRatingsRepository.entryKey(target)] ?: UserRatingEntry()
++    val current = entry.ratingFor(enabled)
++    val scope = rememberCoroutineScope()
++    var previewRating by remember { mutableStateOf<Int?>(null) }
++    var settling by remember { mutableStateOf(false) }
++    val displayed = previewRating ?: current
++    val canEdit = enabled.isNotEmpty() && !entry.isSaving && !settling
++
++    fun commitRating(rating: Int) {
++        if (!canEdit) return
++        settling = true
++        previewRating = rating
++        UserRatingsRepository.rate(target, rating)
++        scope.launch {
++            delay(RATING_SETTLE_MS)
++            onDone()
++        }
++    }
++
++    Column(
++        modifier = modifier,
++        verticalArrangement = Arrangement.spacedBy(14.dp),
++    ) {
++        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
++            Text(
++                text = title,
++                style = MaterialTheme.typography.titleLarge,
++                fontWeight = FontWeight.SemiBold,
++                color = MaterialTheme.colorScheme.onSurface,
++                maxLines = 2,
++                overflow = TextOverflow.Ellipsis,
++            )
++            subtitle?.takeIf(String::isNotBlank)?.let {
++                Text(
++                    text = it,
++                    style = MaterialTheme.typography.bodyMedium,
++                    color = MaterialTheme.colorScheme.onSurfaceVariant,
++                    maxLines = 1,
++                    overflow = TextOverflow.Ellipsis,
++                )
++            }
++        }
++
++        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
++            Icon(
++                imageVector = if (displayed != null) Icons.Rounded.Star else Icons.Rounded.StarBorder,
++                contentDescription = null,
++                tint = MaterialTheme.colorScheme.primary,
++                modifier = Modifier.size(28.dp),
++            )
++            AnimatedContent(
++                targetState = Triple(displayed, entry.isLoading, settling),
++                transitionSpec = {
++                    (fadeIn(tween(NuvioTokens.Motion.fastMillis)) +
++                        scaleIn(initialScale = 0.86f, animationSpec = tween(NuvioTokens.Motion.fastMillis))) togetherWith
++                        (fadeOut(tween(120)) + scaleOut(targetScale = 0.92f, animationSpec = tween(120)))
++                },
++                label = "user_rating_value_text",
++            ) { (value, loading, _) ->
++                Text(
++                    text = when {
++                        value != null -> stringResource(Res.string.user_rating_value, value)
++                        loading -> stringResource(Res.string.user_rating_loading)
++                        else -> stringResource(Res.string.user_rating_not_rated)
++                    },
++                    style = MaterialTheme.typography.headlineSmall,
++                    fontWeight = FontWeight.SemiBold,
++                    color = MaterialTheme.colorScheme.onSurface,
++                )
++            }
++            if (entry.isLoading || entry.isSaving) {
++                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
++            }
++        }
++
++        UserRatingStarPicker(
++            selected = displayed,
++            enabled = canEdit,
++            onSelect = ::commitRating,
++            onPreview = { value ->
++                if (value != null) previewRating = value
++            },
++            modifier = Modifier.fillMaxWidth(),
++            starSize = 46.dp,
++        )
++
++        UserRatingScale(
++            selected = displayed,
++            enabled = canEdit,
++            onSelect = ::commitRating,
++        )
++
++        when {
++            providers.size > 1 -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
++                Text(
++                    text = stringResource(Res.string.user_rating_sync_to),
++                    style = MaterialTheme.typography.labelLarge,
++                    color = MaterialTheme.colorScheme.onSurfaceVariant,
++                )
++                Row(
++                    modifier = Modifier.horizontalScroll(rememberScrollState()),
++                    horizontalArrangement = Arrangement.spacedBy(8.dp),
++                ) {
++                    providers.forEach { providerId ->
++                        ProviderChip(
++                            providerId = providerId,
++                            rating = entry.byProvider[providerId],
++                            selected = providerId in enabled,
++                            onToggle = {
++                                UserRatingsRepository.setProviderEnabled(providerId, providerId !in enabled)
++                            },
++                        )
++                    }
++                }
++                if (enabled.isEmpty()) {
++                    Text(
++                        text = stringResource(Res.string.user_rating_no_provider),
++                        style = MaterialTheme.typography.bodySmall,
++                        color = MaterialTheme.colorScheme.error,
++                    )
++                }
++            }
++            providers.size == 1 -> Text(
++                text = stringResource(Res.string.user_rating_syncs_with, providers.first().displayName),
++                style = MaterialTheme.typography.bodySmall,
++                color = MaterialTheme.colorScheme.onSurfaceVariant,
++            )
++        }
++
++        val failed = entry.failedProviders.intersect(enabled.toSet())
++        if (failed.isNotEmpty()) {
++            Text(
++                text = stringResource(
++                    Res.string.user_rating_last_failed,
++                    failed.sortedBy { it.ordinal }.joinToString(", ") { it.displayName },
++                ),
++                style = MaterialTheme.typography.bodySmall,
++                color = MaterialTheme.colorScheme.error,
++            )
++        }
++
++        if (enabled.any { entry.byProvider[it] != null }) {
++            TextButton(
++                onClick = {
++                    UserRatingsRepository.remove(target)
++                    onDone()
++                },
++                enabled = !entry.isSaving && !settling,
++            ) {
++                Text(
++                    text = stringResource(Res.string.user_rating_remove),
++                    color = MaterialTheme.colorScheme.error,
++                )
++            }
++        }
++    }
++}
++
++@Composable
++private fun UserRatingScale(
++    selected: Int?,
++    enabled: Boolean,
++    onSelect: (Int) -> Unit,
++) {
++    Row(
++        modifier = Modifier.fillMaxWidth().widthIn(max = 520.dp),
++        horizontalArrangement = Arrangement.spacedBy(6.dp),
++    ) {
++        for (value in TRACKING_RATING_MIN..TRACKING_RATING_MAX) {
++            val filled = selected != null && value <= selected
++            val isSelected = value == selected
++            val label = stringResource(Res.string.user_rating_value, value)
++            val scale by animateFloatAsState(
++                targetValue = if (isSelected) 1.08f else 1f,
++                animationSpec = spring(dampingRatio = 0.52f, stiffness = 520f),
++                label = "rating_chip_scale_$value",
++            )
++            Box(
++                modifier = Modifier
++                    .weight(1f)
++                    .aspectRatio(1f)
++                    .graphicsLayer {
++                        scaleX = scale
++                        scaleY = scale
++                    }
++                    .clip(CircleShape)
++                    .background(
++                        when {
++                            isSelected -> MaterialTheme.colorScheme.primary
++                            filled -> MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
++                            else -> MaterialTheme.colorScheme.surfaceVariant
++                        },
++                    )
++                    .clickable(enabled = enabled, role = Role.Button) { onSelect(value) }
++                    .semantics { contentDescription = label },
++                contentAlignment = Alignment.Center,
++            ) {
++                Text(
++                    text = value.toString(),
++                    style = MaterialTheme.typography.labelLarge,
++                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
++                    color = when {
++                        filled -> MaterialTheme.colorScheme.onPrimary
++                        enabled -> MaterialTheme.colorScheme.onSurface
++                        else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
++                    },
++                )
++            }
++        }
++    }
++}
++
++@Composable
++private fun ProviderChip(
++    providerId: TrackingProviderId,
++    rating: Int?,
++    selected: Boolean,
++    onToggle: () -> Unit,
++) {
++    Surface(
++        onClick = onToggle,
++        shape = RoundedCornerShape(50),
++        color = if (selected) {
++            MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
++        } else {
++            MaterialTheme.colorScheme.surfaceVariant
++        },
++        contentColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
++    ) {
++        Row(
++            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
++            verticalAlignment = Alignment.CenterVertically,
++            horizontalArrangement = Arrangement.spacedBy(6.dp),
++        ) {
++            if (selected) {
++                Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp))
++            }
++            Text(
++                text = buildString {
++                    append(providerId.displayName)
++                    rating?.let { append(" · ").append(it) }
++                },
++                style = MaterialTheme.typography.labelLarge,
++            )
++        }
++    }
++}
++
++/** What to show in a [UserRatingSheet] opened from a screen. */
++data class UserRatingSheetRequest(
++    val target: TrackingRatingTarget,
++    val title: String,
++    val subtitle: String? = null,
++)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/ratings/UserRatingStars.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/ratings/UserRatingStars.kt
+new file mode 100644
+index 00000000..e47ac9c0
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/ratings/UserRatingStars.kt
+@@ -0,0 +1,408 @@
++package com.nuvio.app.features.ratings
++
++import androidx.compose.animation.core.Animatable
++import androidx.compose.animation.core.LinearEasing
++import androidx.compose.animation.core.Spring
++import androidx.compose.animation.core.animateFloatAsState
++import androidx.compose.animation.core.spring
++import androidx.compose.animation.core.tween
++import androidx.compose.foundation.LocalIndication
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.gestures.awaitEachGesture
++import androidx.compose.foundation.gestures.awaitFirstDown
++import androidx.compose.foundation.interaction.MutableInteractionSource
++import androidx.compose.foundation.interaction.collectIsPressedAsState
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.size
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.rounded.Star
++import androidx.compose.material.icons.rounded.StarBorder
++import androidx.compose.material3.Icon
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableIntStateOf
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.rememberUpdatedState
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.drawBehind
++import androidx.compose.ui.draw.drawWithContent
++import androidx.compose.ui.geometry.Offset
++import androidx.compose.ui.graphics.Brush
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.graphics.drawscope.clipRect
++import androidx.compose.ui.graphics.graphicsLayer
++import androidx.compose.ui.hapticfeedback.HapticFeedbackType
++import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
++import androidx.compose.ui.input.pointer.pointerInput
++import androidx.compose.ui.platform.LocalHapticFeedback
++import androidx.compose.ui.platform.LocalLayoutDirection
++import androidx.compose.ui.semantics.Role
++import androidx.compose.ui.semantics.contentDescription
++import androidx.compose.ui.semantics.semantics
++import androidx.compose.ui.unit.Dp
++import androidx.compose.ui.unit.LayoutDirection
++import androidx.compose.ui.unit.dp
++import com.nuvio.app.core.ui.NuvioTokens
++import com.nuvio.app.core.ui.nuvio
++import com.nuvio.app.features.tracking.TRACKING_RATING_MAX
++import com.nuvio.app.features.tracking.TRACKING_RATING_MIN
++import kotlin.math.PI
++import kotlin.math.cos
++import kotlin.math.sin
++import kotlinx.coroutines.coroutineScope
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.launch
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.user_rating_action_rate
++import nuvio.composeapp.generated.resources.user_rating_action_rated
++import nuvio.composeapp.generated.resources.user_rating_value
++import org.jetbrains.compose.resources.stringResource
++
++internal const val USER_RATING_STAR_COUNT = 5
++private const val SPARK_COUNT = 7
++
++/** Maps a 1–10 rating onto star [index] as 0, 0.5 or 1. */
++internal fun userRatingStarFill(rating: Int?, index: Int): Float {
++    val halfSteps = rating?.coerceIn(0, USER_RATING_STAR_COUNT * 2) ?: 0
++    return when {
++        halfSteps >= (index + 1) * 2 -> 1f
++        halfSteps == index * 2 + 1 -> 0.5f
++        else -> 0f
++    }
++}
++
++/**
++ * The viewer's own 1–10 rating drawn as five stars in half-star steps (10 → 5, 9 → 4.5).
++ * Unrated shows five outlined stars. The whole row is one tap target that opens the rating popup.
++ *
++ * Empty stars idle-wave and give a one-shot “look at me” nudge. After a rating is saved they
++ * fill left-to-right with a staggered spring, glow, tilt pop and spark burst.
++ */
++@Composable
++fun UserRatingStars(
++    rating: Int?,
++    onClick: () -> Unit,
++    modifier: Modifier = Modifier,
++    starSize: Dp = 30.dp,
++) {
++    val accent = MaterialTheme.nuvio.colors.accent
++    val outline = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
++    val description = rating?.let { stringResource(Res.string.user_rating_action_rated, it) }
++        ?: stringResource(Res.string.user_rating_action_rate)
++    val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
++    val interactionSource = remember { MutableInteractionSource() }
++    val pressed by interactionSource.collectIsPressedAsState()
++    val pressScale by animateFloatAsState(
++        targetValue = if (pressed) 0.94f else 1f,
++        animationSpec = spring(dampingRatio = 0.72f, stiffness = 700f),
++        label = "user_rating_press_scale",
++    )
++    var hintGeneration by remember { mutableIntStateOf(0) }
++    LaunchedEffect(rating) {
++        if (rating != null) return@LaunchedEffect
++        delay(480)
++        hintGeneration++
++    }
++
++    Row(
++        modifier = modifier
++            .graphicsLayer {
++                scaleX = pressScale
++                scaleY = pressScale
++            }
++            .clickable(
++                interactionSource = interactionSource,
++                indication = LocalIndication.current,
++                role = Role.Button,
++                onClick = onClick,
++            )
++            .semantics(mergeDescendants = true) { contentDescription = description }
++            .padding(horizontal = 12.dp, vertical = 6.dp),
++        horizontalArrangement = Arrangement.spacedBy(6.dp),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        for (index in 0 until USER_RATING_STAR_COUNT) {
++            RatingStar(
++                fill = userRatingStarFill(rating, index),
++                size = starSize,
++                accent = accent,
++                outline = outline,
++                isRtl = isRtl,
++                index = index,
++                idleTwinkle = rating == null,
++                animateFillChanges = true,
++                staggerFill = true,
++                hintGeneration = hintGeneration,
++            )
++        }
++    }
++}
++
++/**
++ * Interactive 5-star control for the rating sheet. Drag or tap (including half-stars)
++ * to pick 1–10. Filled stars pop with a spring and spark burst; [onPreview] reports the
++ * in-progress value so the headline can track the finger.
++ */
++@Composable
++fun UserRatingStarPicker(
++    selected: Int?,
++    enabled: Boolean,
++    onSelect: (Int) -> Unit,
++    modifier: Modifier = Modifier,
++    starSize: Dp = 44.dp,
++    onPreview: (Int?) -> Unit = {},
++) {
++    val accent = MaterialTheme.nuvio.colors.accent
++    val outline = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
++    val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
++    val haptic = LocalHapticFeedback.current
++    val description = selected?.let { stringResource(Res.string.user_rating_value, it) }
++        ?: stringResource(Res.string.user_rating_action_rate)
++    var hoverRating by remember { mutableStateOf<Int?>(null) }
++    val displayed = hoverRating ?: selected
++    val onSelectState = rememberUpdatedState(onSelect)
++    val onPreviewState = rememberUpdatedState(onPreview)
++    var lastHapticRating by remember { mutableIntStateOf(selected ?: 0) }
++
++    LaunchedEffect(displayed) {
++        val step = displayed ?: return@LaunchedEffect
++        if (step != lastHapticRating) {
++            lastHapticRating = step
++            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
++        }
++    }
++
++    Row(
++        modifier = modifier
++            .semantics(mergeDescendants = true) { contentDescription = description }
++            .pointerInput(enabled, isRtl) {
++                if (!enabled) return@pointerInput
++                awaitEachGesture {
++                    val down = awaitFirstDown(requireUnconsumed = false)
++                    val width = size.width.toFloat().coerceAtLeast(1f)
++                    fun ratingAt(x: Float): Int {
++                        val nx = if (isRtl) width - x else x
++                        val t = (nx / width).coerceIn(0f, 0.999f)
++                        return ((t * TRACKING_RATING_MAX).toInt() + TRACKING_RATING_MIN)
++                            .coerceIn(TRACKING_RATING_MIN, TRACKING_RATING_MAX)
++                    }
++                    var current = ratingAt(down.position.x)
++                    hoverRating = current
++                    onPreviewState.value(current)
++                    while (true) {
++                        val event = awaitPointerEvent()
++                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
++                        if (change.previousPosition != change.position) {
++                            current = ratingAt(change.position.x)
++                            hoverRating = current
++                            onPreviewState.value(current)
++                            change.consume()
++                        }
++                        if (change.changedToUpIgnoreConsumed()) {
++                            onSelectState.value(current)
++                            hoverRating = null
++                            break
++                        }
++                        if (!change.pressed) {
++                            hoverRating = null
++                            onPreviewState.value(null)
++                            break
++                        }
++                    }
++                }
++            },
++        horizontalArrangement = Arrangement.spacedBy(8.dp),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        for (index in 0 until USER_RATING_STAR_COUNT) {
++            RatingStar(
++                fill = userRatingStarFill(displayed, index),
++                size = starSize,
++                accent = accent,
++                outline = outline,
++                isRtl = isRtl,
++                index = index,
++                idleTwinkle = displayed == null,
++                animateFillChanges = true,
++                staggerFill = false,
++                popOnFill = true,
++                enterStagger = true,
++            )
++        }
++    }
++}
++
++@Composable
++private fun RatingStar(
++    fill: Float,
++    size: Dp,
++    accent: Color,
++    outline: Color,
++    isRtl: Boolean,
++    index: Int,
++    idleTwinkle: Boolean,
++    animateFillChanges: Boolean,
++    staggerFill: Boolean = false,
++    popOnFill: Boolean = true,
++    enterStagger: Boolean = false,
++    hintGeneration: Int = 0,
++) {
++    val fillAnim = remember { Animatable(fill) }
++    val scale = remember { Animatable(if (enterStagger) 0.52f else 1f) }
++    val rotation = remember { Animatable(0f) }
++    val enter = remember { Animatable(if (enterStagger) 0f else 1f) }
++    val burst = remember { Animatable(0f) }
++    val twinkle = remember { Animatable(0f) }
++    var initialized by remember { mutableStateOf(false) }
++
++    LaunchedEffect(enterStagger) {
++        if (!enterStagger) return@LaunchedEffect
++        delay(index * 42L)
++        coroutineScope {
++            launch {
++                enter.animateTo(
++                    1f,
++                    spring(dampingRatio = 0.68f, stiffness = Spring.StiffnessMediumLow),
++                )
++            }
++            launch {
++                scale.animateTo(1f, spring(dampingRatio = 0.52f, stiffness = 380f))
++            }
++        }
++    }
++
++    LaunchedEffect(hintGeneration) {
++        if (hintGeneration == 0 || fill > 0.04f) return@LaunchedEffect
++        delay(index * 70L)
++        scale.animateTo(1.18f, spring(dampingRatio = 0.48f, stiffness = 520f))
++        scale.animateTo(1f, spring(dampingRatio = 0.62f, stiffness = 380f))
++    }
++
++    LaunchedEffect(fill, animateFillChanges, staggerFill) {
++        if (!animateFillChanges || !initialized) {
++            fillAnim.snapTo(fill)
++            initialized = true
++            return@LaunchedEffect
++        }
++        val previous = fillAnim.value
++        if (staggerFill) delay(index * 52L)
++        coroutineScope {
++            launch {
++                fillAnim.animateTo(
++                    fill,
++                    tween(
++                        durationMillis = 180,
++                        easing = NuvioTokens.Motion.standard,
++                    ),
++                )
++            }
++            if (popOnFill && fill > previous + 0.05f) {
++                launch {
++                    scale.snapTo(0.68f)
++                    scale.animateTo(1f, spring(dampingRatio = 0.38f, stiffness = 560f))
++                }
++                launch {
++                    rotation.snapTo(if (index % 2 == 0) -10f else 10f)
++                    rotation.animateTo(0f, spring(dampingRatio = 0.48f, stiffness = 420f))
++                }
++                launch {
++                    burst.snapTo(0f)
++                    burst.animateTo(1f, tween(durationMillis = 540, easing = NuvioTokens.Motion.standard))
++                }
++            }
++        }
++    }
++
++    LaunchedEffect(idleTwinkle) {
++        if (!idleTwinkle) {
++            twinkle.snapTo(0f)
++            return@LaunchedEffect
++        }
++        while (true) {
++            twinkle.animateTo(1f, tween(durationMillis = 2600, easing = LinearEasing))
++            twinkle.snapTo(0f)
++        }
++    }
++
++    val glow = fillAnim.value
++    val wave = (sin((twinkle.value * 2.0 * PI) - index * 0.85).toFloat() * 0.5f + 0.5f)
++        .coerceIn(0f, 1f)
++    val idleScale = if (idleTwinkle && glow <= 0.04f) 1f + 0.08f * wave else 1f
++    val outlineAlpha = if (idleTwinkle && glow <= 0.04f) 0.55f + 0.45f * wave else 1f
++
++    Box(
++        modifier = Modifier
++            .size(size)
++            .graphicsLayer {
++                val pop = scale.value * idleScale
++                scaleX = pop
++                scaleY = pop
++                rotationZ = rotation.value
++                alpha = enter.value
++                translationY = (1f - enter.value) * 12f
++            }
++            .drawBehind {
++                val px = size.toPx()
++                if (glow > 0.04f) {
++                    drawCircle(
++                        brush = Brush.radialGradient(
++                            colors = listOf(
++                                accent.copy(alpha = 0.48f * glow),
++                                accent.copy(alpha = 0.12f * glow),
++                                Color.Transparent,
++                            ),
++                        ),
++                        radius = px * 0.82f,
++                    )
++                }
++                val t = burst.value
++                if (t in 0.001f..0.999f) {
++                    val center = Offset(this.size.width / 2f, this.size.height / 2f)
++                    for (i in 0 until SPARK_COUNT) {
++                        val ang = (i / SPARK_COUNT.toFloat()) * (2f * PI.toFloat()) + 0.42f
++                        val dist = px * (0.18f + t * 0.62f)
++                        drawCircle(
++                            color = accent.copy(alpha = (1f - t) * 0.95f),
++                            radius = (px * 0.07f * (1f - t)).coerceAtLeast(0.8f),
++                            center = Offset(
++                                center.x + cos(ang) * dist,
++                                center.y + sin(ang) * dist,
++                            ),
++                        )
++                    }
++                }
++            },
++        contentAlignment = Alignment.Center,
++    ) {
++        Icon(
++            imageVector = Icons.Rounded.StarBorder,
++            contentDescription = null,
++            tint = if (glow > 0.04f) accent else outline.copy(alpha = outline.alpha * outlineAlpha),
++            modifier = Modifier.size(size),
++        )
++        if (glow > 0.01f) {
++            Icon(
++                imageVector = Icons.Rounded.Star,
++                contentDescription = null,
++                tint = accent,
++                modifier = Modifier
++                    .size(size)
++                    .drawWithContent {
++                        val visibleWidth = this.size.width * glow.coerceIn(0f, 1f)
++                        val left = if (isRtl) this.size.width - visibleWidth else 0f
++                        clipRect(left = left, right = left + visibleWidth) {
++                            this@drawWithContent.drawContent()
++                        }
++                    },
++            )
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/ratings/UserRatingTargets.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/ratings/UserRatingTargets.kt
+new file mode 100644
+index 00000000..b95f1692
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/ratings/UserRatingTargets.kt
+@@ -0,0 +1,80 @@
++package com.nuvio.app.features.ratings
++
++import com.nuvio.app.features.details.MetaDetails
++import com.nuvio.app.features.details.MetaVideo
++import com.nuvio.app.features.tracking.TrackingExternalIds
++import com.nuvio.app.features.tracking.TrackingMediaKind
++import com.nuvio.app.features.tracking.TrackingMediaReference
++import com.nuvio.app.features.tracking.TrackingRatingScope
++import com.nuvio.app.features.tracking.TrackingRatingTarget
++import com.nuvio.app.features.tracking.buildTrackingMediaReference
++
++private fun MetaDetails.mediaReference(video: MetaVideo? = null): TrackingMediaReference {
++    val reference = buildTrackingMediaReference(
++        contentType = type,
++        parentMetaId = id,
++        videoId = video?.id,
++        title = name,
++        releaseInfo = releaseInfo,
++        seasonNumber = video?.season,
++        episodeNumber = video?.episode,
++        episodeTitle = video?.title,
++    )
++    val imdb = imdbId?.trim()?.takeIf { it.startsWith("tt", ignoreCase = true) }
++    return if (imdb == null) reference else reference.copy(ids = reference.ids.mergeMissing(TrackingExternalIds(imdb = imdb)))
++}
++
++/** The movie itself, or the whole show. */
++fun MetaDetails.userRatingTarget(): TrackingRatingTarget {
++    val media = mediaReference()
++    return media.toRatingTarget(
++        scope = if (media.kind == TrackingMediaKind.MOVIE) TrackingRatingScope.MOVIE else TrackingRatingScope.SHOW,
++    )
++}
++
++fun MetaDetails.seasonUserRatingTarget(season: Int): TrackingRatingTarget =
++    mediaReference().toRatingTarget(scope = TrackingRatingScope.SEASON, season = season)
++
++fun MetaDetails.episodeUserRatingTarget(video: MetaVideo): TrackingRatingTarget? {
++    val season = video.season ?: return null
++    val episode = video.episode ?: return null
++    return mediaReference(video).toRatingTarget(
++        scope = TrackingRatingScope.EPISODE,
++        season = season,
++        episode = episode,
++        episodeTitle = video.title,
++    )
++}
++
++/** Target for whatever [this] media reference points at (an episode when it carries one). */
++fun TrackingMediaReference.toUserRatingTarget(): TrackingRatingTarget? {
++    val episode = episode
++    return when {
++        kind == TrackingMediaKind.MOVIE -> toRatingTarget(TrackingRatingScope.MOVIE)
++        episode != null && episode.season != null -> toRatingTarget(
++            scope = TrackingRatingScope.EPISODE,
++            season = episode.season,
++            episode = episode.number,
++            episodeTitle = episode.title,
++        )
++        episode == null -> toRatingTarget(TrackingRatingScope.SHOW)
++        else -> null
++    }
++}
++
++private fun TrackingMediaReference.toRatingTarget(
++    scope: TrackingRatingScope,
++    season: Int? = null,
++    episode: Int? = null,
++    episodeTitle: String? = null,
++): TrackingRatingTarget = TrackingRatingTarget(
++    scope = scope,
++    kind = kind,
++    ids = ids,
++    title = title,
++    year = year,
++    season = season,
++    episode = episode,
++    episodeTitle = episodeTitle,
++    catalog = catalog,
++)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/ratings/UserRatingsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/ratings/UserRatingsRepository.kt
+new file mode 100644
+index 00000000..f42fa5f0
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/ratings/UserRatingsRepository.kt
+@@ -0,0 +1,322 @@
++package com.nuvio.app.features.ratings
++
++import co.touchlab.kermit.Logger
++import com.nuvio.app.core.tracking.ensureTrackingProvidersRegistered
++import com.nuvio.app.core.ui.NuvioToastController
++import com.nuvio.app.features.profiles.ProfileRepository
++import com.nuvio.app.features.tracking.TRACKING_RATING_MAX
++import com.nuvio.app.features.tracking.TRACKING_RATING_MIN
++import com.nuvio.app.features.tracking.TrackingProviderId
++import com.nuvio.app.features.tracking.TrackingProviderRegistry
++import com.nuvio.app.features.tracking.TrackingRatingProvider
++import com.nuvio.app.features.tracking.TrackingRatingRecord
++import com.nuvio.app.features.tracking.TrackingRatingScope
++import com.nuvio.app.features.tracking.TrackingRatingTarget
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.SupervisorJob
++import kotlinx.coroutines.async
++import kotlinx.coroutines.awaitAll
++import kotlinx.coroutines.coroutineScope
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import kotlinx.coroutines.flow.update
++import kotlinx.coroutines.launch
++import kotlinx.coroutines.sync.Mutex
++import kotlinx.coroutines.sync.withLock
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.user_rating_no_provider
++import nuvio.composeapp.generated.resources.user_rating_removed
++import nuvio.composeapp.generated.resources.user_rating_saved
++import nuvio.composeapp.generated.resources.user_rating_sync_failed
++import org.jetbrains.compose.resources.getString
++import kotlin.time.Clock
++
++/** The personal rating of one item across every connected provider that was asked. */
++data class UserRatingEntry(
++    /** A provider is present once its answer is known; a null value means "not rated". */
++    val byProvider: Map<TrackingProviderId, Int?> = emptyMap(),
++    val loadingProviders: Set<TrackingProviderId> = emptySet(),
++    val savingProviders: Set<TrackingProviderId> = emptySet(),
++    val failedProviders: Set<TrackingProviderId> = emptySet(),
++    /** Bumped on every local write so reads started earlier cannot overwrite it. */
++    val revision: Long = 0L,
++) {
++    val isLoading: Boolean get() = loadingProviders.isNotEmpty()
++    val isSaving: Boolean get() = savingProviders.isNotEmpty()
++
++    fun ratingFor(preferred: List<TrackingProviderId>): Int? =
++        preferred.firstNotNullOfOrNull { id -> byProvider[id] }
++            ?: byProvider.entries.sortedBy { it.key.ordinal }.firstNotNullOfOrNull { it.value }
++}
++
++data class UserRatingsUiState(
++    val entries: Map<String, UserRatingEntry> = emptyMap(),
++    val disabledProviders: Set<TrackingProviderId> = emptySet(),
++    val profileId: Int = -1,
++)
++
++/**
++ * Reads and writes personal 1–10 ratings through every connected tracking service that
++ * implements [TrackingRatingProvider]. Ratings are fetched per provider and scope as a full
++ * list (one request family per provider/scope) and cached briefly, so opening many episodes
++ * does not issue one request per item and edits made on other devices show up after [CACHE_TTL_MS].
++ */
++object UserRatingsRepository {
++    private val log = Logger.withTag("UserRatings")
++    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
++    private val _uiState = MutableStateFlow(UserRatingsUiState())
++    val uiState: StateFlow<UserRatingsUiState> = _uiState.asStateFlow()
++
++    private val cacheMutex = Mutex()
++    private val fetchLocks = mutableMapOf<String, Mutex>()
++    private val cache = mutableMapOf<String, CachedRatings>()
++    private val normalizedTargets = mutableMapOf<String, TrackingRatingTarget>()
++    private var writeSequence = 0L
++
++    private const val CACHE_TTL_MS = 5 * 60_000L
++    const val SHEET_REFRESH_AGE_MS = 30_000L
++
++    private data class CachedRatings(
++        val fetchedAtMs: Long,
++        val records: List<TrackingRatingRecord>,
++    )
++
++    // ── providers ───────────────────────────────────────────────────────
++
++    /** Connected providers able to rate [target], in provider order. */
++    fun providersFor(target: TrackingRatingTarget): List<TrackingProviderId> {
++        ensureRegistered()
++        syncProfile()
++        if (!target.isValid) return emptyList()
++        return TrackingProviderRegistry.connectedRatingProviders()
++            .filter { provider -> target.scope in provider.supportedScopes && provider.canRate(target) }
++            .map(TrackingRatingProvider::providerId)
++    }
++
++    /** Connected providers supporting [scope] at all (used to decide whether to show an entry). */
++    fun providersFor(scope: TrackingRatingScope): List<TrackingProviderId> {
++        ensureRegistered()
++        return TrackingProviderRegistry.connectedRatingProviders()
++            .filter { provider -> scope in provider.supportedScopes }
++            .map(TrackingRatingProvider::providerId)
++    }
++
++    fun enabledProvidersFor(target: TrackingRatingTarget): List<TrackingProviderId> {
++        syncProfile()
++        val disabled = _uiState.value.disabledProviders
++        return providersFor(target).filterNot { it in disabled }
++    }
++
++    fun setProviderEnabled(providerId: TrackingProviderId, enabled: Boolean) {
++        syncProfile()
++        val profileId = _uiState.value.profileId
++        val next = _uiState.value.disabledProviders.let { if (enabled) it - providerId else it + providerId }
++        _uiState.update { it.copy(disabledProviders = next) }
++        UserRatingsStorage.saveDisabledProviders(profileId, next.joinToString(",") { it.storageId })
++    }
++
++    fun entryKey(target: TrackingRatingTarget): String = "${ProfileRepository.activeProfileId}|${target.key}"
++
++    // ── reads ───────────────────────────────────────────────────────────
++
++    fun load(target: TrackingRatingTarget, maxAgeMs: Long = CACHE_TTL_MS) {
++        val providers = providersFor(target)
++        if (providers.isEmpty()) return
++        syncProfile()
++        val profileId = _uiState.value.profileId
++        val key = entryKey(target)
++        val startRevision = _uiState.value.entries[key]?.revision ?: 0L
++        updateEntry(key) { entry -> entry.copy(loadingProviders = entry.loadingProviders + providers) }
++        providers.forEach { providerId ->
++            scope.launch {
++                val provider = TrackingProviderRegistry.ratingProvider(providerId) ?: return@launch
++                val rating = runCatching {
++                    val normalized = normalized(provider, target)
++                    ratingsFor(provider, profileId, normalized.scope, maxAgeMs)
++                        .firstOrNull { record -> record.matches(normalized) }
++                        ?.rating
++                }
++                rating.exceptionOrNull()?.let { error ->
++                    if (error is CancellationException) throw error
++                    log.w { "Failed to read ${providerId.storageId} ratings: ${error.message}" }
++                }
++                updateEntry(key) { entry ->
++                    entry.copy(
++                        byProvider = if (rating.isSuccess && entry.revision == startRevision) {
++                            entry.byProvider + (providerId to rating.getOrNull())
++                        } else {
++                            entry.byProvider
++                        },
++                        loadingProviders = entry.loadingProviders - providerId,
++                    )
++                }
++            }
++        }
++    }
++
++    private suspend fun ratingsFor(
++        provider: TrackingRatingProvider,
++        profileId: Int,
++        ratingScope: TrackingRatingScope,
++        maxAgeMs: Long,
++    ): List<TrackingRatingRecord> {
++        val cacheKey = cacheKey(profileId, provider.providerId, ratingScope)
++        val lock = cacheMutex.withLock { fetchLocks.getOrPut(cacheKey) { Mutex() } }
++        return lock.withLock {
++            val now = nowMs()
++            val (cached, sequenceBefore) = cacheMutex.withLock { cache[cacheKey] to writeSequence }
++            if (cached != null && now - cached.fetchedAtMs <= maxAgeMs) return@withLock cached.records
++            val records = provider.fetchRatings(profileId, ratingScope)
++                .filter { it.rating in TRACKING_RATING_MIN..TRACKING_RATING_MAX }
++            cacheMutex.withLock {
++                // A write that landed mid-fetch makes this snapshot stale; keep it out of the cache.
++                if (writeSequence == sequenceBefore) cache[cacheKey] = CachedRatings(nowMs(), records)
++            }
++            records
++        }
++    }
++
++    // ── writes ──────────────────────────────────────────────────────────
++
++    fun rate(target: TrackingRatingTarget, rating: Int) {
++        require(rating in TRACKING_RATING_MIN..TRACKING_RATING_MAX) { "Rating must be 1..10" }
++        write(target, rating)
++    }
++
++    fun remove(target: TrackingRatingTarget) = write(target, null)
++
++    private fun write(target: TrackingRatingTarget, rating: Int?) {
++        val providers = enabledProvidersFor(target)
++        if (providers.isEmpty()) {
++            scope.launch { NuvioToastController.show(getString(Res.string.user_rating_no_provider)) }
++            return
++        }
++        val profileId = _uiState.value.profileId
++        val key = entryKey(target)
++        val previous = _uiState.value.entries[key]?.byProvider.orEmpty()
++        updateEntry(key) { entry ->
++            entry.copy(
++                byProvider = entry.byProvider + providers.associateWith { rating },
++                savingProviders = entry.savingProviders + providers,
++                failedProviders = entry.failedProviders - providers.toSet(),
++                revision = entry.revision + 1,
++            )
++        }
++        scope.launch {
++            val outcomes = coroutineScope {
++                providers.map { providerId ->
++                    async {
++                        providerId to runCatching {
++                            val provider = TrackingProviderRegistry.ratingProvider(providerId)
++                                ?: error("Provider not registered")
++                            val normalized = normalized(provider, target)
++                            if (rating == null) {
++                                provider.removeRating(profileId, normalized)
++                            } else {
++                                provider.setRating(profileId, normalized, rating)
++                            }
++                            updateCachedRecord(profileId, providerId, normalized, rating)
++                        }.onFailure { error ->
++                            if (error is CancellationException) throw error
++                            log.w { "Failed to write ${providerId.storageId} rating: ${error.message}" }
++                        }.isSuccess
++                    }
++                }.awaitAll()
++            }
++            val succeeded = outcomes.filter { it.second }.map { it.first }
++            val failed = outcomes.filterNot { it.second }.map { it.first }
++            updateEntry(key) { entry ->
++                entry.copy(
++                    byProvider = entry.byProvider + failed.associateWith { previous[it] },
++                    savingProviders = entry.savingProviders - providers.toSet(),
++                    failedProviders = entry.failedProviders + failed,
++                )
++            }
++            if (succeeded.isNotEmpty()) {
++                val names = succeeded.joinToString(", ") { it.displayName }
++                NuvioToastController.show(
++                    if (rating == null) {
++                        getString(Res.string.user_rating_removed, names)
++                    } else {
++                        getString(Res.string.user_rating_saved, rating, names)
++                    },
++                )
++            }
++            if (failed.isNotEmpty()) {
++                NuvioToastController.show(
++                    getString(Res.string.user_rating_sync_failed, failed.joinToString(", ") { it.displayName }),
++                    durationMillis = 4000L,
++                )
++            }
++        }
++    }
++
++    private suspend fun updateCachedRecord(
++        profileId: Int,
++        providerId: TrackingProviderId,
++        target: TrackingRatingTarget,
++        rating: Int?,
++    ) = cacheMutex.withLock {
++        writeSequence += 1
++        val cacheKey = cacheKey(profileId, providerId, target.scope)
++        val cached = cache[cacheKey] ?: return@withLock
++        val remaining = cached.records.filterNot { it.matches(target) }
++        val next = if (rating == null) {
++            remaining
++        } else {
++            remaining + TrackingRatingRecord(target.scope, target.ids, rating, target.season, target.episode)
++        }
++        cache[cacheKey] = cached.copy(records = next)
++    }
++
++    // ── helpers ─────────────────────────────────────────────────────────
++
++    private var registered = false
++
++    private fun ensureRegistered() {
++        if (registered) return
++        ensureTrackingProvidersRegistered()
++        registered = true
++    }
++
++    private suspend fun normalized(
++        provider: TrackingRatingProvider,
++        target: TrackingRatingTarget,
++    ): TrackingRatingTarget {
++        val key = "${provider.providerId.storageId}|${target.key}"
++        cacheMutex.withLock { normalizedTargets[key] }?.let { return it }
++        val result = runCatching { provider.normalize(target) }
++            .onFailure { if (it is CancellationException) throw it }
++            .getOrDefault(target)
++        cacheMutex.withLock { normalizedTargets[key] = result }
++        return result
++    }
++
++    private fun updateEntry(key: String, transform: (UserRatingEntry) -> UserRatingEntry) {
++        _uiState.update { state ->
++            state.copy(entries = state.entries + (key to transform(state.entries[key] ?: UserRatingEntry())))
++        }
++    }
++
++    private fun syncProfile() {
++        val profileId = ProfileRepository.activeProfileId
++        if (_uiState.value.profileId == profileId) return
++        val disabled = UserRatingsStorage.loadDisabledProviders(profileId)
++            .orEmpty()
++            .split(',')
++            .mapNotNull(TrackingProviderId::fromStorage)
++            .toSet()
++        _uiState.update { it.copy(profileId = profileId, disabledProviders = disabled) }
++    }
++
++    /** Includes the account generation so reconnecting a different account never reuses stale ratings. */
++    private fun cacheKey(profileId: Int, providerId: TrackingProviderId, scope: TrackingRatingScope): String {
++        val generation = TrackingProviderRegistry.authProvider(providerId)?.accountGeneration ?: 0L
++        return "$profileId|${providerId.storageId}|$generation|${scope.name}"
++    }
++
++    private fun nowMs(): Long = Clock.System.now().toEpochMilliseconds()
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/ratings/UserRatingsStorage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/ratings/UserRatingsStorage.kt
+new file mode 100644
+index 00000000..42cd67a9
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/ratings/UserRatingsStorage.kt
+@@ -0,0 +1,10 @@
++package com.nuvio.app.features.ratings
++
++/**
++ * Device-local rating preferences. Kept out of the profile sync payload on purpose so the
++ * shared sync server never receives a field Nuvio Official does not understand.
++ */
++internal expect object UserRatingsStorage {
++    fun loadDisabledProviders(profileId: Int): String?
++    fun saveDisabledProviders(profileId: Int, value: String)
++}
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/ratings/UserRatingsStorage.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/ratings/UserRatingsStorage.ios.kt
+new file mode 100644
+index 00000000..7d06fc93
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/ratings/UserRatingsStorage.ios.kt
+@@ -0,0 +1,14 @@
++package com.nuvio.app.features.ratings
++
++import platform.Foundation.NSUserDefaults
++
++internal actual object UserRatingsStorage {
++    private fun key(profileId: Int) = "user_ratings_disabled_providers_$profileId"
++
++    actual fun loadDisabledProviders(profileId: Int): String? =
++        NSUserDefaults.standardUserDefaults.stringForKey(key(profileId))
++
++    actual fun saveDisabledProviders(profileId: Int, value: String) {
++        NSUserDefaults.standardUserDefaults.setObject(value, forKey = key(profileId))
++    }
++}

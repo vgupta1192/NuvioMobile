@@ -1,0 +1,477 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerPlatformEffects.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerPlatformEffects.android.kt
+index e0cadb85..17b8a3c3 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerPlatformEffects.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerPlatformEffects.android.kt
+@@ -12,6 +12,7 @@ import android.view.WindowManager
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.DisposableEffect
+ import androidx.compose.runtime.SideEffect
++import androidx.compose.runtime.collectAsState
+ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.mutableStateOf
+ import androidx.compose.runtime.remember
+@@ -33,15 +34,26 @@ import kotlin.math.roundToInt
+ actual fun LockPlayerToLandscape() {
+     val activity = LocalContext.current.findActivity() ?: return
+     if (!activity.shouldForceLandscapePlayer()) return
++    val portrait = PlayerOrientationPreference.portrait.collectAsState().value
++    val target = if (portrait) {
++        ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
++    } else {
++        ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
++    }
+ 
+     DisposableEffect(activity) {
+         val previousOrientation = activity.requestedOrientation
+-        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
++        PlayerOrientationPreference.setToggleSupported(true)
+ 
+         onDispose {
+             activity.requestedOrientation = previousOrientation
++            PlayerOrientationPreference.setToggleSupported(false)
++            PlayerOrientationPreference.reset()
+         }
+     }
++    SideEffect {
++        if (activity.requestedOrientation != target) activity.requestedOrientation = target
++    }
+ }
+ 
+ @Composable
+diff --git a/composeApp/src/commonMain/composeResources/values/strings_cast.xml b/composeApp/src/commonMain/composeResources/values/strings_cast.xml
+index 9333a943..d0bd2b70 100644
+--- a/composeApp/src/commonMain/composeResources/values/strings_cast.xml
++++ b/composeApp/src/commonMain/composeResources/values/strings_cast.xml
+@@ -2,6 +2,6 @@
+ <resources>
+     <string name="player_cast">Cast</string>
+     <string name="player_cast_casting_to">Casting to %1$s</string>
+-    <string name="player_cast_stream_unsupported">This stream can\'t be cast, so it keeps playing on this device.</string>
+-    <string name="player_cast_playback_failed">The Cast device couldn\'t play this stream. Playback continues on this device.</string>
++    <string name="player_cast_stream_unsupported">This stream can't be cast, so it keeps playing on this device.</string>
++    <string name="player_cast_playback_failed">The Cast device couldn't play this stream. Playback continues on this device.</string>
+ </resources>
+diff --git a/composeApp/src/commonMain/composeResources/values/strings_player_extras.xml b/composeApp/src/commonMain/composeResources/values/strings_player_extras.xml
+new file mode 100644
+index 00000000..0e60f523
+--- /dev/null
++++ b/composeApp/src/commonMain/composeResources/values/strings_player_extras.xml
+@@ -0,0 +1,9 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <string name="player_action_rotate_portrait">Watch in portrait</string>
++    <string name="player_action_rotate_landscape">Watch in landscape</string>
++    <string name="player_action_quality">Quality</string>
++    <string name="player_action_mini_player">Mini player</string>
++    <string name="player_action_rate">Rate</string>
++    <string name="player_action_rated">Rated %1$d</string>
++</resources>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AudioTrackModal.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AudioTrackModal.kt
+index 4806c9f7..08b12032 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AudioTrackModal.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AudioTrackModal.kt
+@@ -155,7 +155,7 @@ fun AudioTrackModal(
+ }
+ 
+ @Composable
+-private fun QualityRow(label: String, isSelected: Boolean, onClick: () -> Unit) {
++internal fun QualityRow(label: String, isSelected: Boolean, onClick: () -> Unit) {
+     val tokens = MaterialTheme.nuvio
+     Row(
+         modifier = Modifier
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
+index 1ce62d66..7dd9a21e 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
+@@ -18,6 +18,14 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
+ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+ import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+ import androidx.compose.material.icons.rounded.Build
++import androidx.compose.material.icons.rounded.Cast
++import androidx.compose.material.icons.rounded.CastConnected
++import androidx.compose.material.icons.rounded.HighQuality
++import androidx.compose.material.icons.rounded.PictureInPicture
++import androidx.compose.material.icons.rounded.Star
++import androidx.compose.material.icons.rounded.StarBorder
++import androidx.compose.material.icons.rounded.StayCurrentLandscape
++import androidx.compose.material.icons.rounded.StayCurrentPortrait
+ import androidx.compose.material.icons.rounded.Flag
+ import androidx.compose.material.icons.rounded.Groups
+ import androidx.compose.material.icons.rounded.Info
+@@ -64,9 +72,38 @@ internal fun PlayerToolbar(
+     onPartyClick: (() -> Unit)? = null,
+     partyActive: Boolean = false,
+     onSwitchEngineClick: (() -> Unit)? = null,
++    onCastClick: (() -> Unit)? = null,
++    castActive: Boolean = false,
++    onOrientationToggleClick: (() -> Unit)? = null,
++    isPortraitPlayback: Boolean = false,
++    onMiniPlayerClick: (() -> Unit)? = null,
+ ) {
+     Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+         Spacer(Modifier.weight(1f))
++        if (onCastClick != null) {
++            PlayerAction(
++                description = stringResource(Res.string.player_cast),
++                icon = if (castActive) Icons.Rounded.CastConnected else Icons.Rounded.Cast,
++                onClick = onCastClick,
++                tint = if (castActive) MaterialTheme.colorScheme.primary else Color.White,
++            )
++        }
++        if (onOrientationToggleClick != null) {
++            PlayerAction(
++                description = stringResource(
++                    if (isPortraitPlayback) Res.string.player_action_rotate_landscape else Res.string.player_action_rotate_portrait,
++                ),
++                icon = if (isPortraitPlayback) Icons.Rounded.StayCurrentLandscape else Icons.Rounded.StayCurrentPortrait,
++                onClick = onOrientationToggleClick,
++            )
++        }
++        if (onMiniPlayerClick != null) {
++            PlayerAction(
++                description = stringResource(Res.string.player_action_mini_player),
++                icon = Icons.Rounded.PictureInPicture,
++                onClick = onMiniPlayerClick,
++            )
++        }
+         if (onSwitchEngineClick != null) {
+             PlayerAction(
+                 description = stringResource(Res.string.cd_switch_player_engine),
+@@ -120,6 +157,9 @@ internal fun PlayerControlActions(
+     onStreamInfoClick: () -> Unit,
+     onSubmitIntroClick: (() -> Unit)?,
+     onInteraction: () -> Unit,
++    onQualityClick: (() -> Unit)? = null,
++    onRateClick: (() -> Unit)? = null,
++    userRating: Int? = null,
+ ) {
+     val actions = listOfNotNull(
+         onNextEpisodeClick?.let {
+@@ -148,6 +188,20 @@ internal fun PlayerControlActions(
+                 painter = appIconPainter(AppIconResource.PlayerEpisodes),
+             )
+         },
++        onQualityClick?.let {
++            PlayerControlAction(
++                stringResource(Res.string.player_action_quality), it,
++                icon = Icons.Rounded.HighQuality,
++            )
++        },
++        onRateClick?.let {
++            PlayerControlAction(
++                userRating?.let { rating -> stringResource(Res.string.player_action_rated, rating) }
++                    ?: stringResource(Res.string.player_action_rate),
++                it,
++                icon = if (userRating != null) Icons.Rounded.Star else Icons.Rounded.StarBorder,
++            )
++        },
+         PlayerControlAction(
+             "${stringResource(Res.string.compose_player_speed)} ${formatPlaybackSpeedLabel(playbackSnapshot.playbackSpeed)}",
+             onSpeedClick, icon = Icons.Rounded.Speed,
+@@ -179,7 +233,8 @@ internal fun PlayerControlActions(
+             )
+         },
+     )
+-    val hasOverflow = actions.size > 5
++    val visibleCount = 7
++    val hasOverflow = actions.size > visibleCount
+     var expanded by remember(hasOverflow) { mutableStateOf(false) }
+     val scrollState = rememberScrollState()
+     val startOffset = if (onNextEpisodeClick != null) (-13).dp else (-12).dp
+@@ -196,7 +251,7 @@ internal fun PlayerControlActions(
+                 modifier = Modifier.weight(1f).offset(x = startOffset).horizontalScroll(scrollState),
+                 verticalAlignment = Alignment.CenterVertically,
+             ) {
+-                actions.take(if (expanded) actions.size else 5).forEach { action ->
++                actions.take(if (expanded) actions.size else visibleCount).forEach { action ->
+                     PlayerAction(
+                         description = action.description,
+                         onClick = {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+index 2c949925..25882cf4 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+@@ -118,6 +118,14 @@ internal fun PlayerControlsShell(
+     onOpenInExternalPlayer: (() -> Unit)? = null,
+     onSubmitIntroClick: (() -> Unit)? = null,
+     onSwitchEngineClick: (() -> Unit)? = null,
++    onCastClick: (() -> Unit)? = null,
++    castActive: Boolean = false,
++    onOrientationToggleClick: (() -> Unit)? = null,
++    isPortraitPlayback: Boolean = false,
++    onMiniPlayerClick: (() -> Unit)? = null,
++    onQualityClick: (() -> Unit)? = null,
++    onRateClick: (() -> Unit)? = null,
++    userRating: Int? = null,
+     onStreamInfoClick: () -> Unit = {},
+     parentalWarnings: List<ParentalWarning> = emptyList(),
+     showParentalGuide: Boolean = false,
+@@ -211,6 +219,11 @@ internal fun PlayerControlsShell(
+                         onPartyClick = onPartyClick,
+                         partyActive = partyActive,
+                         onSwitchEngineClick = onSwitchEngineClick,
++                        onCastClick = onCastClick,
++                        castActive = castActive,
++                        onOrientationToggleClick = onOrientationToggleClick,
++                        isPortraitPlayback = isPortraitPlayback,
++                        onMiniPlayerClick = onMiniPlayerClick,
+                         modifier = Modifier
+                             .align(Alignment.TopEnd)
+                             .windowInsetsPadding(WindowInsets.safeContent.only(WindowInsetsSides.Top))
+@@ -327,6 +340,9 @@ internal fun PlayerControlsShell(
+                         onStreamInfoClick = onStreamInfoClick,
+                         onSubmitIntroClick = onSubmitIntroClick,
+                         onInteraction = onInteraction,
++                        onQualityClick = onQualityClick,
++                        onRateClick = onRateClick,
++                        userRating = userRating,
+                     )
+                 }
+             }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerPlatformEffects.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerPlatformEffects.kt
+index 6c2dba53..e2bebdf3 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerPlatformEffects.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerPlatformEffects.kt
+@@ -4,6 +4,9 @@ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.DisposableEffect
+ import androidx.compose.runtime.remember
+ import androidx.compose.ui.unit.IntSize
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
+ 
+ interface PlayerGestureController {
+     fun currentBrightness(): Float?
+@@ -17,6 +20,27 @@ data class PlayerAudioLevel(
+     val isMuted: Boolean,
+ )
+ 
++/** Player rotation chosen with the toolbar toggle (Android phones; the player is landscape by default). */
++object PlayerOrientationPreference {
++    private val _portrait = MutableStateFlow(false)
++    val portrait: StateFlow<Boolean> = _portrait.asStateFlow()
++
++    private val _toggleSupported = MutableStateFlow(false)
++    val toggleSupported: StateFlow<Boolean> = _toggleSupported.asStateFlow()
++
++    fun toggle() {
++        _portrait.value = !_portrait.value
++    }
++
++    internal fun setToggleSupported(supported: Boolean) {
++        _toggleSupported.value = supported
++    }
++
++    internal fun reset() {
++        _portrait.value = false
++    }
++}
++
+ @Composable
+ expect fun LockPlayerToLandscape()
+ 
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerQualityModal.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerQualityModal.kt
+new file mode 100644
+index 00000000..ede88c98
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerQualityModal.kt
+@@ -0,0 +1,97 @@
++package com.nuvio.app.features.player
++
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.BoxWithConstraints
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.PaddingValues
++import androidx.compose.foundation.layout.fillMaxHeight
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.heightIn
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.foundation.lazy.items
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.unit.dp
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.player_video_quality
++import nuvio.composeapp.generated.resources.player_video_quality_auto
++import org.jetbrains.compose.resources.stringResource
++
++/** Fork: pick an HLS/DASH video variant (or Auto) from the player's quality button. */
++@Composable
++internal fun VideoQualityModal(
++    visible: Boolean,
++    videoController: PlayerEngineController?,
++    onDismiss: () -> Unit,
++    modifier: Modifier = Modifier,
++) {
++    var qualities by remember(visible) {
++        mutableStateOf(if (visible) videoController?.getVideoQualities().orEmpty() else emptyList())
++    }
++    PlayerOverlayScaffold(
++        visible = visible,
++        onDismiss = onDismiss,
++        modifier = modifier,
++        contentPadding = PaddingValues(start = 44.dp, end = 44.dp, top = 28.dp, bottom = 64.dp),
++    ) {
++        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
++            val railWidth = minOf(maxWidth, 444.dp)
++            val railMaxHeight = (maxHeight - 64.dp).coerceAtLeast(120.dp).coerceAtMost(620.dp)
++            Column(
++                modifier = Modifier
++                    .width(railWidth)
++                    .fillMaxHeight()
++                    .align(Alignment.BottomStart),
++                verticalArrangement = Arrangement.Bottom,
++            ) {
++                Text(
++                    text = stringResource(Res.string.player_video_quality),
++                    color = Color.White,
++                    style = MaterialTheme.typography.headlineMedium,
++                    modifier = Modifier.padding(bottom = 8.dp),
++                )
++                val pinned = qualities.any { it.isSelected }
++                LazyColumn(
++                    modifier = Modifier.fillMaxWidth().heightIn(max = railMaxHeight),
++                    verticalArrangement = Arrangement.spacedBy(6.dp),
++                    contentPadding = PaddingValues(vertical = 8.dp),
++                ) {
++                    item(key = "auto") {
++                        QualityRow(
++                            label = stringResource(Res.string.player_video_quality_auto),
++                            isSelected = !pinned,
++                            onClick = {
++                                videoController?.selectVideoQuality(null)
++                                qualities = qualities.map { it.copy(isSelected = false) }
++                                onDismiss()
++                            },
++                        )
++                    }
++                    items(count = qualities.size) { index ->
++                        val option = qualities[index]
++                        QualityRow(
++                            label = option.label,
++                            isSelected = option.isSelected,
++                            onClick = {
++                                videoController?.selectVideoQuality(option.heightPx)
++                                qualities = qualities.map { it.copy(isSelected = it.heightPx == option.heightPx) }
++                                onDismiss()
++                            },
++                        )
++                    }
++                }
++            }
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt
+index 3805d6fb..299dd1be 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt
+@@ -24,6 +24,8 @@ internal fun PlayerScreenModalHosts(
+     selectedAudioIndex: Int,
+     onAudioTrackSelected: (Int) -> Unit,
+     onAudioModalDismissed: () -> Unit,
++    showQualityModal: Boolean = false,
++    onQualityModalDismissed: () -> Unit = {},
+     videoController: PlayerEngineController? = null,
+     castAvailable: Boolean = false,
+     castDeviceName: String? = null,
+@@ -128,6 +130,12 @@ internal fun PlayerScreenModalHosts(
+         castDeviceName = castDeviceName,
+     )
+ 
++    VideoQualityModal(
++        visible = showQualityModal,
++        videoController = videoController,
++        onDismiss = onQualityModalDismissed,
++    )
++
+     SubtitleModal(
+         visible = showSubtitleModal,
+         subtitleTracks = subtitleTracks,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
+index f7b1ce75..4d18f06e 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
+@@ -67,6 +67,7 @@ internal fun PlayerScreenRuntime.lockPlayerControls() {
+     liveGestureFeedback = null
+     renderedGestureFeedback = null
+     showAudioModal = false
++    showQualityModal = false
+     showSubtitleModal = false
+     showVideoSettingsModal = false
+     showStreamInfo = false
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
+index 9bdf568b..4a531d51 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
+@@ -199,6 +199,7 @@ internal class PlayerScreenRuntime(
+     var credentialRefreshAttemptedSourceUrl by mutableStateOf<String?>(null)
+ 
+     var showAudioModal by mutableStateOf(false)
++    var showQualityModal by mutableStateOf(false)
+     var showSubtitleModal by mutableStateOf(false)
+     var showVideoSettingsModal by mutableStateOf(false)
+     var showStreamInfo by mutableStateOf(false)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+index 6952e44e..0887a1fc 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+@@ -281,6 +281,11 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+     val partyState by PartyRepository.state.collectAsStateWithLifecycle()
+     val partyActive = partyState.party != null
+     val playerBadges = rememberPlayerBadges()
++    val orientationToggleSupported by PlayerOrientationPreference.toggleSupported.collectAsStateWithLifecycle()
++    val portraitPlayback by PlayerOrientationPreference.portrait.collectAsStateWithLifecycle()
++    val hasVideoQualities = remember(playerController, audioTracks, playbackSnapshot.durationMs) {
++        playerController?.getVideoQualities().orEmpty().size > 1
++    }
+     AnimatedVisibility(
+         visible = (controlsVisible || showParentalGuide) && !playerControlsLocked && !isInPip && !seekPreview.showSyncPanel,
+         enter = fadeIn(),
+@@ -395,6 +400,26 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+             } else {
+                 null
+             },
++            onCastClick = if (playbackSnapshot.castAvailable) {
++                { playerController?.showCastDialog() }
++            } else {
++                null
++            },
++            castActive = playbackSnapshot.castDeviceName != null,
++            onOrientationToggleClick = if (orientationToggleSupported) {
++                { PlayerOrientationPreference.toggle() }
++            } else {
++                null
++            },
++            isPortraitPlayback = portraitPlayback,
++            onQualityClick = if (hasVideoQualities) {
++                {
++                    refreshTracks()
++                    showQualityModal = true
++                }
++            } else {
++                null
++            },
+             onStreamInfoClick = { openStreamInfo() },
+             parentalWarnings = parentalWarnings,
+             showParentalGuide = showParentalGuide,
+@@ -540,6 +565,8 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
+             }
+         },
+         onAudioModalDismissed = { showAudioModal = false },
++        showQualityModal = showQualityModal,
++        onQualityModalDismissed = { showQualityModal = false },
+         videoController = playerController,
+         castAvailable = playbackSnapshot.castAvailable,
+         castDeviceName = playbackSnapshot.castDeviceName,

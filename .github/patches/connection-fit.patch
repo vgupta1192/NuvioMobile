@@ -1,5 +1,5 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
-index 56a52c8d..33736cd9 100644
+index f1056f69..cb375079 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 @@ -143,6 +143,7 @@ open class MainActivity : AppCompatActivity() {
@@ -98,10 +98,10 @@ index 00000000..ecc5e84c
 +    }
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index b9bdf694..1e39ac78 100644
+index bae7d727..11c7acab 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-@@ -310,6 +310,7 @@ private fun ExoPlayerSurface(
+@@ -315,6 +315,7 @@ private fun ExoPlayerSurface(
              sourceKey = sourceUrl,
          )
      }
@@ -109,7 +109,7 @@ index b9bdf694..1e39ac78 100644
      // AutoSync: the network side on its own, so AutoSync's own reads skip the VOD cache.
      val networkDataSourceFactory = remember(
          context,
-@@ -326,7 +327,7 @@ private fun ExoPlayerSurface(
+@@ -331,7 +332,7 @@ private fun ExoPlayerSurface(
              useYoutubeChunkedPlayback = useYoutubeChunkedPlayback,
              useLongReadTimeout = isLoopbackPlaybackSource(sourceUrl),
              externalSubtitles = externalSubtitles,
@@ -118,7 +118,7 @@ index b9bdf694..1e39ac78 100644
      }
      val dataSourceFactory = remember(
          context,
-@@ -517,6 +518,7 @@ private fun ExoPlayerSurface(
+@@ -522,6 +523,7 @@ private fun ExoPlayerSurface(
          onDispose { nowPlayingController.release() }
      }
      com.nuvio.app.features.player.volumeboost.ExoVolumeBoostEffect(exoPlayer) // Volume boost hook
@@ -126,15 +126,15 @@ index b9bdf694..1e39ac78 100644
  
      LaunchedEffect(exoPlayer, resolvedMediaItem, initialPositionRequestKey) {
          val mediaItem = resolvedMediaItem
-@@ -1183,6 +1185,7 @@ private fun LibmpvPlayerSurface(
-         sanitizePlaybackHeaders(sourceHeaders)
-     }
+@@ -1211,6 +1213,7 @@ private fun LibmpvPlayerSurface(
+         preferredSubtitleLanguage = preferredSubtitleLanguage,
+     )
      var playerViewRef by remember { mutableStateOf<NuvioLibmpvView?>(null) }
 +    MpvThroughputEffect(playerViewRef, sourceUrl) { playerViewRef?.networkActivity() } // Nuvio fork: connection-speed learning
      val nowPlayingController = remember(context, playerViewRef) {
          playerViewRef?.let { view ->
              AndroidPlayerNowPlayingController(
-@@ -1582,6 +1585,23 @@ private class NuvioLibmpvView(
+@@ -1626,6 +1629,23 @@ private class NuvioLibmpvView(
          }
      }
  
@@ -740,7 +740,7 @@ index 00000000..9d5df544
 +    return if (video != null || belongsToTitle) parseRuntimeMinutes(runtime) else null
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
-index ac3b4a2d..c4fa4dfb 100644
+index 58fd52c0..abb36422 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
 @@ -107,6 +107,13 @@ object StreamsRepository {
@@ -757,7 +757,7 @@ index ac3b4a2d..c4fa4dfb 100644
          val autoPlayMode = playerSettings.streamAutoPlayMode
          val isAutoPlayEnabled = !manualSelection && autoPlayMode != StreamAutoPlayMode.MANUAL &&
              !(autoPlayMode == StreamAutoPlayMode.REGEX_MATCH &&
-@@ -321,10 +328,11 @@ object StreamsRepository {
+@@ -362,10 +369,11 @@ object StreamsRepository {
                      groups = listOf(group),
                      rules = streamBadgeRules,
                  ).firstOrNull() ?: group
@@ -770,7 +770,7 @@ index ac3b4a2d..c4fa4dfb 100644
              }
  
              fun publishAddonGroup(group: AddonStreamGroup) {
-@@ -537,6 +545,7 @@ object StreamsRepository {
+@@ -578,6 +586,7 @@ object StreamsRepository {
                                              group.streams
                                          } else {
                                              (group.streams + completion.streams).sortedForGroupedDisplay()

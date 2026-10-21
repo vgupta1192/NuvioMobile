@@ -1,0 +1,740 @@
+diff --git a/composeApp/src/commonMain/composeResources/values/strings_player_extras.xml b/composeApp/src/commonMain/composeResources/values/strings_player_extras.xml
+index 0e60f523..ad41dd02 100644
+--- a/composeApp/src/commonMain/composeResources/values/strings_player_extras.xml
++++ b/composeApp/src/commonMain/composeResources/values/strings_player_extras.xml
+@@ -6,4 +6,10 @@
+     <string name="player_action_mini_player">Mini player</string>
+     <string name="player_action_rate">Rate</string>
+     <string name="player_action_rated">Rated %1$d</string>
++    <string name="settings_playback_mini_player">Mini Player</string>
++    <string name="settings_playback_mini_player_description">Shows the mini player button in the player so you can keep watching in a floating window while you browse.</string>
++    <string name="mini_player_play">Play</string>
++    <string name="mini_player_pause">Pause</string>
++    <string name="mini_player_close">Close mini player</string>
++    <string name="mini_player_expand">Open full screen player</string>
+ </resources>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+index 17f22596..13f28b59 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+@@ -153,7 +153,11 @@ import com.nuvio.app.features.player.PlayerLaunchStore
+ import com.nuvio.app.features.player.PlayerSettingsRepository
+ import com.nuvio.app.features.player.SubtitleLanguageOption
+ import com.nuvio.app.features.player.prepareExternalPlayerLaunch
++import com.nuvio.app.features.player.HostedPlayerRoutePlaceholder
+ import com.nuvio.app.features.player.LockPlayerToLandscape
++import com.nuvio.app.features.player.MiniPlayerController
++import com.nuvio.app.features.player.MiniPlayerHost
++import com.nuvio.app.features.player.MiniPlayerSetting
+ import com.nuvio.app.features.player.HidePlayerSystemBars
+ import com.nuvio.app.features.player.rememberExternalPlayerLauncher
+ import com.nuvio.app.features.profiles.ProfileRepository
+@@ -329,6 +333,10 @@ internal fun MainAppContent(
+         PlayerSettingsRepository.uiState
+     }.collectAsStateWithLifecycle()
+     var visiblePlayerEntries by remember { mutableIntStateOf(0) }
++    val miniPlayerEnabled by MiniPlayerSetting.state().collectAsStateWithLifecycle()
++    val miniPlayerHostEnabled = miniPlayerEnabled && !isIos && !playerSettingsUiState.externalPlayerEnabled
++    val topPlayerRoute = currentRoute as? PlayerRoute
++    val hostedPlayerRoute = MiniPlayerController.hostedRoute(topPlayerRoute, miniPlayerHostEnabled)
+     var streamLandscapeLoadingVisible by remember(currentRoute) { mutableStateOf(false) }
+     if (currentRoute is PlayerRoute || visiblePlayerEntries > 0 || streamLandscapeLoadingVisible) {
+         LockPlayerToLandscape()
+@@ -1664,17 +1672,27 @@ internal fun MainAppContent(
+                             onDispose { visiblePlayerEntries -= 1 }
+                         }
+                     }
+-                    PlayerDestination(
+-                        route = route,
+-                        navController = navController,
+-                        externalPlayerId = playerSettingsUiState.externalPlayerId,
+-                        externalPlayerNotConfiguredText = externalPlayerNotConfiguredText,
+-                        externalPlayerFailedText = externalPlayerFailedText,
+-                        onExternalPlayerLaunch = { launch -> lastExternalPlayerLaunch = launch },
+-                        launchExternalPlayer = launchExternalPlayer,
+-                        openExternalStreamUrl = ::openExternalStreamUrl,
+-                        onOpenPartyMedia = ::openPartyMedia,
+-                    )
++                    if (
++                        MiniPlayerController.isHostedRoute(
++                            route = route,
++                            topPlayerRoute = navController.currentRoute as? PlayerRoute,
++                            enabled = miniPlayerHostEnabled,
++                        )
++                    ) {
++                        HostedPlayerRoutePlaceholder(route)
++                    } else {
++                        PlayerDestination(
++                            route = route,
++                            navController = navController,
++                            externalPlayerId = playerSettingsUiState.externalPlayerId,
++                            externalPlayerNotConfiguredText = externalPlayerNotConfiguredText,
++                            externalPlayerFailedText = externalPlayerFailedText,
++                            onExternalPlayerLaunch = { launch -> lastExternalPlayerLaunch = launch },
++                            launchExternalPlayer = launchExternalPlayer,
++                            openExternalStreamUrl = ::openExternalStreamUrl,
++                            onOpenPartyMedia = ::openPartyMedia,
++                        )
++                    }
+                 }
+                 entry<CatalogRoute> { route ->
+                     CatalogDestination(
+@@ -1836,6 +1854,31 @@ internal fun MainAppContent(
+             }
+             }
+ 
++            MiniPlayerHost(
++                hostedRoute = hostedPlayerRoute,
++                topPlayerRoute = topPlayerRoute,
++                onExpand = { route -> navController.navigate(route) },
++            ) { route ->
++                PlayerDestination(
++                    route = route,
++                    navController = navController,
++                    externalPlayerId = playerSettingsUiState.externalPlayerId,
++                    externalPlayerNotConfiguredText = externalPlayerNotConfiguredText,
++                    externalPlayerFailedText = externalPlayerFailedText,
++                    onExternalPlayerLaunch = { launch -> lastExternalPlayerLaunch = launch },
++                    launchExternalPlayer = launchExternalPlayer,
++                    openExternalStreamUrl = ::openExternalStreamUrl,
++                    onOpenPartyMedia = ::openPartyMedia,
++                    onBackOverride = {
++                        if (navController.currentRoute == route) {
++                            navController.popBackStack(expectedRoute = route)
++                        } else {
++                            MiniPlayerController.close()
++                        }
++                    },
++                )
++            }
++
+             selectedPosterActionTarget?.let { posterActionTarget ->
+                 key(posterActionTarget) {
+                     val preview = posterActionTarget.preview
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/PlayerDestination.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/PlayerDestination.kt
+index 6b5c676a..ad2bd3ac 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/PlayerDestination.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/PlayerDestination.kt
+@@ -28,8 +28,10 @@ internal fun PlayerDestination(
+     launchExternalPlayer: (ExternalPlayerIntentResult.Success) -> Boolean,
+     openExternalStreamUrl: (String) -> Boolean,
+     onOpenPartyMedia: (PartyMedia) -> Unit,
++    onBackOverride: (() -> Unit)? = null,
+ ) {
+-    val onBack = rememberGuardedPopBackStack(navController, route)
++    val guardedOnBack = rememberGuardedPopBackStack(navController, route)
++    val onBack = onBackOverride ?: guardedOnBack
+     val launch = remember(route.launchId) { PlayerLaunchStore.get(route.launchId) }
+     if (launch == null) {
+         LaunchedEffect(route.launchId) {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailHero.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailHero.kt
+index 8bc2a76f..43d4ac6b 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailHero.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailHero.kt
+@@ -146,7 +146,7 @@ fun DetailHero(
+                     HeroTrailerPlayerSurface(
+                         sourceUrl = heroTrailerSourceUrl,
+                         sourceAudioUrl = heroTrailerSourceAudioUrl,
+-                        playWhenReady = heroTrailerPlayWhenReady(),
++                        playWhenReady = heroTrailerPlayWhenReady() && !com.nuvio.app.features.player.MiniPlayerController.isActive,
+                         muted = heroTrailerMuted,
+                         modifier = Modifier
+                             .align(Alignment.TopCenter)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/TabletDetailHero.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/TabletDetailHero.kt
+index 0b0d7455..189e16e3 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/TabletDetailHero.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/TabletDetailHero.kt
+@@ -188,7 +188,7 @@ private fun BackdropArtwork(
+             HeroTrailerPlayerSurface(
+                 sourceUrl = heroTrailerSourceUrl,
+                 sourceAudioUrl = heroTrailerSourceAudioUrl,
+-                playWhenReady = heroTrailerPlayWhenReady(),
++                playWhenReady = heroTrailerPlayWhenReady() && !com.nuvio.app.features.player.MiniPlayerController.isActive,
+                 muted = heroTrailerMuted,
+                 modifier = artworkModifier.graphicsLayer {
+                     alpha = trailerAlpha
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/MiniPlayer.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/MiniPlayer.kt
+new file mode 100644
+index 00000000..bd09ca02
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/MiniPlayer.kt
+@@ -0,0 +1,454 @@
++package com.nuvio.app.features.player
++
++import androidx.compose.animation.core.Animatable
++import androidx.compose.animation.core.tween
++import androidx.compose.foundation.background
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.gestures.detectDragGestures
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.BoxWithConstraints
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.WindowInsets
++import androidx.compose.foundation.layout.fillMaxHeight
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.offset
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.safeDrawing
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.rounded.Close
++import androidx.compose.material.icons.rounded.Pause
++import androidx.compose.material.icons.rounded.PlayArrow
++import androidx.compose.material3.CircularProgressIndicator
++import androidx.compose.material3.Icon
++import androidx.compose.material3.IconButton
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.CompositionLocalProvider
++import androidx.compose.runtime.DisposableEffect
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.SideEffect
++import androidx.compose.runtime.compositionLocalOf
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.key
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.rememberCoroutineScope
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.draw.shadow
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.input.pointer.pointerInput
++import androidx.compose.ui.platform.LocalDensity
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.IntOffset
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.core.storage.AppFileCache
++import com.nuvio.app.core.ui.PlatformBackHandler
++import com.nuvio.app.core.ui.nuvio
++import com.nuvio.app.features.profiles.ProfileRepository
++import com.nuvio.app.navigation.PlayerRoute
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import kotlinx.coroutines.launch
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.mini_player_close
++import nuvio.composeapp.generated.resources.mini_player_expand
++import nuvio.composeapp.generated.resources.mini_player_pause
++import nuvio.composeapp.generated.resources.mini_player_play
++import org.jetbrains.compose.resources.stringResource
++import kotlin.math.roundToInt
++
++val LocalPlayerMiniPresentation = compositionLocalOf<Boolean?> { null }
++
++/** Mini player on/off (fork: kept in the app file cache, on by default). */
++object MiniPlayerSetting {
++    private const val PATH = "settings/mini_player_enabled"
++    private val _enabled = MutableStateFlow(true)
++    val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
++    private var loaded = false
++
++    private fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        AppFileCache.read(PATH)?.trim()?.let { _enabled.value = it != "0" }
++    }
++
++    fun state(): StateFlow<Boolean> {
++        ensureLoaded()
++        return enabled
++    }
++
++    fun isEnabled(): Boolean {
++        ensureLoaded()
++        return _enabled.value
++    }
++
++    fun set(value: Boolean) {
++        ensureLoaded()
++        if (_enabled.value == value) return
++        _enabled.value = value
++        runCatching { AppFileCache.write(PATH, if (value) "1" else "0") }
++    }
++}
++
++object MiniPlayerController {
++    private var ownedRoute by mutableStateOf<PlayerRoute?>(null)
++    private var minimized by mutableStateOf(false)
++    internal var hostedRuntime by mutableStateOf<PlayerScreenRuntime?>(null)
++        private set
++    private val hostedLaunchIds = mutableSetOf<Long>()
++    private val placeholderLaunchIds = mutableSetOf<Long>()
++
++    val isActive: Boolean
++        get() = minimized && ownedRoute != null
++
++    fun hostedRoute(topPlayerRoute: PlayerRoute?, enabled: Boolean): PlayerRoute? {
++        val owned = ownedRoute
++        if (topPlayerRoute != null) {
++            return if (topPlayerRoute == owned || enabled) topPlayerRoute else null
++        }
++        return if (minimized) owned else null
++    }
++
++    fun isHostedRoute(route: PlayerRoute, topPlayerRoute: PlayerRoute?, enabled: Boolean): Boolean =
++        route.launchId in hostedLaunchIds || hostedRoute(topPlayerRoute, enabled) == route
++
++    fun close() {
++        minimized = false
++    }
++
++    internal fun commit(topPlayerRoute: PlayerRoute?, hostedRoute: PlayerRoute?) {
++        if (hostedRoute != null) hostedLaunchIds += hostedRoute.launchId
++        val previousOwned = ownedRoute
++        if (previousOwned != hostedRoute) {
++            ownedRoute = hostedRoute
++            if (previousOwned != null && previousOwned.launchId !in placeholderLaunchIds) {
++                hostedLaunchIds -= previousOwned.launchId
++            }
++        }
++        if ((hostedRoute == null || topPlayerRoute != null) && minimized) minimized = false
++    }
++
++    internal fun onPlaceholderEntered(route: PlayerRoute) {
++        placeholderLaunchIds += route.launchId
++    }
++
++    internal fun onPlaceholderDisposed(route: PlayerRoute) {
++        placeholderLaunchIds -= route.launchId
++        if (ownedRoute != route) hostedLaunchIds -= route.launchId
++    }
++
++    internal fun requestMinimize(): Boolean {
++        if (ownedRoute == null) return false
++        minimized = true
++        return true
++    }
++
++    internal fun attach(runtime: PlayerScreenRuntime) {
++        hostedRuntime = runtime
++    }
++
++    internal fun detach(runtime: PlayerScreenRuntime) {
++        if (hostedRuntime === runtime) hostedRuntime = null
++    }
++}
++
++internal fun PlayerScreenRuntime.canHandOffToMiniPlayer(): Boolean =
++    MiniPlayerController.hostedRuntime === this && !isMiniPresentation
++
++internal fun PlayerScreenRuntime.handOffToMiniPlayer(): Boolean {
++    if (!canHandOffToMiniPlayer()) return false
++    return MiniPlayerController.requestMinimize()
++}
++
++@Composable
++internal fun PlayerScreenRuntime.BindMiniPlayerEffects(presentation: Boolean?) {
++    val runtime = this
++    if (presentation != null) {
++        DisposableEffect(runtime) {
++            MiniPlayerController.attach(runtime)
++            onDispose { MiniPlayerController.detach(runtime) }
++        }
++    }
++    // Fork: Back leaves the player; the mini player is entered with the toolbar button only.
++    PlatformBackHandler(enabled = presentation == false) {
++        flushWatchProgress()
++        args.onBack()
++    }
++}
++
++@Composable
++fun HostedPlayerRoutePlaceholder(route: PlayerRoute) {
++    DisposableEffect(route) {
++        MiniPlayerController.onPlaceholderEntered(route)
++        onDispose { MiniPlayerController.onPlaceholderDisposed(route) }
++    }
++    Box(
++        modifier = Modifier
++            .fillMaxSize()
++            .background(Color.Black),
++    )
++}
++
++private val MiniPlayerShape = RoundedCornerShape(14.dp)
++private val MiniPlayerVideoShape = RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp)
++private val MiniPlayerInfoHeight = 52.dp
++private val MiniPlayerProgressHeight = 2.dp
++private val MiniPlayerEdgeMargin = 12.dp
++private val MiniPlayerBottomClearance = 96.dp
++
++@Composable
++fun MiniPlayerHost(
++    hostedRoute: PlayerRoute?,
++    topPlayerRoute: PlayerRoute?,
++    onExpand: (PlayerRoute) -> Unit,
++    modifier: Modifier = Modifier,
++    content: @Composable (PlayerRoute) -> Unit,
++) {
++    SideEffect { MiniPlayerController.commit(topPlayerRoute, hostedRoute) }
++    val route = hostedRoute ?: return
++    val mini = topPlayerRoute == null
++    val profileState by ProfileRepository.state.collectAsStateWithLifecycle()
++    LaunchedEffect(route, mini, profileState) {
++        val runtime = MiniPlayerController.hostedRuntime ?: return@LaunchedEffect
++        if (mini && runtime.profileId != ProfileRepository.activeProfileId) {
++            MiniPlayerController.close()
++        }
++    }
++    key(route.launchId) {
++        MiniPlayerFrame(
++            route = route,
++            mini = mini,
++            onExpand = onExpand,
++            modifier = modifier,
++            content = content,
++        )
++    }
++}
++
++@Composable
++private fun MiniPlayerFrame(
++    route: PlayerRoute,
++    mini: Boolean,
++    onExpand: (PlayerRoute) -> Unit,
++    modifier: Modifier,
++    content: @Composable (PlayerRoute) -> Unit,
++) {
++    val colors = MaterialTheme.nuvio.colors
++    val density = LocalDensity.current
++    val scope = rememberCoroutineScope()
++    val runtime = MiniPlayerController.hostedRuntime
++
++    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
++        val containerWidthPx = constraints.maxWidth.toFloat()
++        val containerHeightPx = constraints.maxHeight.toFloat()
++        val cardWidth = if (maxWidth >= 600.dp) 320.dp else maxWidth * 0.58f
++        val videoHeight = cardWidth * 9f / 16f
++        val cardHeight = videoHeight + MiniPlayerProgressHeight + MiniPlayerInfoHeight
++        val cardWidthPx = with(density) { cardWidth.toPx() }
++        val cardHeightPx = with(density) { cardHeight.toPx() }
++        val videoHeightPx = with(density) { videoHeight.toPx() }
++        val marginPx = with(density) { MiniPlayerEdgeMargin.toPx() }
++        val topInsetPx = WindowInsets.safeDrawing.getTop(density).toFloat()
++        val bottomInsetPx = WindowInsets.safeDrawing.getBottom(density).toFloat()
++        val bottomClearancePx = with(density) { MiniPlayerBottomClearance.toPx() }
++        val minX = marginPx
++        val maxX = (containerWidthPx - cardWidthPx - marginPx).coerceAtLeast(minX)
++        val minY = topInsetPx + marginPx
++        val maxY = (containerHeightPx - cardHeightPx - bottomInsetPx - bottomClearancePx).coerceAtLeast(minY)
++        val offsetX = remember { Animatable(maxX) }
++        val offsetY = remember { Animatable(maxY) }
++        var dockedToEnd by remember { mutableStateOf(true) }
++
++        LaunchedEffect(minX, maxX, minY, maxY) {
++            offsetX.updateBounds(minX, maxX)
++            offsetY.updateBounds(minY, maxY)
++            offsetX.snapTo(if (dockedToEnd) maxX else minX)
++            offsetY.snapTo(offsetY.value.coerceIn(minY, maxY))
++        }
++
++        val dragModifier = Modifier.pointerInput(minX, maxX, minY, maxY) {
++            val dock: () -> Unit = {
++                dockedToEnd = offsetX.value + cardWidthPx / 2f > containerWidthPx / 2f
++                scope.launch {
++                    offsetX.animateTo(if (dockedToEnd) maxX else minX, tween(durationMillis = 220))
++                }
++            }
++            detectDragGestures(
++                onDragEnd = dock,
++                onDragCancel = dock,
++            ) { change, dragAmount ->
++                change.consume()
++                scope.launch {
++                    offsetX.snapTo(offsetX.value + dragAmount.x)
++                    offsetY.snapTo(offsetY.value + dragAmount.y)
++                }
++            }
++        }
++        val cardOffset: () -> IntOffset = {
++            IntOffset(offsetX.value.roundToInt(), offsetY.value.roundToInt())
++        }
++
++        if (mini) {
++            Box(
++                modifier = Modifier
++                    .offset { cardOffset() }
++                    .size(width = cardWidth, height = cardHeight)
++                    .shadow(16.dp, MiniPlayerShape)
++                    .clip(MiniPlayerShape)
++                    .background(colors.surfaceElevated),
++            )
++        }
++
++        Box(
++            modifier = if (mini) {
++                Modifier
++                    .offset { cardOffset() }
++                    .size(width = cardWidth, height = videoHeight)
++                    .clip(MiniPlayerVideoShape)
++            } else {
++                Modifier.fillMaxSize()
++            },
++        ) {
++            CompositionLocalProvider(LocalPlayerMiniPresentation provides mini) {
++                content(route)
++            }
++            if (mini) {
++                if (runtime != null && runtime.playbackSnapshot.isLoading && runtime.errorMessage == null) {
++                    CircularProgressIndicator(
++                        modifier = Modifier
++                            .align(Alignment.Center)
++                            .size(26.dp),
++                        color = Color.White,
++                        strokeWidth = 2.dp,
++                    )
++                }
++                Box(
++                    modifier = Modifier
++                        .matchParentSize()
++                        .then(dragModifier)
++                        .clickable(onClickLabel = stringResource(Res.string.mini_player_expand)) {
++                            onExpand(route)
++                        },
++                )
++            }
++        }
++
++        if (mini) {
++            val snapshot = runtime?.playbackSnapshot
++            val durationMs = snapshot?.durationMs ?: 0L
++            val progressFraction = if (snapshot != null && durationMs > 0L) {
++                (snapshot.positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
++            } else {
++                0f
++            }
++            val title: String
++            val subtitle: String?
++            if (runtime == null) {
++                title = route.title
++                subtitle = null
++            } else {
++                val isLive = false
++                val seasonNumber = runtime.activeSeasonNumber
++                val episodeNumber = runtime.activeEpisodeNumber
++                title = if (isLive) runtime.activeStreamTitle else runtime.title
++                subtitle = if (seasonNumber != null && episodeNumber != null) {
++                    listOfNotNull(
++                        "S$seasonNumber E$episodeNumber",
++                        runtime.activeEpisodeTitle?.takeIf { it.isNotBlank() },
++                    ).joinToString(" · ")
++                } else if (isLive) {
++                    runtime.activeStreamSubtitle?.takeIf { it.isNotBlank() }
++                } else {
++                    runtime.activeStreamTitle.takeIf { it.isNotBlank() }
++                }
++            }
++            val playing = snapshot != null &&
++                (snapshot.isPlaying || (runtime?.shouldPlay == true && snapshot.isLoading))
++            Column(
++                modifier = Modifier
++                    .offset { cardOffset() + IntOffset(0, videoHeightPx.roundToInt()) }
++                    .width(cardWidth)
++                    .then(dragModifier),
++            ) {
++                Box(
++                    modifier = Modifier
++                        .fillMaxWidth()
++                        .height(MiniPlayerProgressHeight)
++                        .background(Color.White.copy(alpha = 0.12f)),
++                ) {
++                    if (durationMs > 0L) {
++                        Box(
++                            modifier = Modifier
++                                .fillMaxWidth(progressFraction)
++                                .fillMaxHeight()
++                                .background(colors.accent),
++                        )
++                    }
++                }
++                Row(
++                    modifier = Modifier
++                        .fillMaxWidth()
++                        .height(MiniPlayerInfoHeight)
++                        .padding(start = 12.dp, end = 2.dp),
++                    verticalAlignment = Alignment.CenterVertically,
++                    horizontalArrangement = Arrangement.spacedBy(2.dp),
++                ) {
++                    Column(
++                        modifier = Modifier
++                            .weight(1f)
++                            .clickable { onExpand(route) },
++                    ) {
++                        Text(
++                            text = title,
++                            color = colors.textPrimary,
++                            fontSize = 13.sp,
++                            fontWeight = FontWeight.SemiBold,
++                            maxLines = 1,
++                            overflow = TextOverflow.Ellipsis,
++                        )
++                        if (subtitle != null) {
++                            Text(
++                                text = subtitle,
++                                color = colors.textMuted,
++                                fontSize = 11.sp,
++                                maxLines = 1,
++                                overflow = TextOverflow.Ellipsis,
++                            )
++                        }
++                    }
++                    IconButton(onClick = { runtime?.togglePlayback() }) {
++                        Icon(
++                            imageVector = if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
++                            contentDescription = stringResource(
++                                if (playing) Res.string.mini_player_pause else Res.string.mini_player_play,
++                            ),
++                            tint = colors.textPrimary,
++                        )
++                    }
++                    IconButton(onClick = { MiniPlayerController.close() }) {
++                        Icon(
++                            imageVector = Icons.Rounded.Close,
++                            contentDescription = stringResource(Res.string.mini_player_close),
++                            tint = colors.textPrimary,
++                        )
++                    }
++                }
++            }
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt
+index d69f0749..6c69e179 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt
+@@ -74,6 +74,8 @@ internal fun PlayerScreenContent(args: PlayerScreenArgs) {
+ 
+     val runtime = remember { PlayerScreenRuntime(args) }
+     runtime.args = args
++    val miniPresentation = LocalPlayerMiniPresentation.current
++    runtime.isMiniPresentation = miniPresentation == true
+ 
+     BoxWithConstraints(
+         modifier = args.modifier
+@@ -86,9 +88,13 @@ internal fun PlayerScreenContent(args: PlayerScreenArgs) {
+ 
+         runtime.scope = rememberCoroutineScope()
+         runtime.hapticFeedback = LocalHapticFeedback.current
+-        runtime.gestureController = rememberPlayerGestureController(
+-            restoreBrightness = playerSettingsUiState.touchGesturesEnabled,
+-        )
++        runtime.gestureController = if (runtime.isMiniPresentation) {
++            null
++        } else {
++            rememberPlayerGestureController(
++                restoreBrightness = playerSettingsUiState.touchGesturesEnabled,
++            )
++        }
+         runtime.playerSettingsUiState = playerSettingsUiState
+         runtime.p2pSettingsUiState = p2pSettingsUiState
+         runtime.p2pStreamingState = p2pStreamingState
+@@ -152,14 +158,17 @@ internal fun PlayerScreenContent(args: PlayerScreenArgs) {
+         val keepScreenAwake = runtime.errorMessage == null &&
+             (runtime.playbackSnapshot.isPlaying ||
+                 (runtime.shouldPlay && runtime.playbackSnapshot.isLoading))
+-        EnterImmersivePlayerMode(keepScreenAwake = keepScreenAwake)
+-        ManagePlayerPictureInPicture(
+-            isPlaying = runtime.playbackSnapshot.isPlaying,
+-            videoSize = IntSize(
+-                runtime.playbackSnapshot.videoWidth,
+-                runtime.playbackSnapshot.videoHeight,
+-            ),
+-        )
++        if (!runtime.isMiniPresentation) {
++            EnterImmersivePlayerMode(keepScreenAwake = keepScreenAwake)
++            ManagePlayerPictureInPicture(
++                isPlaying = runtime.playbackSnapshot.isPlaying,
++                videoSize = IntSize(
++                    runtime.playbackSnapshot.videoWidth,
++                    runtime.playbackSnapshot.videoHeight,
++                ),
++            )
++        }
++        runtime.BindMiniPlayerEffects(miniPresentation)
+         runtime.BindPlayerRuntimeEffects()
+         runtime.WithSeekPreview { runtime.RenderPlayerRuntimeUi() } // Seek previews hook
+     }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
+index f24d9d23..ce1d0be0 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
+@@ -201,6 +201,7 @@ internal class PlayerScreenRuntime(
+     var showAudioModal by mutableStateOf(false)
+     var showQualityModal by mutableStateOf(false)
+     var showUserRatingSheet by mutableStateOf(false)
++    var isMiniPresentation by mutableStateOf(false)
+     var showSubtitleModal by mutableStateOf(false)
+     var showVideoSettingsModal by mutableStateOf(false)
+     var showStreamInfo by mutableStateOf(false)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+index 8fea712f..1d813255 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+@@ -219,6 +219,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+             }
+         }
+ 
++        if (!isMiniPresentation) {
+         AnimatedVisibility(
+             visible = playerSettingsUiState.pauseOverlayEnabled && pausedOverlayVisible && !controlsVisible && !playerControlsLocked,
+             enter = fadeIn(animationSpec = tween(durationMillis = 220)),
+@@ -255,6 +256,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+         if (!isInPip) AutoSyncBubbleToastHost(controlsVisible) // AutoSync hook: bubble toast
+         RenderPlayerModals(displayedPositionMs = displayedPositionMs)
+         RenderParty(runtime = runtime)
++        }
+     }
+ }
+ 
+@@ -416,6 +418,13 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+             } else {
+                 null
+             },
++            onMiniPlayerClick = if (!isIos && MiniPlayerSetting.isEnabled() && canHandOffToMiniPlayer()) {
++                {
++                    if (handOffToMiniPlayer()) args.onBack()
++                }
++            } else {
++                null
++            },
+             onCastClick = if (playbackSnapshot.castAvailable) {
+                 { playerController?.showCastDialog() }
+             } else {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+index 93b6f22c..a7a5c3a1 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+@@ -398,6 +398,18 @@ private fun PlaybackSettingsSection(
+                     isTablet = isTablet,
+                     onCheckedChange = com.nuvio.app.features.player.PrivateViewing::set,
+                 )
++                if (!isIos) {
++                    SettingsGroupDivider(isTablet = isTablet)
++                    val miniPlayerEnabled by com.nuvio.app.features.player.MiniPlayerSetting.state().collectAsStateWithLifecycle()
++                    SettingsSwitchRow(
++                        title = stringResource(Res.string.settings_playback_mini_player),
++                        description = stringResource(Res.string.settings_playback_mini_player_description),
++                        checked = miniPlayerEnabled,
++                        enabled = !autoPlayPlayerSettings.externalPlayerEnabled,
++                        isTablet = isTablet,
++                        onCheckedChange = com.nuvio.app.features.player.MiniPlayerSetting::set,
++                    )
++                }
+                 SettingsGroupDivider(isTablet = isTablet)
+                 SettingsSwitchRow(
+                     title = stringResource(Res.string.settings_playback_legacy_layout),

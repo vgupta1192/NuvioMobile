@@ -1,24 +1,25 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/streams/StreamBadgeSettingsStorage.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/streams/StreamBadgeSettingsStorage.android.kt
-index b0ce49ea..9663a8f3 100644
+index 4b488b9a..de43fa15 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/streams/StreamBadgeSettingsStorage.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/streams/StreamBadgeSettingsStorage.android.kt
-@@ -17,12 +17,14 @@ actual object StreamBadgeSettingsStorage {
+@@ -17,13 +17,15 @@ actual object StreamBadgeSettingsStorage {
      private const val streamBadgeRulesKey = "stream_badge_rules"
      private const val showFileSizeBadgesKey = "show_file_size_badges"
      private const val showAddonLogoKey = "show_addon_logo"
 +    private const val showStreamSearchKey = "show_stream_search"
      private const val showInPlayerKey = "show_badges_in_player"
+     private const val playerBadgeSourceKey = "player_badge_source"
      private const val streamBackgroundModeKey = "stream_background_mode"
      private const val streamBadgePlacementKey = "stream_badge_placement"
 +    private const val pinnedStreamSourcesKey = "pinned_stream_sources"
      private const val legacyDebridStreamBadgeRulesKey = "debrid_stream_badge_rules"
  
--    private val syncKeys = listOf(streamBadgeRulesKey, showFileSizeBadgesKey, showInPlayerKey, streamBadgePlacementKey, streamBackgroundModeKey)
-+    private val syncKeys = listOf(streamBadgeRulesKey, showFileSizeBadgesKey, showInPlayerKey, streamBadgePlacementKey, streamBackgroundModeKey, pinnedStreamSourcesKey)
+-    private val syncKeys = listOf(streamBadgeRulesKey, showFileSizeBadgesKey, showInPlayerKey, playerBadgeSourceKey, streamBadgePlacementKey, streamBackgroundModeKey)
++    private val syncKeys = listOf(streamBadgeRulesKey, showFileSizeBadgesKey, showInPlayerKey, playerBadgeSourceKey, streamBadgePlacementKey, streamBackgroundModeKey, pinnedStreamSourcesKey)
  
      private var preferences: SharedPreferences? = null
      private var legacyDebridPreferences: SharedPreferences? = null
-@@ -50,6 +52,12 @@ actual object StreamBadgeSettingsStorage {
+@@ -51,6 +53,12 @@ actual object StreamBadgeSettingsStorage {
          saveBoolean(showAddonLogoKey, enabled)
      }
  
@@ -31,7 +32,7 @@ index b0ce49ea..9663a8f3 100644
      actual fun loadShowInPlayer(): Boolean? = loadBoolean(showInPlayerKey)
  
      actual fun saveShowInPlayer(enabled: Boolean) {
-@@ -68,6 +76,12 @@ actual object StreamBadgeSettingsStorage {
+@@ -75,6 +83,12 @@ actual object StreamBadgeSettingsStorage {
          saveString(streamBadgePlacementKey, placement)
      }
  
@@ -44,16 +45,16 @@ index b0ce49ea..9663a8f3 100644
      actual fun loadLegacyDebridStreamBadgeRules(): String? =
          legacyDebridPreferences?.getString(ProfileScopedKey.of(legacyDebridStreamBadgeRulesKey), null)
  
-@@ -111,6 +125,7 @@ actual object StreamBadgeSettingsStorage {
-         loadShowInPlayer()?.let { put(showInPlayerKey, encodeSyncBoolean(it)) }
+@@ -119,6 +133,7 @@ actual object StreamBadgeSettingsStorage {
+         loadPlayerBadgeSource()?.let { put(playerBadgeSourceKey, encodeSyncString(it)) }
          loadStreamBadgePlacement()?.let { put(streamBadgePlacementKey, encodeSyncString(it)) }
          loadStreamBackgroundMode()?.let { put(streamBackgroundModeKey, encodeSyncString(it)) }
 +        loadPinnedStreamSources()?.let { put(pinnedStreamSourcesKey, encodeSyncString(it)) }
      }
  
      actual fun replaceFromSyncPayload(payload: JsonObject) {
-@@ -123,5 +138,6 @@ actual object StreamBadgeSettingsStorage {
-         payload.decodeSyncBoolean(showInPlayerKey)?.let(::saveShowInPlayer)
+@@ -132,5 +147,6 @@ actual object StreamBadgeSettingsStorage {
+         payload.decodeSyncString(playerBadgeSourceKey)?.let(::savePlayerBadgeSource)
          payload.decodeSyncString(streamBadgePlacementKey)?.let(::saveStreamBadgePlacement)
          payload.decodeSyncString(streamBackgroundModeKey)?.let(::saveStreamBackgroundMode)
 +        payload.decodeSyncString(pinnedStreamSourcesKey)?.let(::savePinnedStreamSources)
@@ -77,11 +78,11 @@ index 00000000..c4c57290
 +    <string name="streams_pinned_source">Pinned source</string>
 +</resources>
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/StreamsSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/StreamsSettingsPage.kt
-index 9ba8de2f..5da20e3b 100644
+index ae8fd2ed..7fafe23c 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/StreamsSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/StreamsSettingsPage.kt
-@@ -92,6 +92,8 @@ import nuvio.composeapp.generated.resources.settings_stream_badges_in_player_des
- import nuvio.composeapp.generated.resources.settings_stream_badges_in_player_title
+@@ -96,6 +96,8 @@ import nuvio.composeapp.generated.resources.settings_stream_player_badges_same
+ import nuvio.composeapp.generated.resources.settings_stream_player_badges_title
  import nuvio.composeapp.generated.resources.settings_stream_size_badges_title
  import nuvio.composeapp.generated.resources.settings_stream_addon_logo_title
 +import nuvio.composeapp.generated.resources.settings_stream_search_description
@@ -89,7 +90,7 @@ index 9ba8de2f..5da20e3b 100644
  import nuvio.composeapp.generated.resources.settings_stream_addon_logo_description
  import nuvio.composeapp.generated.resources.settings_stream_display_section
  import nuvio.composeapp.generated.resources.settings_stream_background_title
-@@ -173,6 +175,13 @@ internal fun LazyListScope.streamsSettingsContent(isTablet: Boolean) {
+@@ -186,6 +188,13 @@ internal fun LazyListScope.streamsSettingsContent(isTablet: Boolean) {
                      isTablet = isTablet,
                      onCheckedChange = StreamBadgeSettingsRepository::setShowAddonLogo,
                  )
@@ -400,7 +401,7 @@ index 7955ae71..023f7924 100644
                  Text(
                      text = label,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamBadgeSettingsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamBadgeSettingsRepository.kt
-index af3099ec..a5d5226d 100644
+index f69c5ac6..91398317 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamBadgeSettingsRepository.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamBadgeSettingsRepository.kt
 @@ -20,6 +20,7 @@ data class StreamBadgeSettingsUiState(
@@ -409,25 +410,25 @@ index af3099ec..a5d5226d 100644
      val showAddonLogo: Boolean = false,
 +    val showStreamSearch: Boolean = false,
      val showInPlayer: Boolean = false,
+     val playerBadgeSource: String = "",
      val badgePlacement: StreamBadgePlacement = StreamBadgePlacement.BOTTOM,
-     val backgroundMode: StreamBackgroundMode = StreamBackgroundMode.Normal,
-@@ -49,6 +50,7 @@ object StreamBadgeSettingsRepository {
+@@ -50,6 +51,7 @@ object StreamBadgeSettingsRepository {
      private var streamBadgeRules = StreamBadgeRules()
      private var showFileSizeBadges = true
      private var showAddonLogo = false
 +    private var showStreamSearch = false
      private var showInPlayer = false
+     private var playerBadgeSource = ""
      private var badgePlacement = StreamBadgePlacement.BOTTOM
-     private var backgroundMode = StreamBackgroundMode.Normal
-@@ -67,6 +69,7 @@ object StreamBadgeSettingsRepository {
+@@ -69,6 +71,7 @@ object StreamBadgeSettingsRepository {
          streamBadgeRules = StreamBadgeRules()
          showFileSizeBadges = true
          showAddonLogo = false
 +        showStreamSearch = false
          showInPlayer = false
+         playerBadgeSource = ""
          badgePlacement = StreamBadgePlacement.BOTTOM
-         backgroundMode = StreamBackgroundMode.Normal
-@@ -159,6 +162,14 @@ object StreamBadgeSettingsRepository {
+@@ -162,6 +165,14 @@ object StreamBadgeSettingsRepository {
          StreamBadgeSettingsStorage.saveShowAddonLogo(enabled)
      }
  
@@ -442,27 +443,27 @@ index af3099ec..a5d5226d 100644
      fun setShowInPlayer(enabled: Boolean) {
          ensureLoaded()
          if (showInPlayer == enabled) return
-@@ -194,6 +205,7 @@ object StreamBadgeSettingsRepository {
+@@ -205,6 +216,7 @@ object StreamBadgeSettingsRepository {
          streamBadgeRules = storedRules ?: legacyRules ?: StreamBadgeRules()
          showFileSizeBadges = StreamBadgeSettingsStorage.loadShowFileSizeBadges() ?: true
          showAddonLogo = StreamBadgeSettingsStorage.loadShowAddonLogo() ?: false
 +        showStreamSearch = StreamBadgeSettingsStorage.loadShowStreamSearch() ?: false
          showInPlayer = StreamBadgeSettingsStorage.loadShowInPlayer() ?: false
+         playerBadgeSource = StreamBadgeSettingsStorage.loadPlayerBadgeSource().orEmpty()
          backgroundMode = StreamBadgeSettingsStorage.loadStreamBackgroundMode()
-             ?.let { storedMode -> StreamBackgroundMode.entries.firstOrNull { it.name.equals(storedMode, ignoreCase = true) } }
-@@ -217,6 +229,7 @@ object StreamBadgeSettingsRepository {
+@@ -229,6 +241,7 @@ object StreamBadgeSettingsRepository {
              rules = streamBadgeRules,
              showFileSizeBadges = showFileSizeBadges,
              showAddonLogo = showAddonLogo,
 +            showStreamSearch = showStreamSearch,
              showInPlayer = showInPlayer,
+             playerBadgeSource = playerBadgeSource,
              badgePlacement = badgePlacement,
-             backgroundMode = backgroundMode,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamBadgeSettingsStorage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamBadgeSettingsStorage.kt
-index 06033de3..bf250204 100644
+index 0687bccf..26557beb 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamBadgeSettingsStorage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamBadgeSettingsStorage.kt
-@@ -9,12 +9,16 @@ internal expect object StreamBadgeSettingsStorage {
+@@ -9,6 +9,8 @@ internal expect object StreamBadgeSettingsStorage {
      fun saveShowFileSizeBadges(enabled: Boolean)
      fun loadShowAddonLogo(): Boolean?
      fun saveShowAddonLogo(enabled: Boolean)
@@ -470,7 +471,8 @@ index 06033de3..bf250204 100644
 +    fun saveShowStreamSearch(enabled: Boolean)
      fun loadShowInPlayer(): Boolean?
      fun saveShowInPlayer(enabled: Boolean)
-     fun loadStreamBackgroundMode(): String?
+     fun loadPlayerBadgeSource(): String?
+@@ -17,6 +19,8 @@ internal expect object StreamBadgeSettingsStorage {
      fun saveStreamBackgroundMode(mode: String)
      fun loadStreamBadgePlacement(): String?
      fun saveStreamBadgePlacement(placement: String)
@@ -1018,25 +1020,26 @@ index e8b6d5ed..56d1fdf7 100644
                  }
              }
 diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/streams/StreamBadgeSettingsStorage.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/streams/StreamBadgeSettingsStorage.ios.kt
-index 83509a06..0bd65b98 100644
+index 53c155ce..5401e06e 100644
 --- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/streams/StreamBadgeSettingsStorage.ios.kt
 +++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/streams/StreamBadgeSettingsStorage.ios.kt
-@@ -14,11 +14,13 @@ actual object StreamBadgeSettingsStorage {
+@@ -14,12 +14,14 @@ actual object StreamBadgeSettingsStorage {
      private const val streamBadgeRulesKey = "stream_badge_rules"
      private const val showFileSizeBadgesKey = "show_file_size_badges"
      private const val showAddonLogoKey = "show_addon_logo"
 +    private const val showStreamSearchKey = "show_stream_search"
      private const val showInPlayerKey = "show_badges_in_player"
+     private const val playerBadgeSourceKey = "player_badge_source"
      private const val streamBackgroundModeKey = "stream_background_mode"
      private const val streamBadgePlacementKey = "stream_badge_placement"
 +    private const val pinnedStreamSourcesKey = "pinned_stream_sources"
      private const val legacyDebridStreamBadgeRulesKey = "debrid_stream_badge_rules"
--    private val syncKeys = listOf(streamBadgeRulesKey, showFileSizeBadgesKey, showInPlayerKey, streamBadgePlacementKey, streamBackgroundModeKey)
-+    private val syncKeys = listOf(streamBadgeRulesKey, showFileSizeBadgesKey, showInPlayerKey, streamBadgePlacementKey, streamBackgroundModeKey, pinnedStreamSourcesKey)
+-    private val syncKeys = listOf(streamBadgeRulesKey, showFileSizeBadgesKey, showInPlayerKey, playerBadgeSourceKey, streamBadgePlacementKey, streamBackgroundModeKey)
++    private val syncKeys = listOf(streamBadgeRulesKey, showFileSizeBadgesKey, showInPlayerKey, playerBadgeSourceKey, streamBadgePlacementKey, streamBackgroundModeKey, pinnedStreamSourcesKey)
  
      actual fun loadStreamBadgeRules(): String? = loadString(streamBadgeRulesKey)
  
-@@ -38,6 +40,12 @@ actual object StreamBadgeSettingsStorage {
+@@ -39,6 +41,12 @@ actual object StreamBadgeSettingsStorage {
          saveBoolean(showAddonLogoKey, enabled)
      }
  
@@ -1049,7 +1052,7 @@ index 83509a06..0bd65b98 100644
      actual fun loadShowInPlayer(): Boolean? = loadBoolean(showInPlayerKey)
  
      actual fun saveShowInPlayer(enabled: Boolean) {
-@@ -56,6 +64,12 @@ actual object StreamBadgeSettingsStorage {
+@@ -63,6 +71,12 @@ actual object StreamBadgeSettingsStorage {
          saveString(streamBadgePlacementKey, placement)
      }
  
@@ -1062,16 +1065,16 @@ index 83509a06..0bd65b98 100644
      actual fun loadLegacyDebridStreamBadgeRules(): String? =
          loadString(legacyDebridStreamBadgeRulesKey)
  
-@@ -90,6 +104,7 @@ actual object StreamBadgeSettingsStorage {
-         loadShowInPlayer()?.let { put(showInPlayerKey, encodeSyncBoolean(it)) }
+@@ -98,6 +112,7 @@ actual object StreamBadgeSettingsStorage {
+         loadPlayerBadgeSource()?.let { put(playerBadgeSourceKey, encodeSyncString(it)) }
          loadStreamBadgePlacement()?.let { put(streamBadgePlacementKey, encodeSyncString(it)) }
          loadStreamBackgroundMode()?.let { put(streamBackgroundModeKey, encodeSyncString(it)) }
 +        loadPinnedStreamSources()?.let { put(pinnedStreamSourcesKey, encodeSyncString(it)) }
      }
  
      actual fun replaceFromSyncPayload(payload: JsonObject) {
-@@ -102,5 +117,6 @@ actual object StreamBadgeSettingsStorage {
-         payload.decodeSyncBoolean(showInPlayerKey)?.let(::saveShowInPlayer)
+@@ -111,5 +126,6 @@ actual object StreamBadgeSettingsStorage {
+         payload.decodeSyncString(playerBadgeSourceKey)?.let(::savePlayerBadgeSource)
          payload.decodeSyncString(streamBadgePlacementKey)?.let(::saveStreamBadgePlacement)
          payload.decodeSyncString(streamBackgroundModeKey)?.let(::saveStreamBackgroundMode)
 +        payload.decodeSyncString(pinnedStreamSourcesKey)?.let(::savePinnedStreamSources)
