@@ -1,0 +1,28 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt
+index 18f3d691..32448211 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt
+@@ -44,6 +44,7 @@ import com.nuvio.app.core.ui.NuvioScreen
+ import com.nuvio.app.core.ui.NuvioScreenHeader
+ import com.nuvio.app.core.ui.NuvioStatusModal
+ import com.nuvio.app.core.ui.NuvioToastController
++import com.nuvio.app.core.ui.nuvio
+ import com.nuvio.app.features.settings.DownloadsSettingsScreen
+ import nuvio.composeapp.generated.resources.*
+ import org.jetbrains.compose.resources.stringResource
+@@ -107,6 +108,7 @@ fun DownloadsScreen(
+                             Icon(
+                                 imageVector = Icons.Rounded.Settings,
+                                 contentDescription = stringResource(Res.string.compose_settings_page_root),
++                                tint = MaterialTheme.nuvio.colors.textPrimary,
+                             )
+                         }
+                     }
+@@ -120,6 +122,7 @@ fun DownloadsScreen(
+                         Icon(
+                             imageVector = Icons.Rounded.Folder,
+                             contentDescription = stringResource(Res.string.downloads_open_directory),
++                            tint = MaterialTheme.nuvio.colors.textPrimary,
+                         )
+                     }
+                 },
