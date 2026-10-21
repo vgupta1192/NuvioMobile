@@ -1,0 +1,26 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailActionButtons.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailActionButtons.kt
+index dc4def32..99c6e6dc 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailActionButtons.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailActionButtons.kt
+@@ -56,6 +56,9 @@ import androidx.compose.ui.unit.dp
+ import com.nuvio.app.core.ui.AppIconResource
+ import com.nuvio.app.core.ui.appIconPainter
+ import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.details_action_start_from_beginning
++import nuvio.composeapp.generated.resources.details_download_action
++import nuvio.composeapp.generated.resources.streams_open_external_player
+ import nuvio.composeapp.generated.resources.action_play
+ import nuvio.composeapp.generated.resources.details_actions_menu_label
+ import nuvio.composeapp.generated.resources.hero_add_to_library
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+index 234a77d7..a1498807 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+@@ -15,6 +15,7 @@ import com.nuvio.app.features.ratings.rememberUserRating
+ import com.nuvio.app.features.ratings.toUserRatingTarget
+ import com.nuvio.app.features.tracking.TrackingRatingTarget
+ import androidx.compose.runtime.DisposableEffect
++import androidx.compose.runtime.LaunchedEffect
+ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.key
+ import androidx.compose.runtime.mutableStateOf
