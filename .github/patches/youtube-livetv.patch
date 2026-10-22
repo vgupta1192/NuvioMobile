@@ -1,0 +1,53 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvRepository.kt
+index 4e802119..8299099f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvRepository.kt
+@@ -11,6 +11,7 @@ import com.nuvio.app.features.streams.StreamBehaviorHints
+ import com.nuvio.app.features.streams.StreamItem
+ import com.nuvio.app.features.streams.StreamParser
+ import com.nuvio.app.features.streams.StreamProxyHeaders
++import com.nuvio.app.features.streams.YouTubeStreamResolver
+ import kotlinx.coroutines.CancellationException
+ import kotlinx.coroutines.CoroutineScope
+ import kotlinx.coroutines.Dispatchers
+@@ -366,6 +367,15 @@ object LiveTvRepository {
+         return list[(index + offset).mod(list.size)]
+     }
+ 
++    private val youTubeWatchLink = Regex("""^https?://(?:www\.|m\.)?(?:youtube\.com/watch\?(?:[^#]*&)?v=|youtu\.be/)([A-Za-z0-9_-]{11})""")
++
++    /** A stream whose only way to play is a YouTube watch page becomes a ytId stream. */
++    private fun StreamItem.withYouTubeWatchId(): StreamItem {
++        if (!url.isNullOrBlank() || infoHash?.isNotBlank() == true) return this
++        val id = externalUrl?.let { youTubeWatchLink.find(it.trim())?.groupValues?.get(1) } ?: return this
++        return copy(ytId = id, externalUrl = null)
++    }
++
+     private suspend fun fetchStreams(channel: LiveTvChannel): List<LiveTvStreamOption> {
+         channel.iptvSourceId?.let { sourceId ->
+             val source = _uiState.value.iptvSources.firstOrNull { it.id == sourceId } ?: return emptyList()
+@@ -392,12 +402,23 @@ object LiveTvRepository {
+                 id = channel.id,
+             ),
+         )
++        val youTubeResolved = mutableMapOf<String, StreamItem?>()
+         return StreamParser.parse(
+             payload = payload,
+             addonName = addon?.displayTitle ?: channel.addonName,
+             addonId = manifest?.id ?: channel.manifestUrl,
+             addonLogo = manifest?.logoUrl,
+-        ).mapNotNull { stream ->
++        ).mapNotNull { rawStream ->
++            // YouTube rows (a ytId, or a watch-page link) carry no media address: resolve them
++            // on the device, once per video, the same way the details screen does.
++            val youTubeStream = rawStream.withYouTubeWatchId()
++            val videoId = youTubeStream.youTubeIdToResolve
++            val stream = if (videoId != null) {
++                youTubeResolved.getOrPut(videoId) { YouTubeStreamResolver.Default.resolve(youTubeStream) }
++                    ?: return@mapNotNull null
++            } else {
++                rawStream
++            }
+             val url = resolvePlayableLiveTvUrl(stream) ?: return@mapNotNull null
+             LiveTvStreamOption(
+                 label = stream.name?.takeIf { it.isNotBlank() } ?: stream.title?.takeIf { it.isNotBlank() } ?: channel.name,
