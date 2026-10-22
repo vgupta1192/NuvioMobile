@@ -32,7 +32,7 @@ jobs:
         run: |
           # Newest non-draft release, prereleases included: /releases/latest skips prereleases,
           # and NuvioTV ships its 1.1.0 betas only as prereleases (2026-10-15).
-          REL=$(curl -s -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/NuvioMedia/NuvioMobile/releases?per_page=20" \
+          REL=$(curl -s -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/NuvioMedia/NuvioMobile/releases?per_page=10" \
             | python3 -c "import json,sys;r=[x for x in json.load(sys.stdin) if not x.get('draft')];r.sort(key=lambda x:x.get('published_at') or '',reverse=True);print(json.dumps(r[0]))")
           UP=$(printf '%s' "$REL" | python3 -c "import json,sys;print(json.load(sys.stdin)['tag_name'])")
           # attach the upstream release notes so fork releases carry the upstream changelog
@@ -370,7 +370,7 @@ jobs:
         run: |
           # Newest non-draft release, prereleases included: /releases/latest skips prereleases,
           # and NuvioTV ships its 1.1.0 betas only as prereleases (2026-10-15).
-          REL=$(curl -s -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/NuvioMedia/NuvioMobile/releases?per_page=20" \
+          REL=$(curl -s -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/NuvioMedia/NuvioMobile/releases?per_page=10" \
             | python3 -c "import json,sys;r=[x for x in json.load(sys.stdin) if not x.get('draft')];r.sort(key=lambda x:x.get('published_at') or '',reverse=True);print(json.dumps(r[0]))")
           UP=$(printf '%s' "$REL" | python3 -c "import json,sys;print(json.load(sys.stdin)['tag_name'])")
           {
