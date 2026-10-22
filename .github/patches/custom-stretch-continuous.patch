@@ -1,0 +1,213 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
+@@ -39,6 +39,13 @@
+         bottom = max(bottom, other.bottom),
+     )
+ 
++    /** True when this area shows at least all of [other] (no edge is further in). */
++    fun covers(other: VideoContentRect, tolerance: Float = 0.004f): Boolean =
++        left <= other.left + tolerance &&
++            top <= other.top + tolerance &&
++            right >= other.right - tolerance &&
++            bottom >= other.bottom - tolerance
++
+     fun isCloseTo(other: VideoContentRect, tolerance: Float = 0.004f): Boolean =
+         abs(left - other.left) <= tolerance &&
+             abs(top - other.top) <= tolerance &&
+@@ -92,6 +99,8 @@
+     val confident: BooleanArray,
+     /** Coarse 4x4 grid of mean luma, to tell whether two samples show different frames. */
+     val signature: IntArray = IntArray(0),
++    /** True when this sample was measured on an mpv crop region and mapped back to the frame. */
++    val viaCrop: Boolean = false,
+ ) {
+     /** Thickness of the bar at each edge (left, top, right, bottom) as frame fractions. */
+     val thickness: FloatArray
+@@ -114,11 +123,13 @@
+             VideoContentRect(horizontal, vertical, 1f - horizontal, 1f - vertical),
+             booleanArrayOf(horizontalConfident, verticalConfident, horizontalConfident, verticalConfident),
+             signature,
++            viaCrop,
+         )
+     }
+ 
+     /** See [VideoContentRect.mapFromCrop]. */
+-    fun mapFromCrop(crop: VideoContentRect?): BarSample = BarSample(rect.mapFromCrop(crop), confident, signature)
++    fun mapFromCrop(crop: VideoContentRect?): BarSample =
++        BarSample(rect.mapFromCrop(crop), confident, signature, viaCrop = crop != null)
+ 
+     /** True when [other] shows a clearly different frame (not the same paused or static shot). */
+     fun differsFrom(other: IntArray?): Boolean {
+@@ -332,17 +343,23 @@
+ }
+ 
+ /**
+- * Collects samples for one title and decides when the stretch geometry changes.
++ * Collects samples for one title, for the whole time it plays, and decides when the stretch
++ * geometry changes.
++ *
++ * Each edge keeps its last [WINDOW] trusted bar measurements and uses the thinnest of them (so a
++ * dark scene or a vignette can never make the picture smaller). An edge is cropped only after
++ * [CONFIRMATIONS] trusted samples from different frames. Per axis the thinner side wins, because
++ * baked-in bars are centered. Bars on both axes (windowbox) are kept only when each is clearly
++ * there: a thin second axis is a dark or vignetted frame edge, and cropping it would stretch the
++ * other direction as well.
+  *
+- * Each edge keeps the thinnest bar seen in a trusted sample (so the picture area is the union of
+- * trusted samples and never cuts picture). An edge is cropped only after [CONFIRMATIONS] trusted
+- * samples from different frames. Per axis the thinner side wins, because baked-in bars are centered. Bars on both axes
+- * (windowbox) are kept only when each is clearly there: a thin second axis is a dark or vignetted
+- * frame edge, and cropping it would stretch the other direction as well.
++ * Old measurements fall out of the window, so the geometry follows the title: bars that appear
++ * later (a full-frame intro, then a letterboxed film), bars that change (mixed aspect ratios) and
++ * bars that vanish (a wider scene). More picture is shown at once; less picture needs the same
++ * result on [CHANGE_CONFIRMATIONS] checks in a row.
+  */
+ class BlackBarTracker {
+-    private val thickness = FloatArray(4) { 1f }
+-    private val observations = IntArray(4)
++    private val recent = Array(4) { ArrayDeque<Float>() }
+     private var lastEvidence: IntArray? = null
+     /** Frames that counted as evidence (distinct shots, or a still shot seen long enough). */
+     private var samples = 0
+@@ -350,30 +367,54 @@
+     private var attempts = 0
+     private var staticRepeats = 0
+     private var committed: VideoContentRect? = null
++    private var pending: VideoContentRect? = null
++    private var pendingCount = 0
++    private var lastViaCrop = false
++    private var sinceFullView = 0
+ 
+     /**
+-     * Sample faster until every edge is confirmed (or enough samples were taken). Repeats of one
+-     * still shot (a title card, a paused start) use up attempts, not the evidence budget.
++     * Sample faster until every edge is confirmed (or enough samples were taken), and while a
++     * change of the picture area waits for its second check. Repeats of one still shot (a title
++     * card, a paused start) use up attempts, not the evidence budget.
+      */
+     val isCalibrating: Boolean
+-        get() = attempts < MAX_CALIBRATION_ATTEMPTS && observations.any { it < CONFIRMATIONS }
++        get() = pending != null ||
++            (attempts < MAX_CALIBRATION_ATTEMPTS && recent.any { it.size < CONFIRMATIONS })
+ 
+     val current: VideoContentRect? get() = committed
+ 
++    /**
++     * True when the last samples only saw the cropped picture (mpv): a wider scene would stay
++     * hidden outside the crop. The caller then shows the whole frame for one sample and calls
++     * [notePeek].
++     */
++    val shouldPeek: Boolean
++        get() = lastViaCrop && sinceFullView >= PEEK_AFTER_SAMPLES &&
++            committed?.let { !it.isCloseTo(VideoContentRect.Full) } == true
++
++    fun notePeek() {
++        sinceFullView = 0
++    }
++
+     fun reset() {
+-        thickness.fill(1f)
+-        observations.fill(0)
++        recent.forEach { it.clear() }
+         lastEvidence = null
+         samples = 0
+         attempts = 0
+         staticRepeats = 0
+         committed = null
++        pending = null
++        pendingCount = 0
++        lastViaCrop = false
++        sinceFullView = 0
+     }
+ 
+     /** Feed one sample. Returns the new picture area when it changed, else null. */
+     fun offer(sample: BarSample?): VideoContentRect? {
+         if (sample == null) return null
+         attempts++
++        lastViaCrop = sample.viaCrop
++        if (sample.viaCrop) sinceFullView++ else sinceFullView = 0
+         // A dark scene must not confirm itself, so a repeat of the same shot only counts after it
+         // was seen STATIC_CONFIRM_REPEATS more times. Bars are only trusted with a sharp edge, so a
+         // still frame that shows them (intro card, paused start) is real evidence.
+@@ -389,11 +430,11 @@
+         val measured = sample.thickness
+         for (edge in 0 until 4) {
+             if (!sample.confident[edge]) continue
+-            observations[edge]++
+-            thickness[edge] = min(thickness[edge], measured[edge].coerceAtLeast(0f))
++            recent[edge].addLast(measured[edge].coerceAtLeast(0f))
++            while (recent[edge].size > WINDOW) recent[edge].removeFirst()
+         }
+         if (samples < CALIBRATION_SAMPLES) return null
+-        val edge = FloatArray(4) { if (observations[it] >= CONFIRMATIONS) thickness[it] else 0f }
++        val edge = FloatArray(4) { if (recent[it].size >= CONFIRMATIONS) recent[it].min() else 0f }
+         var horizontal = min(edge[0], edge[2])
+         var vertical = min(edge[1], edge[3])
+         if (horizontal > 0f && vertical > 0f) {
+@@ -402,7 +443,22 @@
+         }
+         val rect = VideoContentRect(horizontal, vertical, 1f - horizontal, 1f - vertical)
+         val previous = committed
+-        if (previous != null && previous.isCloseTo(rect)) return null
++        if (previous != null && previous.isCloseTo(rect)) {
++            pending = null
++            pendingCount = 0
++            return null
++        }
++        if (previous != null && !rect.covers(previous)) {
++            // Less picture than now: wait for the same answer on the next check.
++            val waiting = pending
++            if (waiting != null && waiting.isCloseTo(rect)) pendingCount++ else {
++                pending = rect
++                pendingCount = 1
++            }
++            if (pendingCount < CHANGE_CONFIRMATIONS) return null
++        }
++        pending = null
++        pendingCount = 0
+         committed = rect
+         return rect
+     }
+@@ -410,12 +466,19 @@
+     companion object {
+         const val CALIBRATION_SAMPLES = 3
+         const val CONFIRMATIONS = 2
++        /** Trusted measurements kept per edge. Older ones are forgotten, so the picture area can change. */
++        const val WINDOW = 4
++        const val CHANGE_CONFIRMATIONS = 2
+         const val MAX_CALIBRATION_ATTEMPTS = 50
+         const val STATIC_CONFIRM_REPEATS = 2
+         const val SECOND_AXIS_MIN_BAR = 0.03f
+         const val CALIBRATION_INTERVAL_MS = 1_200L
+-        const val STEADY_INTERVAL_MS = 8_000L
++        /** Checks continue at this pace until the title ends. */
++        const val STEADY_INTERVAL_MS = 3_000L
+         const val FIRST_SAMPLE_DELAY_MS = 800L
++        /** mpv only: show the whole frame for one sample after this many cropped samples (about 40 s). */
++        const val PEEK_AFTER_SAMPLES = 13
++        const val PEEK_SETTLE_MS = 220L
+ 
+         /** Longest side of the sampled frame. Enough to place bar edges within ~0.3%. */
+         const val SAMPLE_MAX_DIMENSION = 320
+@@ -443,8 +506,18 @@
+         val tracker = BlackBarTracker()
+         delay(BlackBarTracker.FIRST_SAMPLE_DELAY_MS)
+         while (isActive) {
++            // mpv crops to the picture, so a wider scene is invisible to the sampler: look at the
++            // whole frame now and then.
++            val peek = tracker.shouldPeek
++            if (peek) {
++                tracker.notePeek()
++                latestOnContentRect.value(null)
++                delay(BlackBarTracker.PEEK_SETTLE_MS)
++            }
+             val rect = runCatching { latestSample.value() }.getOrNull()
+-            tracker.offer(rect)?.let { latestOnContentRect.value(it) }
++            val changed = tracker.offer(rect)
++            if (peek) latestOnContentRect.value(changed ?: tracker.current)
++            else changed?.let { latestOnContentRect.value(it) }
+             delay(
+                 if (tracker.isCalibrating) BlackBarTracker.CALIBRATION_INTERVAL_MS
+                 else BlackBarTracker.STEADY_INTERVAL_MS,
