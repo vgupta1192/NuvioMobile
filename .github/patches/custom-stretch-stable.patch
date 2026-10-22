@@ -1,0 +1,56 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
+index 038c1e9b..33fcaa72 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
+@@ -496,7 +496,17 @@ class BlackBarTracker {
+             while (recent[edge].size > WINDOW) recent[edge].removeFirst()
+         }
+         if (samples < CALIBRATION_SAMPLES) return null
+-        val edge = FloatArray(4) { if (recent[it].size >= CONFIRMATIONS) recent[it].min() else 0f }
++        val edge = FloatArray(4) { steadyBar(recent[it]) }
++        // Baked bars are centred: two sides of one axis that disagree are not a bar.
++        if (edge[0] >= 0f && edge[2] >= 0f && abs(edge[0] - edge[2]) > MAX_BAR_ASYMMETRY) { edge[0] = UNSURE; edge[2] = UNSURE }
++        if (edge[1] >= 0f && edge[3] >= 0f && abs(edge[1] - edge[3]) > MAX_BAR_ASYMMETRY) { edge[1] = UNSURE; edge[3] = UNSURE }
++        // No clear answer for an edge keeps what is committed: missing or mixed evidence must never
++        // switch the stretch off and on again. Only trusted, agreeing measurements change it.
++        val held = committed
++        for (i in 0 until 4) if (edge[i] < 0f) {
++            val bar = held?.let { floatArrayOf(it.left, it.top, 1f - it.right, 1f - it.bottom)[i] } ?: 0f
++            edge[i] = if (bar > 0f) bar + EDGE_MARGIN else 0f
++        }
+         var horizontal = min(edge[0], edge[2])
+         var vertical = min(edge[1], edge[3])
+         if (horizontal > 0f && vertical > 0f) {
+@@ -531,9 +541,30 @@ class BlackBarTracker {
+         return rect
+     }
+ 
++    /**
++     * Bar thickness for one edge: the thinnest recent trusted measurement, but only when the recent
++     * ones agree. A baked bar has the same thickness in every shot; a dark scene, a night sky or a
++     * vignette gives a different "bar" each time, and a crop made from it would hide picture.
++     * Returns [UNSURE] when there is no clear answer.
++     */
++    private fun steadyBar(values: ArrayDeque<Float>): Float {
++        if (values.size < CONFIRMATIONS) return UNSURE
++        val smallest = values.min()
++        if (values.max() - smallest > MAX_BAR_SPREAD || smallest > MAX_BAR_THICKNESS) return UNSURE
++        return smallest
++    }
++
+     companion object {
+-        const val CALIBRATION_SAMPLES = 3
+-        const val CONFIRMATIONS = 2
++        /** Marks an edge without a clear measurement (see steadyBar). */
++        private const val UNSURE = -1f
++        const val CALIBRATION_SAMPLES = 4
++        const val CONFIRMATIONS = 3
++        /** Largest difference between recent measurements of one bar (frame fraction). */
++        const val MAX_BAR_SPREAD = 0.012f
++        /** Largest difference between the two bars of one axis. */
++        const val MAX_BAR_ASYMMETRY = 0.03f
++        /** Thickest bar one side may have (2.39:1 inside 4:3 is about 0.33). */
++        const val MAX_BAR_THICKNESS = 0.3f
+         /** Trusted measurements kept per edge. Older ones are forgotten, so the picture area can change. */
+         const val WINDOW = 4
+         const val CHANGE_CONFIRMATIONS = 2
