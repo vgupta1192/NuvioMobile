@@ -211,15 +211,15 @@ index 00000000..38997610
 +                gamma = 1f / (1f + current.gamma / 100f),
 +            )
 +        }
-+        val brightness = current.brightness / 100f + if (current.smartEnhance) 0.02f else 0f
-+        val contrast = current.contrast / 100f + if (current.smartEnhance) 0.12f else 0f
-+        val saturation = current.saturation.toFloat() + if (current.smartEnhance) 16f else 0f
++        val brightness = current.brightness / 100f + if (current.smartEnhance) 0.01f else 0f
++        val contrast = current.contrast / 100f + if (current.smartEnhance) 0.05f else 0f
++        val saturation = current.saturation.toFloat() + if (current.smartEnhance) 6f else 0f
 +        if (abs(brightness) > 0.001f) effects += Brightness(brightness.coerceIn(-1f, 1f))
 +        if (abs(contrast) > 0.001f) effects += Contrast(contrast.coerceIn(-1f, 1f))
 +        if (abs(saturation) > 0.5f || current.smartEnhance) {
 +            effects += HslAdjustment.Builder()
 +                .adjustSaturation(saturation.coerceIn(-100f, 100f))
-+                .adjustLightness(if (current.smartEnhance) 2f else 0f)
++                .adjustLightness(0f)
 +                .build()
 +        }
 +        runCatching { player.setVideoEffects(effects) }
