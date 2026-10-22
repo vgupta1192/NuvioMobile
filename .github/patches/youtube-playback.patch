@@ -1,0 +1,29 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt
+index 193def2..fd1f62b 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/HlsAudioSpotSampler.kt
+@@ -436,6 +436,7 @@ internal class HlsAudioSpotSampler(
+ 
+         /** [KIND_HLS] or [KIND_DASH] when [uri] serves such a manifest, by address or first bytes; else null. */
+         fun manifestKind(uri: Uri, dataSourceFactory: DataSource.Factory): String? {
++            if (isYouTubeMedia(uri)) return null
+             val path = uri.path.orEmpty().lowercase()
+             if (path.endsWith(".m3u8")) return KIND_HLS
+             if (path.endsWith(".mpd")) return KIND_DASH
+@@ -449,7 +450,15 @@ internal class HlsAudioSpotSampler(
+ 
+         /** Whether [uri] serves an HLS playlist even though its address doesn't say so. Blocking. */
+         fun looksLikePlaylist(uri: Uri, dataSourceFactory: DataSource.Factory): Boolean =
+-            sniff(uri, dataSourceFactory)?.trimStart('\uFEFF', ' ', '\r', '\n', '\t')?.startsWith("#EXTM3U") == true
++            !isYouTubeMedia(uri) && sniff(uri, dataSourceFactory)?.trimStart('\uFEFF', ' ', '\r', '\n', '\t')?.startsWith("#EXTM3U") == true
++
++        /**
++         * A YouTube stream (resolved from a ytId). Its addresses are tied to one connection and
++         * YouTube slows or refuses extra downloads of the same stream, so the background readers
++         * (seek previews, automatic sync, generated subtitles) must leave it alone: a second
++         * reader stalls the video that is playing.
++         */
++        fun isYouTubeMedia(uri: Uri): Boolean = uri.host.orEmpty().lowercase().endsWith("googlevideo.com")
+ 
+         private fun sniff(uri: Uri, dataSourceFactory: DataSource.Factory): String? {
+             val source = dataSourceFactory.createDataSource()
