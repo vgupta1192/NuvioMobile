@@ -439,7 +439,7 @@ new file mode 100644
 index 00000000..94e9b375
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
-@@ -0,0 +1,285 @@
+@@ -0,0 +1,307 @@
 +package com.nuvio.app.features.player
 +
 +import androidx.compose.runtime.compositionLocalOf
@@ -529,18 +529,38 @@ index 00000000..94e9b375
 +        val hash = torrentInfoHash?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
 +        if (hash != null) return "t:$hash:${torrentFileIdx ?: -1}"
 +        val addon = addonId?.trim().orEmpty()
++        val label = withoutLiveLines(name)
++        if (addon.isEmpty() && label.isEmpty()) return null
++        // Numbers and live lines are left out of the description: addons put values there (speed,
++        // start time, FAST/SLOW, seeders) that change on every load of the same stream.
++        val details = withoutLiveLines(description).replace(VOLATILE_NUMBER, "#").trim()
++        return "s:" + fnv64("$addon\n$label\n$details")
++    }
++
++    /** The key formula from before live lines were left out; still tried so older saves keep their mark. */
++    private fun legacyStreamKey(addonId: String?, name: String?, description: String?): String? {
++        val addon = addonId?.trim().orEmpty()
 +        val label = name?.trim().orEmpty()
 +        if (addon.isEmpty() && label.isEmpty()) return null
-+        // Numbers are left out of the description: addons put live values there (speed, start
-+        // time, seeders) that change on every load of the same stream.
 +        val details = description.orEmpty().replace(VOLATILE_NUMBER, "#").trim()
 +        return "s:" + fnv64("$addon\n$label\n$details")
 +    }
++
++    /**
++     * Drops what changes between loads of one stream: the speed test line ("starts 0.0s", "Mbps",
++     * "may buffer") and the FAST/SLOW badge inside other lines. Without this the same Stream Master
++     * row got a new key on each load and its synced-subtitles mark was lost.
++     */
++    private fun withoutLiveLines(text: String?): String = text.orEmpty().lines()
++        .filterNot { LIVE_LINE.containsMatchIn(it) }
++        .joinToString("\n") { SPEED_BADGE.replace(it, "").trim() }
++        .trim()
 +
 +    /** Both keys a listed stream may have been saved under (as a torrent, or by its name). */
 +    fun streamKeys(stream: StreamItem): List<String> = listOfNotNull(
 +        stream.p2pInfoHash?.let { streamKey(stream.addonId, stream.streamLabel, stream.streamSubtitle, it, stream.p2pFileIdx) },
 +        streamKey(stream.addonId, stream.streamLabel, stream.streamSubtitle, null, null),
++        legacyStreamKey(stream.addonId, stream.streamLabel, stream.streamSubtitle),
 +    )
 +
 +    fun isMarked(videoId: String?, stream: StreamItem, marks: Map<String, Set<String>>): Boolean {
@@ -712,6 +732,8 @@ index 00000000..94e9b375
 +    private fun indexName(videoId: String) = "i-" + fnv64(videoId) + ".txt"
 +
 +    private val VOLATILE_NUMBER = Regex("[0-9]+(?:[.,][0-9]+)?")
++    private val LIVE_LINE = Regex("(?i)\\bstarts\\s*[0-9.]+\\s*s\\b|\\bmbps\\b|may buffer")
++    private val SPEED_BADGE = Regex("(?i)(?:\u26A1|\uD83D\uDC22)[\\uFE0F\\s]*(?:fast|slow)\\b")
 +
 +    private fun fnv64(text: String): String {
 +        var hash = -0x340d631b7bdddcdbL
