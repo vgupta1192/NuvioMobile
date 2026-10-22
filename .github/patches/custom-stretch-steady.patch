@@ -1,0 +1,51 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
+index 2d0026de..038c1e9b 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
+@@ -445,7 +445,7 @@ class BlackBarTracker {
+      * [notePeek].
+      */
+     val shouldPeek: Boolean
+-        get() = lastViaCrop && sinceFullView >= PEEK_AFTER_SAMPLES &&
++        get() = PEEK_ENABLED && lastViaCrop && sinceFullView >= PEEK_AFTER_SAMPLES &&
+             committed?.let { !it.isCloseTo(VideoContentRect.Full) } == true
+ 
+     fun notePeek() {
+@@ -485,6 +485,9 @@ class BlackBarTracker {
+             if (staticRepeats < STATIC_CONFIRM_REPEATS) return null
+             staticRepeats = 0
+         }
++        // Letterbox and pillarbox bars never take most of a frame. A "picture" that small is a
++        // logo on black, a title card or a dark scene, and cropping to it would hide the film.
++        if (sample.rect.width * sample.rect.height < MIN_PICTURE_AREA) return null
+         samples++
+         val measured = sample.thickness
+         for (edge in 0 until 4) {
+@@ -512,8 +515,9 @@ class BlackBarTracker {
+             return null
+         }
+         stableChecks = 0
+-        if (previous != null && !rect.covers(previous)) {
+-            // Less picture than now: wait for the same answer on the next check.
++        if (previous != null) {
++            // Any change of the picture area (more or less picture) waits for the same answer on
++            // the next check, so one odd frame cannot flash the black bars or a crop.
+             val waiting = pending
+             if (waiting != null && waiting.isCloseTo(rect)) pendingCount++ else {
+                 pending = rect
+@@ -549,8 +553,15 @@ class BlackBarTracker {
+         /** A seeded mpv stream is checked against the whole frame after this many cropped samples. */
+         const val SEEDED_PEEK_AFTER = 3
+         const val FIRST_SAMPLE_DELAY_MS = 800L
++        /**
++         * Looking at the whole frame means un-cropping it for a moment, which shows as a flash of
++         * black bars. Off: the crop only ever follows what the cropped frame itself shows.
++         */
++        const val PEEK_ENABLED = false
+         /** mpv only: show the whole frame for one sample after this many cropped samples (about 40 s). */
+         const val PEEK_AFTER_SAMPLES = 13
++        /** Smallest share of the frame a measured picture area may cover to be trusted. */
++        const val MIN_PICTURE_AREA = 0.5f
+         const val PEEK_SETTLE_MS = 220L
+ 
+         /** Longest side of the sampled frame. Enough to place bar edges within ~0.3%. */
