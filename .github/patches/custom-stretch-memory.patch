@@ -1,0 +1,265 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+index 4ef748c..6935c43 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+@@ -1188,6 +1188,7 @@ private fun ExoPlayerSurface(
+         sourceKey = playerSourceKey,
+         sample = { playerViewRef?.videoSurfaceView?.captureVideoLuma()?.detectContent() },
+         onContentRect = { customStretchRect = it },
++        memoryKey = sourceUrl,
+     )
+     LaunchedEffect(playerViewRef, latestCustomStretchRect.value) {
+         playerViewRef?.applyCustomStretchTransform(latestCustomStretchRect.value)
+@@ -1519,6 +1520,7 @@ private fun LibmpvPlayerSurface(
+         sourceKey = listOf(sourceUrl, sourceAudioUrl.orEmpty(), playerViewRef),
+         sample = { playerViewRef?.sampleCustomStretchContent() },
+         onContentRect = { rect -> playerViewRef?.setCustomStretchContent(rect) },
++        memoryKey = sourceUrl,
+     )
+ 
+     LaunchedEffect(playerViewRef, sourceUrl, sourceAudioUrl, sanitizedSourceHeaders, externalSubtitles) {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
+index f789520..2d0026d 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
+@@ -200,6 +200,9 @@ object BlackBarDetector {
+      * between bar and picture does not hide the edge.
+      */
+     private const val EDGE_MIN_CONTRAST = 24
++    /** At most this fraction of a bar may be brighter than [BAR_FLAT_LUMA] (hardsubs fit, picture does not). */
++    private const val BAR_FLAT_LUMA = 26
++    private const val BAR_MAX_LIT_FRACTION = 0.12f
+     private const val EDGE_BAND_LINES = 3
+ 
+     /**
+@@ -280,15 +283,38 @@ object BlackBarDetector {
+         fun brightestColumn(from: Int, toExclusive: Int): Int =
+             (from until toExclusive).maxOfOrNull { columnMean(it, top, bottom + 1) } ?: 0
+         fun trusted(barMean: Int, edgeMean: Int) = barMean <= BAR_MAX_MEAN && edgeMean - barMean >= EDGE_MIN_CONTRAST
++        // A baked bar is flat black. A dark but textured picture edge (shadow, vignette, dark
++        // ornament) has mean luma near black too, but holds many pixels above BAR_FLAT_LUMA.
++        fun litFraction(from: Int, toExclusive: Int, rows: Boolean): Float {
++            var lit = 0L
++            var total = 0L
++            for (line in from until toExclusive) {
++                if (rows) {
++                    for (x in barLeft until barRight) {
++                        if ((luma[line * stride + x].toInt() and 0xFF) > BAR_FLAT_LUMA) lit++
++                        total++
++                    }
++                } else {
++                    for (y in barTop until barBottom) {
++                        if ((luma[y * stride + line].toInt() and 0xFF) > BAR_FLAT_LUMA) lit++
++                        total++
++                    }
++                }
++            }
++            return if (total == 0L) 0f else lit.toFloat() / total
++        }
++        fun flat(from: Int, toExclusive: Int, rows: Boolean) = litFraction(from, toExclusive, rows) <= BAR_MAX_LIT_FRACTION
+ 
+         val band = EDGE_BAND_LINES
+         val confident = booleanArrayOf(
+-            left == 0 || trusted(columnBar(0, left), brightestColumn(left, min(right + 1, left + band))),
+-            top == 0 || trusted(rowBar(0, top), brightestRow(top, min(bottom + 1, top + band))),
+-            right == width - 1 ||
+-                trusted(columnBar(right + 1, width), brightestColumn(max(left, right + 1 - band), right + 1)),
+-            bottom == height - 1 ||
+-                trusted(rowBar(bottom + 1, height), brightestRow(max(top, bottom + 1 - band), bottom + 1)),
++            left == 0 || (flat(0, left, false) &&
++                trusted(columnBar(0, left), brightestColumn(left, min(right + 1, left + band)))),
++            top == 0 || (flat(0, top, true) &&
++                trusted(rowBar(0, top), brightestRow(top, min(bottom + 1, top + band)))),
++            right == width - 1 || (flat(right + 1, width, false) &&
++                trusted(columnBar(right + 1, width), brightestColumn(max(left, right + 1 - band), right + 1))),
++            bottom == height - 1 || (flat(bottom + 1, height, true) &&
++                trusted(rowBar(bottom + 1, height), brightestRow(max(top, bottom + 1 - band), bottom + 1))),
+         )
+         val rect = VideoContentRect(
+             left = left.toFloat() / width,
+@@ -365,12 +391,16 @@ class BlackBarTracker {
+     private var samples = 0
+     /** Every usable sample taken, including repeats of the same shot. */
+     private var attempts = 0
++    /** Every check made, including those without a usable sample (dark scene, capture failed). */
++    private var polls = 0
+     private var staticRepeats = 0
+     private var committed: VideoContentRect? = null
+     private var pending: VideoContentRect? = null
+     private var pendingCount = 0
+     private var lastViaCrop = false
+     private var sinceFullView = 0
++    /** Checks in a row that confirmed the committed picture area. Spaces the checks out. */
++    private var stableChecks = 0
+ 
+     /**
+      * Sample faster until every edge is confirmed (or enough samples were taken), and while a
+@@ -379,10 +409,36 @@ class BlackBarTracker {
+      */
+     val isCalibrating: Boolean
+         get() = pending != null ||
+-            (attempts < MAX_CALIBRATION_ATTEMPTS && recent.any { it.size < CONFIRMATIONS })
++            (polls < MAX_CALIBRATION_POLLS &&
++                (committed == null || (attempts < MAX_CALIBRATION_ATTEMPTS && recent.any { it.size < CONFIRMATIONS })))
+ 
+     val current: VideoContentRect? get() = committed
+ 
++    /** Delay before the next check: fast while unsure, then slower the longer the answer holds. */
++    val nextIntervalMs: Long
++        get() = when {
++            isCalibrating -> CALIBRATION_INTERVAL_MS
++            stableChecks >= LONG_STABLE_CHECKS -> LONG_STABLE_INTERVAL_MS
++            stableChecks >= SHORT_STABLE_CHECKS -> MID_STABLE_INTERVAL_MS
++            else -> STEADY_INTERVAL_MS
++        }
++
++    /**
++     * Start from a picture area confirmed earlier for the same stream: no calibration, no
++     * unstretched start. The checks go on, so a wrong or changed answer is still corrected (more
++     * picture at once, less picture after two matching checks).
++     */
++    fun seed(rect: VideoContentRect) {
++        reset()
++        committed = rect
++        val t = floatArrayOf(rect.left, rect.top, 1f - rect.right, 1f - rect.bottom)
++        for (edge in 0 until 4) repeat(CONFIRMATIONS) { recent[edge].addLast(t[edge].coerceAtLeast(0f)) }
++        samples = CALIBRATION_SAMPLES
++        attempts = MAX_CALIBRATION_ATTEMPTS
++        polls = MAX_CALIBRATION_POLLS
++        sinceFullView = PEEK_AFTER_SAMPLES - SEEDED_PEEK_AFTER
++    }
++
+     /**
+      * True when the last samples only saw the cropped picture (mpv): a wider scene would stay
+      * hidden outside the crop. The caller then shows the whole frame for one sample and calls
+@@ -401,16 +457,19 @@ class BlackBarTracker {
+         lastEvidence = null
+         samples = 0
+         attempts = 0
++        polls = 0
+         staticRepeats = 0
+         committed = null
+         pending = null
+         pendingCount = 0
+         lastViaCrop = false
+         sinceFullView = 0
++        stableChecks = 0
+     }
+ 
+     /** Feed one sample. Returns the new picture area when it changed, else null. */
+     fun offer(sample: BarSample?): VideoContentRect? {
++        polls++
+         if (sample == null) return null
+         attempts++
+         lastViaCrop = sample.viaCrop
+@@ -441,13 +500,18 @@ class BlackBarTracker {
+             if (horizontal < SECOND_AXIS_MIN_BAR) horizontal = 0f
+             if (vertical < SECOND_AXIS_MIN_BAR) vertical = 0f
+         }
++        // Keep a hair of the bar: the edge pixel of a scaled frame is a blend of bar and picture.
++        if (horizontal > EDGE_MARGIN) horizontal -= EDGE_MARGIN
++        if (vertical > EDGE_MARGIN) vertical -= EDGE_MARGIN
+         val rect = VideoContentRect(horizontal, vertical, 1f - horizontal, 1f - vertical)
+         val previous = committed
+         if (previous != null && previous.isCloseTo(rect)) {
+             pending = null
+             pendingCount = 0
++            stableChecks++
+             return null
+         }
++        stableChecks = 0
+         if (previous != null && !rect.covers(previous)) {
+             // Less picture than now: wait for the same answer on the next check.
+             val waiting = pending
+@@ -469,12 +533,21 @@ class BlackBarTracker {
+         /** Trusted measurements kept per edge. Older ones are forgotten, so the picture area can change. */
+         const val WINDOW = 4
+         const val CHANGE_CONFIRMATIONS = 2
+-        const val MAX_CALIBRATION_ATTEMPTS = 50
++        const val MAX_CALIBRATION_ATTEMPTS = 12
++        const val MAX_CALIBRATION_POLLS = 30
+         const val STATIC_CONFIRM_REPEATS = 2
+         const val SECOND_AXIS_MIN_BAR = 0.03f
+         const val CALIBRATION_INTERVAL_MS = 1_200L
+         /** Checks continue at this pace until the title ends. */
+         const val STEADY_INTERVAL_MS = 3_000L
++        /** Once the answer held for [SHORT_STABLE_CHECKS] / [LONG_STABLE_CHECKS] checks, look less often. */
++        const val SHORT_STABLE_CHECKS = 10
++        const val LONG_STABLE_CHECKS = 40
++        const val MID_STABLE_INTERVAL_MS = 6_000L
++        const val LONG_STABLE_INTERVAL_MS = 12_000L
++        const val EDGE_MARGIN = 0.003f
++        /** A seeded mpv stream is checked against the whole frame after this many cropped samples. */
++        const val SEEDED_PEEK_AFTER = 3
+         const val FIRST_SAMPLE_DELAY_MS = 800L
+         /** mpv only: show the whole frame for one sample after this many cropped samples (about 40 s). */
+         const val PEEK_AFTER_SAMPLES = 13
+@@ -485,11 +558,36 @@ class BlackBarTracker {
+     }
+ }
+ 
++/**
++ * Picture areas confirmed for streams played earlier in this app run, so a stream that comes
++ * back (resume, next try, another episode of the same file) starts stretched at once instead of
++ * measuring again. Least recently used entries are dropped first.
++ */
++object CustomStretchMemory {
++    private const val MAX_ENTRIES = 64
++    private val entries = LinkedHashMap<String, VideoContentRect>()
++
++    fun get(key: String?): VideoContentRect? {
++        if (key.isNullOrBlank()) return null
++        val found = entries.remove(key) ?: return null
++        entries[key] = found
++        return found
++    }
++
++    fun put(key: String?, rect: VideoContentRect) {
++        if (key.isNullOrBlank()) return
++        entries.remove(key)
++        entries[key] = rect
++        while (entries.size > MAX_ENTRIES) entries.remove(entries.keys.first())
++    }
++}
++
+ /**
+  * Runs the Custom Stretch sampling loop while [enabled]. [sample] returns the picture area of
+  * the current frame (null when it cannot tell). [onContentRect] receives null when sampling
+  * starts (plain stretch of the whole frame) and then every new picture area.
+- * The loop restarts, with a fresh tracker, when [sourceKey] changes.
++ * The loop restarts, with a fresh tracker, when [sourceKey] changes. With a [memoryKey] the last
++ * confirmed picture area of that stream is applied at once and kept up to date.
+  */
+ @Composable
+ fun CustomStretchSamplingEffect(
+@@ -497,13 +595,16 @@ fun CustomStretchSamplingEffect(
+     sourceKey: Any?,
+     sample: suspend () -> BarSample?,
+     onContentRect: (VideoContentRect?) -> Unit,
++    memoryKey: String? = null,
+ ) {
+     val latestSample = rememberUpdatedState(sample)
+     val latestOnContentRect = rememberUpdatedState(onContentRect)
+     LaunchedEffect(enabled, sourceKey) {
+-        latestOnContentRect.value(null)
++        val remembered = if (enabled) CustomStretchMemory.get(memoryKey) else null
++        latestOnContentRect.value(remembered)
+         if (!enabled) return@LaunchedEffect
+         val tracker = BlackBarTracker()
++        remembered?.let { tracker.seed(it) }
+         delay(BlackBarTracker.FIRST_SAMPLE_DELAY_MS)
+         while (isActive) {
+             // mpv crops to the picture, so a wider scene is invisible to the sampler: look at the
+@@ -518,10 +619,8 @@ fun CustomStretchSamplingEffect(
+             val changed = tracker.offer(rect)
+             if (peek) latestOnContentRect.value(changed ?: tracker.current)
+             else changed?.let { latestOnContentRect.value(it) }
+-            delay(
+-                if (tracker.isCalibrating) BlackBarTracker.CALIBRATION_INTERVAL_MS
+-                else BlackBarTracker.STEADY_INTERVAL_MS,
+-            )
++            if (changed != null) CustomStretchMemory.put(memoryKey, changed)
++            delay(tracker.nextIntervalMs)
+         }
+     }
+ }
