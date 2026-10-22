@@ -1,0 +1,129 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
+index 33fcaa72..6aa5dd88 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
+@@ -101,6 +101,8 @@ class BarSample(
+     val signature: IntArray = IntArray(0),
+     /** True when this sample was measured on an mpv crop region and mapped back to the frame. */
+     val viaCrop: Boolean = false,
++    /** Width / height of the whole source frame (0 = unknown), to judge whether a crop is plausible. */
++    val aspect: Float = 0f,
+ ) {
+     /** Thickness of the bar at each edge (left, top, right, bottom) as frame fractions. */
+     val thickness: FloatArray
+@@ -124,19 +126,27 @@ class BarSample(
+             booleanArrayOf(horizontalConfident, verticalConfident, horizontalConfident, verticalConfident),
+             signature,
+             viaCrop,
++            aspect,
+         )
+     }
+ 
+     /** See [VideoContentRect.mapFromCrop]. */
+     fun mapFromCrop(crop: VideoContentRect?): BarSample =
+-        BarSample(rect.mapFromCrop(crop), confident, signature, viaCrop = crop != null)
++        BarSample(
++            rect.mapFromCrop(crop),
++            confident,
++            signature,
++            viaCrop = crop != null,
++            // The image showed only [crop]: the whole frame is wider or taller by the crop's shape.
++            aspect = if (crop != null && aspect > 0f) aspect * crop.height / crop.width else aspect,
++        )
+ 
+     /** True when [other] shows a clearly different frame (not the same paused or static shot). */
+-    fun differsFrom(other: IntArray?): Boolean {
++    fun differsFrom(other: IntArray?, minDifference: Int = SIGNATURE_MIN_DIFFERENCE): Boolean {
+         if (other == null || other.size != signature.size || signature.isEmpty()) return true
+         var difference = 0
+         for (i in signature.indices) difference += abs(signature[i] - other[i])
+-        return difference >= SIGNATURE_MIN_DIFFERENCE
++        return difference >= minDifference
+     }
+ 
+     companion object {
+@@ -322,7 +332,7 @@ object BlackBarDetector {
+             right = (right + 1).toFloat() / width,
+             bottom = (bottom + 1).toFloat() / height,
+         )
+-        return BarSample(rect, confident, signature(luma, width, height, stride))
++        return BarSample(rect, confident, signature(luma, width, height, stride), aspect = width.toFloat() / height)
+     }
+ 
+     private fun signature(luma: ByteArray, width: Int, height: Int, stride: Int): IntArray {
+@@ -387,6 +397,8 @@ object BlackBarDetector {
+ class BlackBarTracker {
+     private val recent = Array(4) { ArrayDeque<Float>() }
+     private var lastEvidence: IntArray? = null
++    /** Signatures of the different shots that gave evidence (see [MIN_DISTINCT_SHOTS]). */
++    private val shotSignatures = ArrayDeque<IntArray>()
+     /** Frames that counted as evidence (distinct shots, or a still shot seen long enough). */
+     private var samples = 0
+     /** Every usable sample taken, including repeats of the same shot. */
+@@ -454,6 +466,7 @@ class BlackBarTracker {
+ 
+     fun reset() {
+         recent.forEach { it.clear() }
++        shotSignatures.clear()
+         lastEvidence = null
+         samples = 0
+         attempts = 0
+@@ -489,6 +502,10 @@ class BlackBarTracker {
+         // logo on black, a title card or a dark scene, and cropping to it would hide the film.
+         if (sample.rect.width * sample.rect.height < MIN_PICTURE_AREA) return null
+         samples++
++        if (shotSignatures.none { !sample.differsFrom(it, SHOT_CHANGE_DIFFERENCE) }) {
++            shotSignatures.addLast(sample.signature)
++            while (shotSignatures.size > WINDOW) shotSignatures.removeFirst()
++        }
+         val measured = sample.thickness
+         for (edge in 0 until 4) {
+             if (!sample.confident[edge]) continue
+@@ -496,7 +513,10 @@ class BlackBarTracker {
+             while (recent[edge].size > WINDOW) recent[edge].removeFirst()
+         }
+         if (samples < CALIBRATION_SAMPLES) return null
+-        val edge = FloatArray(4) { steadyBar(recent[it]) }
++        // A dark scene stays the same for seconds, so three samples of it agree. Baked bars stay
++        // the same in every shot: only evidence from different shots may crop.
++        val enoughShots = shotSignatures.size >= MIN_DISTINCT_SHOTS
++        val edge = FloatArray(4) { if (enoughShots) steadyBar(recent[it]) else UNSURE }
+         // Baked bars are centred: two sides of one axis that disagree are not a bar.
+         if (edge[0] >= 0f && edge[2] >= 0f && abs(edge[0] - edge[2]) > MAX_BAR_ASYMMETRY) { edge[0] = UNSURE; edge[2] = UNSURE }
+         if (edge[1] >= 0f && edge[3] >= 0f && abs(edge[1] - edge[3]) > MAX_BAR_ASYMMETRY) { edge[1] = UNSURE; edge[3] = UNSURE }
+@@ -517,6 +537,9 @@ class BlackBarTracker {
+         if (horizontal > EDGE_MARGIN) horizontal -= EDGE_MARGIN
+         if (vertical > EDGE_MARGIN) vertical -= EDGE_MARGIN
+         val rect = VideoContentRect(horizontal, vertical, 1f - horizontal, 1f - vertical)
++        // A picture wider than any film format (or narrower than a 4:3 one) that the frame itself
++        // is not: the crop ate real picture, for example a dark top of the scene.
++        if (!plausible(sample.aspect, rect)) return null
+         val previous = committed
+         if (previous != null && previous.isCloseTo(rect)) {
+             pending = null
+@@ -554,10 +577,25 @@ class BlackBarTracker {
+         return smallest
+     }
+ 
++    private fun plausible(sourceAspect: Float, rect: VideoContentRect): Boolean {
++        if (sourceAspect <= 0f || rect.height <= 0f) return true
++        val picture = sourceAspect * rect.width / rect.height
++        if (picture > MAX_PICTURE_ASPECT && picture > sourceAspect + ASPECT_SLACK) return false
++        if (picture < MIN_PICTURE_ASPECT && picture < sourceAspect - ASPECT_SLACK) return false
++        return true
++    }
++
+     companion object {
+         /** Marks an edge without a clear measurement (see steadyBar). */
+         private const val UNSURE = -1f
+         const val CALIBRATION_SAMPLES = 4
++        /** Samples whose signatures differ by at least this much (sum over the 4x4 grid) show different shots. */
++        const val SHOT_CHANGE_DIFFERENCE = 200
++        const val MIN_DISTINCT_SHOTS = 2
++        /** Widest film format is about 2.39:1 (a few reach 2.76); narrowest is 4:3. */
++        const val MAX_PICTURE_ASPECT = 2.6f
++        const val MIN_PICTURE_ASPECT = 1.2f
++        const val ASPECT_SLACK = 0.08f
+         const val CONFIRMATIONS = 3
+         /** Largest difference between recent measurements of one bar (frame fraction). */
+         const val MAX_BAR_SPREAD = 0.012f
