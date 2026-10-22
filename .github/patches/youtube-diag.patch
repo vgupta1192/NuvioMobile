@@ -32,10 +32,10 @@ index a2bdcbe7..4ef748c7 100644
                  dispatchExoPlayerSnapshot()
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/YouTubeDiag.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/YouTubeDiag.kt
 new file mode 100644
-index 00000000..1a5e679f
+index 00000000..5a549e17
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/YouTubeDiag.kt
-@@ -0,0 +1,181 @@
+@@ -0,0 +1,188 @@
 +package com.nuvio.app.features.player
 +
 +import android.os.Build
@@ -82,6 +82,13 @@ index 00000000..1a5e679f
 +    fun isYouTubeMedia(url: String?): Boolean = runCatching {
 +        URL(url).host.lowercase().endsWith("googlevideo.com")
 +    }.getOrDefault(false)
++
++    /** Reports how resolving the video id to a playable address went, before the player opens it. */
++    fun onExtract(videoId: String, elapsedMs: Long, outcome: String, detail: String?) {
++        val extra = JSONObject().put("videoId", videoId).put("elapsedMs", elapsedMs).put("outcome", outcome)
++        detail?.let { extra.put("detail", it.take(300)) }
++        scope.launch { send("extract", "https://www.youtube.com/watch", extra) }
++    }
 +
 +    fun onPrepare(url: String) {
 +        if (!isYouTubeMedia(url)) return
@@ -217,3 +224,82 @@ index 00000000..1a5e679f
 +        return result
 +    }
 +}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/streams/YouTubeDiagReport.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/streams/YouTubeDiagReport.android.kt
+new file mode 100644
+index 00000000..f5e23955
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/streams/YouTubeDiagReport.android.kt
+@@ -0,0 +1,6 @@
++package com.nuvio.app.features.streams
++
++import com.nuvio.app.features.player.YouTubeDiag
++
++internal actual fun reportYouTubeExtraction(videoId: String, elapsedMs: Long, outcome: String, detail: String?) =
++    YouTubeDiag.onExtract(videoId, elapsedMs, outcome, detail)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/YouTubeDiagReport.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/YouTubeDiagReport.kt
+new file mode 100644
+index 00000000..84d7ff21
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/YouTubeDiagReport.kt
+@@ -0,0 +1,4 @@
++package com.nuvio.app.features.streams
++
++/** Nuvio fork: reports how resolving a YouTube video on the device went (see YouTubeDiag on Android). */
++internal expect fun reportYouTubeExtraction(videoId: String, elapsedMs: Long, outcome: String, detail: String?)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/YouTubeStreamResolver.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/YouTubeStreamResolver.kt
+index 9f7e1dc5..80f69e40 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/YouTubeStreamResolver.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/YouTubeStreamResolver.kt
+@@ -3,6 +3,8 @@ package com.nuvio.app.features.streams
+ import com.nuvio.app.core.build.AppFeaturePolicy
+ import com.nuvio.app.core.build.TrailerPlaybackMode
+ import com.nuvio.app.features.trailer.TrailerPlaybackResolver
++import kotlin.coroutines.cancellation.CancellationException
++import kotlin.time.TimeSource
+ 
+ /**
+  * Makes streams that only carry a YouTube id ([StreamItem.ytId]) playable.
+@@ -23,8 +25,23 @@ class YouTubeStreamResolver(
+         val videoId = stream.youTubeIdToResolve ?: return stream
+         val watchUrl = watchUrl(videoId)
+         if (!inAppPlaybackEnabled) return stream.copy(externalUrl = watchUrl)
+-        val url = extractSingleUrl(watchUrl)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+-        return stream.copy(url = url)
++        val startedAt = TimeSource.Monotonic.markNow()
++        val url = try {
++            extractSingleUrl(watchUrl)?.trim()?.takeIf { it.isNotEmpty() }
++        } catch (error: CancellationException) {
++            reportYouTubeExtraction(videoId, startedAt.elapsedNow().inWholeMilliseconds, "cancelled", null)
++            throw error
++        } catch (error: Throwable) {
++            reportYouTubeExtraction(videoId, startedAt.elapsedNow().inWholeMilliseconds, "error", "${error::class.simpleName}: ${error.message}")
++            throw error
++        }
++        reportYouTubeExtraction(
++            videoId,
++            startedAt.elapsedNow().inWholeMilliseconds,
++            if (url == null) "empty" else "ok",
++            url?.substringAfter("://")?.substringBefore('/'),
++        )
++        return url?.let { stream.copy(url = it) }
+     }
+ 
+     companion object {
+diff --git a/composeApp/src/desktopMain/kotlin/com/nuvio/app/features/streams/YouTubeDiagReport.desktop.kt b/composeApp/src/desktopMain/kotlin/com/nuvio/app/features/streams/YouTubeDiagReport.desktop.kt
+new file mode 100644
+index 00000000..523bd332
+--- /dev/null
++++ b/composeApp/src/desktopMain/kotlin/com/nuvio/app/features/streams/YouTubeDiagReport.desktop.kt
+@@ -0,0 +1,3 @@
++package com.nuvio.app.features.streams
++
++internal actual fun reportYouTubeExtraction(videoId: String, elapsedMs: Long, outcome: String, detail: String?) = Unit
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/streams/YouTubeDiagReport.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/streams/YouTubeDiagReport.ios.kt
+new file mode 100644
+index 00000000..523bd332
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/streams/YouTubeDiagReport.ios.kt
+@@ -0,0 +1,3 @@
++package com.nuvio.app.features.streams
++
++internal actual fun reportYouTubeExtraction(videoId: String, elapsedMs: Long, outcome: String, detail: String?) = Unit
