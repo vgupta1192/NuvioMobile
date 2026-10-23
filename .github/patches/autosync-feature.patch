@@ -4006,7 +4006,7 @@ new file mode 100644
 index 00000000..e303ae00
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
-@@ -0,0 +1,1349 @@
+@@ -0,0 +1,1392 @@
 +@file:OptIn(androidx.media3.common.util.UnstableApi::class)
 +
 +package com.nuvio.app.features.player.audiosync
@@ -4289,6 +4289,7 @@ index 00000000..e303ae00
 +            pool?.mediaDurationMs = durationMs
 +        }
 +        asr?.onPlayhead(playbackPositionMs)
++        scheduleSettle()
 +        scheduleAlignment()
 +        maybeSampleSpots()
 +        val now = SystemClock.elapsedRealtime()
@@ -5126,6 +5127,46 @@ index 00000000..e303ae00
 +        }.also { decoder = it }
 +    }
 +
++    @Volatile
++    private var provisionalAtMs = 0L
++
++    /**
++     * An early estimate that stays unconfirmed and uncontradicted (no new audio is arriving, or the
++     * confirmation needs more than is heard) is kept as the result after a while, so the panel
++     * does not say "fine-tuning" for as long as the film plays.
++     */
++    private fun scheduleSettle() {
++        val current = session ?: return
++        if (!enabled || released || !estimated || current.maintainedByRecognition) return
++        val since = provisionalAtMs
++        if (since == 0L || SystemClock.elapsedRealtime() - since < EARLY_SETTLE_MS) return
++        if (!alignRunning.compareAndSet(false, true)) return
++        try {
++            aligner.execute {
++                try {
++                    val applied = model
++                    if (session === current && estimated && applied != null) {
++                        current.tracker.adopt(applied)
++                        estimated = false
++                        lockedAtElapsedMs = SystemClock.elapsedRealtime()
++                        lockMethod = "speech detection (early estimate kept)"
++                        SyncLog.i("early estimate kept as the result after ${EARLY_SETTLE_MS / 1_000}s without contradiction")
++                        notify(
++                            AudioSyncStatus.Synced(
++                                offsetMs = applied.delayUsAt(playbackPositionMs * 1_000L) / 1_000L,
++                                rateCorrected = false,
++                            ),
++                        )
++                    }
++                } finally {
++                    alignRunning.set(false)
++                }
++            }
++        } catch (_: Exception) {
++            alignRunning.set(false)
++        }
++    }
++
 +    private fun scheduleAlignment() {
 +        val current = session ?: return
 +        if (!enabled || released) return
@@ -5169,6 +5210,7 @@ index 00000000..e303ae00
 +                if (first) manualDelayAtLockMs = manualDelayMs()
 +                model = outcome.model
 +                estimated = true
++                provisionalAtMs = SystemClock.elapsedRealtime()
 +                lockMethod = "speech detection"
 +                SyncLog.i("provisional ${outcome.model} ${describe(outcome.estimate)} in ${elapsed}ms")
 +                if (first) {
@@ -5235,6 +5277,7 @@ index 00000000..e303ae00
 +        private const val MIN_TRACK_CUES = 20
 +        private const val ALIGN_INTERVAL_MS = 8_000L
 +        private const val SEARCH_INTERVAL_MS = 3_000L
++        private const val EARLY_SETTLE_MS = 90_000L
 +        private const val DIAGNOSTICS_INTERVAL_MS = 1_000L
 +        private const val PREFERENCES = "nuvio_audio_sync"
 +        private const val PREFETCH_REFERENCES = 2
@@ -20154,7 +20197,7 @@ new file mode 100644
 index 00000000..fb1763e4
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/bubble/AutoSyncBubbleToast.kt
-@@ -0,0 +1,816 @@
+@@ -0,0 +1,817 @@
 +package com.nuvio.app.features.autosync.bubble
 +
 +import androidx.compose.animation.AnimatedContent
@@ -20267,7 +20310,7 @@ index 00000000..fb1763e4
 +/** How long the working bubble keeps its words before settling to just the droplet. */
 +private const val WORKING_LABEL_MS = 7_000L
 +/** A run that never reports back fades away after this. */
-+private const val WORKING_TIMEOUT_MS = 240_000L
++private const val WORKING_DROPLET_MS = 1_200L
 +private const val SUCCESS_HOLD_MS = 1_600L
 +private const val FAILURE_HOLD_MS = 7_000L
 +
@@ -20358,7 +20401,8 @@ index 00000000..fb1763e4
 +        labelVisible = true
 +        delay(WORKING_LABEL_MS)
 +        labelVisible = false
-+        delay(WORKING_TIMEOUT_MS - WORKING_LABEL_MS)
++        // The words are gone: the droplet does not stay over the picture while the work goes on.
++        delay(WORKING_DROPLET_MS)
 +        dismiss()
 +    }
 +    LaunchedEffect(kind) {
