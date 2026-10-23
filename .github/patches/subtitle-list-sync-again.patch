@@ -1,0 +1,82 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt
+index a8cd42fa..9c21f477 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt
+@@ -28,6 +28,7 @@ import androidx.compose.foundation.rememberScrollState
+ import androidx.compose.foundation.shape.RoundedCornerShape
+ import androidx.compose.foundation.verticalScroll
+ import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.rounded.Sync
+ import androidx.compose.material.icons.rounded.Check
+ import androidx.compose.material.icons.rounded.CloudDownload
+ import androidx.compose.material3.Icon
+@@ -468,6 +469,33 @@ private fun SubtitleOptionRow(
+                 )
+             }
+         }
++        if (option is SubtitleSelectionOption.Addon) {
++            // Sync again: run AutoSync on this subtitle once more, ignoring its saved timing.
++            Row(
++                modifier = Modifier
++                    .padding(start = 8.dp)
++                    .clip(RoundedCornerShape(999.dp))
++                    .clickableIncludingFlingStop {
++                        com.nuvio.app.features.player.SyncedSubtitles.requestResync(option.subtitle.url)
++                        onClick()
++                    }
++                    .padding(horizontal = 8.dp, vertical = 6.dp),
++                horizontalArrangement = Arrangement.spacedBy(4.dp),
++                verticalAlignment = Alignment.CenterVertically,
++            ) {
++                Icon(
++                    imageVector = Icons.Rounded.Sync,
++                    contentDescription = null,
++                    tint = if (selected) tokens.colors.onAccent else Color.White.copy(alpha = 0.85f),
++                    modifier = Modifier.size(16.dp),
++                )
++                Text(
++                    text = "Sync again",
++                    color = if (selected) tokens.colors.onAccent else Color.White.copy(alpha = 0.85f),
++                    style = MaterialTheme.typography.labelMedium,
++                )
++            }
++        }
+         if (selected) {
+             Icon(
+                 imageVector = Icons.Rounded.Check,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
+index b096caf6..377cb8de 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
+@@ -81,6 +81,15 @@ object SyncedSubtitles {
+     /** Subtitles restored from [saved] in this playback; their "synced" state is not saved again. */
+     val restoredUrls: MutableSet<String> = mutableSetOf()
+ 
++    /** Subtitles the user asked to AutoSync again from the list: their saved timing is ignored until the new run saves. */
++    val forceResync: MutableSet<String> = mutableSetOf()
++
++    /** The subtitle list's "Sync again": forget the saved timing of [url] so the next pick runs AutoSync on it. */
++    fun requestResync(url: String) {
++        forceResync += url
++        restoredUrls -= url
++    }
++
+     /**
+      * Subtitles saved under THIS stream's own key (device file or keyed pull). The video-wide
+      * pull adds subtitles that other streams of the title synced; those may not fit this stream,
+@@ -283,6 +292,7 @@ object SyncedSubtitles {
+ 
+     /** The saved synced subtitle for [url] in this playback, if any. */
+     fun savedFor(url: String): Saved? {
++        if (forceResync.any { sameSubtitleFile(it, url) }) return null
+         val (playback, saved) = _saved.value ?: return null
+         if (playback != _playback.value) return null
+         saved[url]?.let { return it }
+@@ -303,6 +313,7 @@ object SyncedSubtitles {
+ 
+     /** AutoSync or the audio sync synced [url] to [srt] in this playback: keep it for next time. */
+     fun save(url: String, srt: String, method: String, nowMs: Long) {
++        forceResync.removeAll { sameSubtitleFile(it, url) }
+         val playback = _playback.value ?: return
+         if (srt.isBlank() || url in restoredUrls || GeneratedSubtitles.isGenerated(url)) return
+         val subtitle = describeSubtitle(url)

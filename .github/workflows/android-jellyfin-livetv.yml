@@ -1,5 +1,5 @@
 name: Build NuvioMobile Jellyfin+LiveTV (upstream release sync)
-# sync-pulse: forced 2026-10-23T17:21Z
+# sync-pulse: forced 2026-10-23T17:54Z
 
 on:
   push:
@@ -164,7 +164,7 @@ jobs:
         if: steps.ver.outputs.should_build == 'true'
         run: |
           # enhanced-ports
-          for P in enhanced-base livetv-iptv-sources livetv-guide-grid instant-home streams-pin-search episode-navigator downloads-wifi-only trackers-anilist-wetrakr private-viewing dynamic-home-background player-quality-chooser downloads-sd-card details-rate-action player-cast hero-trailer-options startup-preloader player-quick-actions user-ratings mini-player player-hls-quality-ratings details-actions-legacy-controls ports-compile-fixes downloads-settings-saf downloads-icon-tint autosync-bubble-stuck-fix autosync-bubble-cancel-fix smart-enhance player-picture-audio custom-stretch-startup-fix picture-sound-settings youtube-playback youtube-diag youtube-livetv custom-stretch-continuous custom-stretch-memory custom-stretch-steady custom-stretch-stable custom-stretch-shots autosync-second-round autosync-giveup-panel synced-own-stream-first; do
+          for P in enhanced-base livetv-iptv-sources livetv-guide-grid instant-home streams-pin-search episode-navigator downloads-wifi-only trackers-anilist-wetrakr private-viewing dynamic-home-background player-quality-chooser downloads-sd-card details-rate-action player-cast hero-trailer-options startup-preloader player-quick-actions user-ratings mini-player player-hls-quality-ratings details-actions-legacy-controls ports-compile-fixes downloads-settings-saf downloads-icon-tint autosync-bubble-stuck-fix autosync-bubble-cancel-fix smart-enhance player-picture-audio custom-stretch-startup-fix picture-sound-settings youtube-playback youtube-diag youtube-livetv custom-stretch-continuous custom-stretch-memory custom-stretch-steady custom-stretch-stable custom-stretch-shots autosync-second-round autosync-giveup-panel synced-own-stream-first subtitle-list-sync-again; do
             if git apply "fork-src/.github/patches/$P.patch"; then
               echo "applied $P.patch"
             else
