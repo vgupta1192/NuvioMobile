@@ -1,0 +1,77 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerEngineController.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerEngineController.android.kt
+index 5d7148d4..0a5924ee 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerEngineController.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerEngineController.android.kt
+@@ -79,6 +79,12 @@ internal class AutoSyncPlayerEngineController(
+ ) : PlayerEngineController by base, AutoSyncPlayerController {
+     override val autoSyncRetryState = coordinator.retryState
+ 
++    init {
++        // "Sync again" that finds nothing better puts the saved timing back.
++        val main = android.os.Handler(android.os.Looper.getMainLooper())
++        SyncedSubtitles.restoreSavedHook = { url -> main.post { restoreSynced(url) } }
++    }
++
+     override fun retryWithAnotherReference() = coordinator.retryWithAnotherReference()
+ 
+     override fun setAutoSyncSubtitleCandidates(candidates: List<AutoSyncSubtitleCandidate>) =
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
+index ca4a5bea..74b0e815 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
+@@ -51,6 +51,8 @@ internal class AudioSubtitleSyncController(
+     private val onStatus: (AudioSyncStatus) -> Unit = {},
+     /** Asks for the subtitle [url] to be shown instead of the current one (it fits the audio). */
+     private val requestSwitch: (url: String) -> Unit = SubtitleSyncStatus::requestSubtitleSwitch,
++    /** The audio could not be matched in time (see [maybeGiveUp]). */
++    private val onGaveUp: () -> Unit = {},
+ ) : AudioSampleSink, PlaybackPcmListener {
+     private val appContext = context.applicationContext
+     private val timeline = SpeechTimeline()
+@@ -646,6 +648,7 @@ internal class AudioSubtitleSyncController(
+         gaveUpKey = current.key
+         SyncLog.i("no audio match for ${current.key} after ${(heardMs / 1_000).toInt()}s of audio; keeping its own timing")
+         notify(AudioSyncStatus.Withdrawn)
++        onGaveUp()
+     }
+ 
+     fun onAudioTrackSelected(format: Format?) {
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSyncFallback.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSyncFallback.kt
+index 5fd8e5ed..912906a9 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSyncFallback.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSyncFallback.kt
+@@ -70,6 +70,7 @@ internal class AudioSyncFallback(
+         manualDelayMs = { 0 },
+         onStatus = ::onStatus,
+         requestSwitch = ::replaceSubtitle,
++        onGaveUp = { target.get()?.url?.let(com.nuvio.app.features.player.SyncedSubtitles::resyncGaveUp) },
+     )
+ 
+     /** The subtitle being synced, with its original cues and the sidecar attachment it lives in. */
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
+index 377cb8de..f35693a8 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
+@@ -90,6 +90,22 @@ object SyncedSubtitles {
+         restoredUrls -= url
+     }
+ 
++    /** Set by the player: shows the saved timing of a subtitle again (runs on the main thread). */
++    var restoreSavedHook: ((url: String) -> Unit)? = null
++
++    /**
++     * The audio sync found no better timing for [url]. If the user asked to sync it again, the
++     * saved timing is put back instead of leaving the subtitle on its original timing.
++     */
++    fun resyncGaveUp(url: String) {
++        val pending = forceResync.filter { sameSubtitleFile(it, url) }
++        if (pending.isEmpty()) return
++        forceResync.removeAll(pending.toSet())
++        if (savedFor(url) == null) return
++        log("sync again: no better timing found, kept the saved one")
++        restoreSavedHook?.invoke(url)
++    }
++
+     /**
+      * Subtitles saved under THIS stream's own key (device file or keyed pull). The video-wide
+      * pull adds subtitles that other streams of the title synced; those may not fit this stream,
