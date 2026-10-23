@@ -949,7 +949,7 @@ new file mode 100644
 index 00000000..8ea125fa
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
-@@ -0,0 +1,1131 @@
+@@ -0,0 +1,1132 @@
 +@file:OptIn(androidx.media3.common.util.UnstableApi::class)
 +
 +package com.nuvio.app.features.player.generated
@@ -1216,6 +1216,7 @@ index 00000000..8ea125fa
 +                Thread.sleep(250L)
 +            }
 +            val covered = ArrayList<LongArray>()
++            SyncLog.i("generated subtitles: looking for a saved copy · duration ${current.durationMs}ms, language=$language, title=${GeneratedSubtitles.contentId}")
 +            val cache = cacheKey(current, language, online = current.url == GeneratedSubtitles.ONLINE_URL)
 +            // Players can disagree on the duration by a second; the keys around it are tried too.
 +            val skewKeys = listOf(-1_000L, 1_000L)
