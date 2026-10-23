@@ -949,7 +949,7 @@ new file mode 100644
 index 00000000..8ea125fa
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
-@@ -0,0 +1,1145 @@
+@@ -0,0 +1,1262 @@
 +@file:OptIn(androidx.media3.common.util.UnstableApi::class)
 +
 +package com.nuvio.app.features.player.generated
@@ -1060,6 +1060,9 @@ index 00000000..8ea125fa
 +
 +        val cues = ArrayList<CuesWithTiming>()
 +
++        /** Lines taken from a copy made for a stream a couple of seconds longer or shorter than this one. */
++        val reusedWide: MutableSet<CuesWithTiming> = java.util.Collections.newSetFromMap(java.util.IdentityHashMap())
++
 +        @Volatile
 +        var cuesVersion = 0
 +    }
@@ -1116,6 +1119,15 @@ index 00000000..8ea125fa
 +        runCatching {
 +            if (AutoSyncBubbleToasts.post(kind, "Generated subtitles • $text")) {
 +                ownBubbleId = AutoSyncBubbleToasts.current.value?.id ?: -1L
++                if (kind == AutoSyncBubbleKind.Working) {
++                    // Every working bubble goes away by itself after a few seconds, whoever posted it.
++                    val shownAt = System.currentTimeMillis()
++                    current.lastWorkingBubbleAt = shownAt
++                    scope.launch {
++                        delay(WORKING_BUBBLE_HOLD_MS)
++                        if (active === current && current.lastWorkingBubbleAt == shownAt) dismissBubble()
++                    }
++                }
 +            }
 +        }
 +    }
@@ -1140,12 +1152,7 @@ index 00000000..8ea125fa
 +        // so it does not sit over the picture (or the subtitles) for the whole run.
 +        val now = System.currentTimeMillis()
 +        if (current.lastWorkingBubbleAt != 0L && now - current.lastWorkingBubbleAt < WORKING_BUBBLE_GAP_MS) return
-+        current.lastWorkingBubbleAt = now
 +        bubble(current, AutoSyncBubbleKind.Working, "Generating subtitles · $text")
-+        scope.launch {
-+            delay(WORKING_BUBBLE_HOLD_MS)
-+            if (active === current && current.lastWorkingBubbleAt == now) dismissBubble()
-+        }
 +    }
 +
 +    /** Main thread: follows the player, notices when the subtitle is replaced, pushes cues. */
@@ -1247,7 +1254,17 @@ index 00000000..8ea125fa
 +                        if (language == GeneratedSubtitles.AUTO) null else cacheKey(current, GeneratedSubtitles.AUTO, online = !online0, skewMs = skew),
 +                    )
 +                }.distinct()
-+                wide.firstOrNull()?.let { loadCache(it, current, covered, otherKey = null, neighbourKeys = wide.drop(1)) }
++                wide.firstOrNull()?.let { loadCache(it, current, covered, otherKey = null, neighbourKeys = wide.drop(1), wide = true) }
++            }
++            var audio: Pair<SileroVadWeights, HlsAudioSpotSampler?>? = null
++            if (current.reusedWide.isNotEmpty()) {
++                bubble(current, AutoSyncBubbleKind.Working, "Checking the reused lines against this stream's audio")
++                val opened = openAudio(current, source)
++                audio = opened
++                val moved = alignReusedCopy(current, source, opened.second, opened.first)
++                if (current.stopped) return
++                // The corrected lines are kept under this stream's own key, so this is done once.
++                if (moved) cache?.let { saveCache(it, current, covered, neighbourPushKeys) }
 +            }
 +            var finishedAnnounced = false
 +            val savedLines = synchronized(current.cues) { current.cues.size }
@@ -1295,19 +1312,7 @@ index 00000000..8ea125fa
 +                recognizer = asr
 +            }
 +            deeplContext = ""
-+            val weights = appContext.resources.openRawResource(R.raw.silero_vad_v5_16k).use { SileroVadWeights.read(it) }
-+            // Playlists and manifests also hide behind other addresses: the first bytes tell.
-+            val kind = HlsAudioSpotSampler.manifestKind(source, dataSourceFactory)
-+            SyncLog.i("generated subtitles: reading the stream as ${kind?.uppercase()?.plus(" manifest") ?: "a single file"}")
-+            val hlsSampler = kind?.let {
-+                HlsAudioSpotSampler(
-+                    source,
-+                    dataSourceFactory,
-+                    MAX_WINDOW_BYTES,
-+                    dash = it == HlsAudioSpotSampler.KIND_DASH,
-+                    preferredLanguage = current.audioFormat?.language,
-+                )
-+            }
++            val (weights, hlsSampler) = audio ?: openAudio(current, source)
 +            current.status = "Generating subtitles from the audio…"
 +            var switchedToWhisper = false
 +            var deeplFailures = 0
@@ -1563,6 +1568,110 @@ index 00000000..8ea125fa
 +        return synchronized(segments) { segments.sortedBy { it.first } }
 +    }
 +
++    /** The speech detector's weights and, for playlists and manifests, the segment sampler. */
++    private fun openAudio(current: Run, source: Uri): Pair<SileroVadWeights, HlsAudioSpotSampler?> {
++        val weights = appContext.resources.openRawResource(R.raw.silero_vad_v5_16k).use { SileroVadWeights.read(it) }
++        // Playlists and manifests also hide behind other addresses: the first bytes tell.
++        val kind = HlsAudioSpotSampler.manifestKind(source, dataSourceFactory)
++        SyncLog.i("generated subtitles: reading the stream as ${kind?.uppercase()?.plus(" manifest") ?: "a single file"}")
++        val hlsSampler = kind?.let {
++            HlsAudioSpotSampler(
++                source,
++                dataSourceFactory,
++                MAX_WINDOW_BYTES,
++                dash = it == HlsAudioSpotSampler.KIND_DASH,
++                preferredLanguage = current.audioFormat?.language,
++            )
++        }
++        return weights to hlsSampler
++    }
++
++    /**
++     * Lines reused from a copy made for a stream a few seconds longer or shorter (another link of
++     * the same title) are usually one fixed offset away from this stream's audio. Two short audio
++     * windows are read; in each, the offset that puts the lines on the speech best is found. When
++     * both agree and the lines then sit clearly better on the speech, the reused lines move by it.
++     * Anything unclear leaves them as they are.
++     */
++    private fun alignReusedCopy(current: Run, source: Uri, hlsSampler: HlsAudioSpotSampler?, weights: SileroVadWeights): Boolean {
++        val reused = synchronized(current.cues) { current.cues.filter { it in current.reusedWide } }
++        if (reused.size < ALIGN_MIN_LINES) return false
++        val first = reused.first().startTimeUs / 1_000L
++        val last = reused.last().let { (it.startTimeUs + it.durationUs) / 1_000L }
++        if (last - first < 4 * ALIGN_WINDOW_MS) return false
++        val spans = reused.map { it.startTimeUs / 1_000L to (it.startTimeUs + it.durationUs) / 1_000L }
++        val shifts = ArrayList<Long>()
++        for (from in listOf(first + (last - first) / 3, first + (last - first) * 2 / 3)) {
++            if (current.stopped) return false
++            val to = from + ALIGN_WINDOW_MS
++            cancelledWindow = false
++            val segments = readWindow(current, source, hlsSampler, weights, from, to)
++            if (segments.isNullOrEmpty() || cancelledWindow) return false
++            val speech = segments.map { (startMs, samples) -> startMs to startMs + samples.size * 1_000L / SileroVad.SAMPLE_RATE }
++            val shift = bestShift(spans.filter { it.second > from && it.first < to }, speech)
++            if (shift == null) {
++                SyncLog.i("generated subtitles: reused lines left as they are · no clear offset at ${from / 1_000}s")
++                return false
++            }
++            shifts += shift
++        }
++        if (kotlin.math.abs(shifts[0] - shifts[1]) > ALIGN_AGREE_MS) {
++            SyncLog.i("generated subtitles: reused lines left as they are · offsets disagree (${shifts[0]} / ${shifts[1]} ms)")
++            return false
++        }
++        val shift = (shifts[0] + shifts[1]) / 2
++        if (kotlin.math.abs(shift) < ALIGN_MIN_SHIFT_MS) {
++            SyncLog.i("generated subtitles: reused lines already match this stream's audio")
++            return false
++        }
++        synchronized(current.cues) {
++            val moved = current.cues.map { entry ->
++                if (entry in current.reusedWide) {
++                    CuesWithTiming(entry.cues, (entry.startTimeUs + shift * 1_000L).coerceAtLeast(0L), entry.durationUs)
++                } else {
++                    entry
++                }
++            }
++            current.reusedWide.clear()
++            current.cues.clear()
++            current.cues += moved
++            current.cues.sortBy { it.startTimeUs }
++            current.cuesVersion++
++        }
++        SyncLog.i("generated subtitles: reused lines moved by ${shift}ms to match this stream's audio")
++        return true
++    }
++
++    /** The offset (ms) that puts [lines] on [speech] best, or null when no offset is convincing. */
++    private fun bestShift(lines: List<Pair<Long, Long>>, speech: List<Pair<Long, Long>>): Long? {
++        val lineMs = lines.sumOf { it.second - it.first }
++        if (lines.size < ALIGN_MIN_WINDOW_LINES || speech.isEmpty() || lineMs <= 0L) return null
++        fun overlap(shift: Long): Long {
++            var total = 0L
++            for ((a, b) in lines) {
++                for ((x, y) in speech) {
++                    val shared = minOf(b + shift, y) - maxOf(a + shift, x)
++                    if (shared > 0L) total += shared
++                }
++            }
++            return total
++        }
++        val base = overlap(0L)
++        var best = 0L
++        var bestScore = base
++        var shift = -ALIGN_MAX_SHIFT_MS
++        while (shift <= ALIGN_MAX_SHIFT_MS) {
++            val score = overlap(shift)
++            if (score > bestScore) {
++                bestScore = score
++                best = shift
++            }
++            shift += ALIGN_STEP_MS
++        }
++        if (best == 0L) return 0L.takeIf { base * 10 >= lineMs * 5 }
++        return best.takeIf { bestScore - base >= lineMs / 5 && bestScore * 10 >= lineMs * 6 }
++    }
++
 +    /**
 +     * The key of this title's generated lines, the same on every device: title/episode (or stream
 +     * address), stream duration (different releases are timed differently), online or on-device,
@@ -1605,7 +1714,7 @@ index 00000000..8ea125fa
 +     * fills only its gaps from the others. A partial copy made one way never hides a complete
 +     * copy made the other way.
 +     */
-+    private fun loadCache(key: String, current: Run, covered: MutableList<LongArray>, otherKey: String?, neighbourKeys: List<String> = emptyList()) {
++    private fun loadCache(key: String, current: Run, covered: MutableList<LongArray>, otherKey: String?, neighbourKeys: List<String> = emptyList(), wide: Boolean = false) {
 +        val keys = (listOf(key) + neighbourKeys + listOfNotNull(otherKey)).distinct()
 +        val found = runBlocking {
 +            coroutineScope {
@@ -1633,6 +1742,7 @@ index 00000000..8ea125fa
 +        if (merged.isEmpty()) return
 +        synchronized(current.cues) {
 +            current.cues += merged
++            if (wide) current.reusedWide += merged
 +            current.cues.sortBy { it.startTimeUs }
 +            current.cuesVersion++
 +        }
@@ -1853,6 +1963,13 @@ index 00000000..8ea125fa
 +        private const val STATUS_SHOW_MS = 2_500L
 +        private const val WORKING_BUBBLE_GAP_MS = 60_000L
 +        private const val SNAP_EDGE_SEC = 0.8
++        private const val ALIGN_WINDOW_MS = 45_000L
++        private const val ALIGN_MAX_SHIFT_MS = 4_000L
++        private const val ALIGN_STEP_MS = 100L
++        private const val ALIGN_AGREE_MS = 400L
++        private const val ALIGN_MIN_SHIFT_MS = 300L
++        private const val ALIGN_MIN_WINDOW_LINES = 6
++        private const val ALIGN_MIN_LINES = 40
 +        private const val WORKING_BUBBLE_HOLD_MS = 6_000L
 +
 +        /** Status lines containing one of these report a failure in the bubble; the rest are progress. */
