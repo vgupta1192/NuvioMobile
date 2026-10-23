@@ -1,0 +1,70 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerRuntimeAutoSync.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerRuntimeAutoSync.kt
+index 0968c6b2..597850a3 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerRuntimeAutoSync.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerRuntimeAutoSync.kt
+@@ -122,9 +122,14 @@ private fun PlayerScreenRuntime.selectSavedSyncedSubtitle(
+     if (playback != SyncedSubtitles.playback.value || subtitles.isEmpty()) return
+     val selected = addonSubtitles.firstOrNull { it.selectionKey == selectedAddonSubtitleId }
+     val target = selected?.takeIf { it.url in subtitles }
+-        ?: subtitles.values.sortedByDescending { it.savedAtMs }
++        ?: subtitles.values.sortedWith(
++            compareByDescending<SyncedSubtitles.Saved> { it.subtitleUrl in SyncedSubtitles.ownUrls }.thenByDescending { it.savedAtMs },
++        )
+             .firstNotNullOfOrNull { savedSubtitle -> addonSubtitles.firstOrNull { it.url == savedSubtitle.subtitleUrl } }
+         ?: return
++    // This stream has its own saved subtitle that the addon list does not show yet: wait for the
++    // list rather than taking another stream's subtitle.
++    if (isLoadingAddonSubtitles && target.url !in SyncedSubtitles.ownUrls && SyncedSubtitles.ownUrls.isNotEmpty()) return
+     if (!SyncedSubtitles.claimAutoSelect(playback)) return
+     if (SyncedSubtitles.userPicked && selected?.url != target.url) return
+     if (selected?.url == target.url && target.url in SyncedSubtitles.restoredUrls) return
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
+index 6f2891b1..b096caf6 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
+@@ -81,6 +81,13 @@ object SyncedSubtitles {
+     /** Subtitles restored from [saved] in this playback; their "synced" state is not saved again. */
+     val restoredUrls: MutableSet<String> = mutableSetOf()
+ 
++    /**
++     * Subtitles saved under THIS stream's own key (device file or keyed pull). The video-wide
++     * pull adds subtitles that other streams of the title synced; those may not fit this stream,
++     * so the automatic pick prefers these.
++     */
++    val ownUrls: MutableSet<String> = mutableSetOf()
++
+     fun streamKey(
+         addonId: String?,
+         name: String?,
+@@ -156,6 +163,7 @@ object SyncedSubtitles {
+         _playback.value = next
+         _saved.value = null
+         restoredUrls.clear()
++        ownUrls.clear()
+         autoSelected = null
+         userPicked = false
+         next ?: return
+@@ -164,7 +172,10 @@ object SyncedSubtitles {
+         scope.launch {
+             val local = localLoad?.invoke(fileName(next))?.let(::decodeList).orEmpty()
+             log("synced subs: local file rows=${local.size}")
+-            if (local.isNotEmpty() && _playback.value == next) merge(next, local, store = false)
++            if (local.isNotEmpty() && _playback.value == next) {
++                ownUrls += local.map { it.subtitleUrl }
++                merge(next, local, store = false)
++            }
+             val remote = runCatching {
+                 val result = SupabaseProvider.client.postgrest.rpc(
+                     "synced_subtitles_pull_all",
+@@ -176,7 +187,10 @@ object SyncedSubtitles {
+                 decodeList(result.data)
+             }.getOrNull().orEmpty()
+             log("synced subs: keyed pull rows=${remote.size}")
+-            if (remote.isNotEmpty() && _playback.value == next) merge(next, remote, store = true)
++            if (remote.isNotEmpty() && _playback.value == next) {
++                ownUrls += remote.map { it.subtitleUrl }
++                merge(next, remote, store = true)
++            }
+         }
+         // Nuvio fork: nothing under THIS device's stream key - other devices (or earlier
+         // sessions with rotated stream URLs) saved under different keys for the same title.
