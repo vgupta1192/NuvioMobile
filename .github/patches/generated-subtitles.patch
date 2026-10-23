@@ -890,7 +890,7 @@ new file mode 100644
 index 00000000..8ea125fa
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
-@@ -0,0 +1,953 @@
+@@ -0,0 +1,976 @@
 +@file:OptIn(androidx.media3.common.util.UnstableApi::class)
 +
 +package com.nuvio.app.features.player.generated
@@ -1087,7 +1087,12 @@ index 00000000..8ea125fa
 +            }
 +            val covered = ArrayList<LongArray>()
 +            val cache = cacheKey(current, language, online = current.url == GeneratedSubtitles.ONLINE_URL)
-+            cache?.let { loadCache(it, current, covered, otherKey = cacheKey(current, language, online = current.url != GeneratedSubtitles.ONLINE_URL)) }
++            // Players can disagree on the duration by a second; the keys around it are tried too.
++            val skewKeys = listOf(-1_000L, 1_000L)
++            val neighbourKeys = skewKeys.mapNotNull { cacheKey(current, language, online = current.url == GeneratedSubtitles.ONLINE_URL, skewMs = it) } +
++                skewKeys.mapNotNull { cacheKey(current, language, online = current.url != GeneratedSubtitles.ONLINE_URL, skewMs = it) }
++            val neighbourPushKeys = skewKeys.mapNotNull { cacheKey(current, language, online = current.url == GeneratedSubtitles.ONLINE_URL, skewMs = it) }
++            cache?.let { loadCache(it, current, covered, otherKey = cacheKey(current, language, online = current.url != GeneratedSubtitles.ONLINE_URL), neighbourKeys = neighbourKeys) }
 +            // Whisper translates from the audio itself, which reads far better than recognising
 +            // first and translating text; the faster models are opt-in. English needs no translation.
 +            val fast = GeneratedSubtitles.fastAsianModel.value
@@ -1266,7 +1271,7 @@ index 00000000..8ea125fa
 +                    "generated subtitles: ${fromMs / 1_000}-${toMs / 1_000}s → $lines lines from ${segments.size} " +
 +                        "speech segments in ${(System.currentTimeMillis() - startedAt) / 1_000}s",
 +                )
-+                cache?.let { saveCache(it, current, covered) }
++                cache?.let { saveCache(it, current, covered, neighbourPushKeys) }
 +            }
 +        } catch (_: InterruptedException) {
 +        } catch (error: Throwable) {
@@ -1384,8 +1389,8 @@ index 00000000..8ea125fa
 +     * address), stream duration (different releases are timed differently), online or on-device,
 +     * and spoken language. Null until the duration is known.
 +     */
-+    private fun cacheKey(current: Run, language: String, online: Boolean): String? {
-+        val durationSec = current.durationMs.takeIf { it > 0 }?.let { (it + 500L) / 1_000L } ?: return null
++    private fun cacheKey(current: Run, language: String, online: Boolean, skewMs: Long = 0L): String? {
++        val durationSec = current.durationMs.takeIf { it > 0 }?.let { (it + skewMs + 500L) / 1_000L } ?: return null
 +        val content = GeneratedSubtitles.contentId?.takeIf { it.isNotBlank() } ?: audioUrl.substringBefore('?')
 +        val key = "$content|$durationSec|${if (online) "online" else "device"}|$language"
 +        return MessageDigest.getInstance("SHA-1").digest(key.toByteArray()).joinToString("") { "%02x".format(it) }
@@ -1397,7 +1402,7 @@ index 00000000..8ea125fa
 +     * Loads saved lines: this device's copy, merged with the copy in the Nuvio account (made on any
 +     * device). With neither, lines made the other way (online / on this device) are reused.
 +     */
-+    private fun loadCache(key: String, current: Run, covered: MutableList<LongArray>, otherKey: String?) {
++    private fun loadCache(key: String, current: Run, covered: MutableList<LongArray>, otherKey: String?, neighbourKeys: List<String> = emptyList()) {
 +        val local = cacheFile(key).takeIf { it.isFile }?.let { runCatching { it.readText() }.getOrNull() }
 +        val remote = runBlocking { withTimeoutOrNull(SYNC_TIMEOUT_MS) { GeneratedSubtitleSync.pull(key) } }
 +        var payloads = listOfNotNull(local, remote)
@@ -1406,6 +1411,17 @@ index 00000000..8ea125fa
 +                cacheFile(otherKey).takeIf { it.isFile }?.let { runCatching { it.readText() }.getOrNull() },
 +                runBlocking { withTimeoutOrNull(SYNC_TIMEOUT_MS) { GeneratedSubtitleSync.pull(otherKey) } },
 +            )
++        }
++        if (payloads.isEmpty()) {
++            // Nothing under the exact duration: lines saved under a duration a second off are the same release.
++            for (candidate in neighbourKeys) {
++                val found = cacheFile(candidate).takeIf { it.isFile }?.let { runCatching { it.readText() }.getOrNull() }
++                    ?: runBlocking { withTimeoutOrNull(SYNC_TIMEOUT_MS) { GeneratedSubtitleSync.pull(candidate) } }
++                if (found != null) {
++                    payloads = listOf(found)
++                    break
++                }
++            }
 +        }
 +        payloads.forEach { applyPayload(it, current, covered) }
 +        if (remote != null) SyncLog.i("generated subtitles: lines from your Nuvio account found")
@@ -1437,7 +1453,7 @@ index 00000000..8ea125fa
 +        }
 +    }
 +
-+    private fun saveCache(key: String, current: Run, covered: List<LongArray>) {
++    private fun saveCache(key: String, current: Run, covered: List<LongArray>, extraKeys: List<String> = emptyList()) {
 +        val file = cacheFile(key)
 +        try {
 +            val cues = JSONArray()
@@ -1460,6 +1476,13 @@ index 00000000..8ea125fa
 +                withTimeoutOrNull(SYNC_TIMEOUT_MS) { GeneratedSubtitleSync.push(key, GeneratedSubtitles.contentId, payload) }
 +            }
 +            if (pushed != true) SyncLog.d("generated subtitles: not saved to the Nuvio account (signed out or offline)")
++            // Once the whole stream is covered the lines are also saved under the durations a second off,
++            // so a player that reports the duration slightly differently finds them.
++            if (pushed == true && current.durationMs > 0 && covered.sumOf { it[1] - it[0] } >= current.durationMs - 3_000L) {
++                extraKeys.forEach { extra ->
++                    runBlocking { withTimeoutOrNull(SYNC_TIMEOUT_MS) { GeneratedSubtitleSync.push(extra, GeneratedSubtitles.contentId, payload) } }
++                }
++            }
 +            // Keep the newest titles only.
 +            file.parentFile?.listFiles { candidate -> candidate.name.endsWith(".json") }
 +                ?.sortedByDescending { it.lastModified() }
