@@ -319,7 +319,7 @@ index 564ac5f9..0968c6b2 100644
      controller.setAutoSyncAppliedListener { subtitleUrl, delayMs ->
          val appliedSubtitle = addonSubtitles.firstOrNull { it.url == subtitleUrl }
          val previousSubtitle = addonSubtitles.firstOrNull { it.selectionKey == selectedAddonSubtitleId }
-@@ -72,6 +75,27 @@ internal fun PlayerScreenRuntime.BindAutoSyncRuntimeEffects() {
+@@ -72,6 +75,26 @@ internal fun PlayerScreenRuntime.BindAutoSyncRuntimeEffects() {
      LaunchedEffect(playerController, isLoadingAddonSubtitles, addonSubtitles) {
          retryPreferredSubtitleAfterAddonsLoaded()
      }
@@ -334,7 +334,6 @@ index 564ac5f9..0968c6b2 100644
 +                torrentInfoHash = activeTorrentInfoHash,
 +                torrentFileIdx = activeTorrentFileIdx,
 +            ),
-+            canonicalKey = SyncedSubtitles.canonicalStreamKey(activeStreamTitle),
 +        )
 +    }
 +    DisposableEffect(Unit) {
@@ -440,7 +439,7 @@ new file mode 100644
 index 00000000..94e9b375
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
-@@ -0,0 +1,326 @@
+@@ -0,0 +1,307 @@
 +package com.nuvio.app.features.player
 +
 +import androidx.compose.runtime.compositionLocalOf
@@ -557,28 +556,11 @@ index 00000000..94e9b375
 +        .joinToString("\n") { SPEED_BADGE.replace(it, "").trim() }
 +        .trim()
 +
-+    /**
-+     * Coarse fallback key: the first line of the stream name (usually the addon's own name) with
-+     * numbers blanked, so every row of one addon shares it. Same formula as Nuvio TV, which saves
-+     * it next to the exact key; it keeps the mark on rows whose text differs (other file, other
-+     * release) and on saves made before the exact key was made stable.
-+     */
-+    fun canonicalStreamKey(name: String?): String? {
-+        val label = name.orEmpty().trim().substringBefore('\n').trim()
-+        if (label.isEmpty()) return null
-+        return "c:" + fnv64(label.replace(VOLATILE_NUMBER, "#"))
-+    }
-+
-+    /** The canonical key of the playing stream, kept next to [playback]; see [canonicalStreamKey]. */
-+    var playbackCanonicalKey: String? = null
-+        private set
-+
-+    /** Every key a listed stream may have been saved under: torrent, by name, legacy and canonical. */
++    /** Both keys a listed stream may have been saved under (as a torrent, or by its name). */
 +    fun streamKeys(stream: StreamItem): List<String> = listOfNotNull(
 +        stream.p2pInfoHash?.let { streamKey(stream.addonId, stream.streamLabel, stream.streamSubtitle, it, stream.p2pFileIdx) },
 +        streamKey(stream.addonId, stream.streamLabel, stream.streamSubtitle, null, null),
 +        legacyStreamKey(stream.addonId, stream.streamLabel, stream.streamSubtitle),
-+        canonicalStreamKey(stream.streamLabel),
 +    )
 +
 +    fun isMarked(videoId: String?, stream: StreamItem, marks: Map<String, Set<String>>): Boolean {
@@ -606,10 +588,9 @@ index 00000000..94e9b375
 +    }
 +
 +    /** The player moved to [videoId] + stream: look up the synced subtitles saved for it. */
-+    fun setPlayback(videoId: String?, streamKey: String?, canonicalKey: String? = null) {
++    fun setPlayback(videoId: String?, streamKey: String?) {
 +        val next = if (videoId.isNullOrBlank() || streamKey == null) null else Playback(videoId, streamKey)
 +        if (next == _playback.value) return
-+        playbackCanonicalKey = if (next == null) null else canonicalKey?.trim()?.takeIf { it.isNotEmpty() }
 +        _playback.value = next
 +        _saved.value = null
 +        restoredUrls.clear()
@@ -713,14 +694,13 @@ index 00000000..94e9b375
 +        )
 +        merge(playback, listOf(saved), store = true)
 +        val encoded = json.encodeToString(Saved.serializer(), saved)
-+        val keys = listOfNotNull(playback.streamKey, playbackCanonicalKey?.takeIf { it != playback.streamKey })
 +        scope.launch {
-+            for (key in keys) runCatching {
++            runCatching {
 +                SupabaseProvider.client.postgrest.rpc(
 +                    "synced_subtitles_push_one",
 +                    buildJsonObject {
 +                        put("p_video_id", playback.videoId)
-+                        put("p_stream_key", key)
++                        put("p_stream_key", playback.streamKey)
 +                        put("p_subtitle_key", fnv64(url))
 +                        put("p_payload", Json.parseToJsonElement(encoded))
 +                    },
