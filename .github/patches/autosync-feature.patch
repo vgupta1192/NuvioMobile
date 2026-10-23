@@ -20154,7 +20154,7 @@ new file mode 100644
 index 00000000..fb1763e4
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/bubble/AutoSyncBubbleToast.kt
-@@ -0,0 +1,809 @@
+@@ -0,0 +1,816 @@
 +package com.nuvio.app.features.autosync.bubble
 +
 +import androidx.compose.animation.AnimatedContent
@@ -20197,6 +20197,8 @@ index 00000000..fb1763e4
 +import kotlin.math.roundToInt
 +import androidx.compose.foundation.layout.Row
 +import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.BoxWithConstraints
++import androidx.compose.foundation.layout.fillMaxSize
 +import androidx.compose.foundation.layout.heightIn
 +import androidx.compose.foundation.layout.offset
 +import androidx.compose.foundation.layout.padding
@@ -20284,18 +20286,23 @@ index 00000000..fb1763e4
 +    val message by AutoSyncBubbleToasts.current.collectAsState()
 +    val current = message
 +    if (!enabled || current == null) return
-+    // Rise above the player's seek bar and buttons while the controls are showing.
-+    val lift = animateDpAsState(
-+        targetValue = if (controlsVisible) 128.dp else 20.dp,
-+        animationSpec = spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessLow),
-+    )
-+    key(current.session) {
-+        AutoSyncBubble(
-+            message = current,
-+            modifier = Modifier
-+                .align(Alignment.BottomCenter)
-+                .offset { IntOffset(0, -lift.value.roundToPx()) },
++    // The holder only measures the player; it draws nothing and takes no touches.
++    BoxWithConstraints(Modifier.fillMaxSize()) {
++        // Rise above the player's seek bar and buttons while the controls are showing, and above
++        // the subtitle lines (the lower quarter of the screen) while they are hidden, so the
++        // bubble never covers the subtitles that are still arriving.
++        val lift = animateDpAsState(
++            targetValue = if (controlsVisible) 128.dp else maxOf(20.dp, maxHeight * 0.26f),
++            animationSpec = spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessLow),
 +        )
++        key(current.session) {
++            AutoSyncBubble(
++                message = current,
++                modifier = Modifier
++                    .align(Alignment.BottomCenter)
++                    .offset { IntOffset(0, -lift.value.roundToPx()) },
++            )
++        }
 +    }
 +}
 +
