@@ -4289,7 +4289,6 @@ index 00000000..e303ae00
 +            pool?.mediaDurationMs = durationMs
 +        }
 +        asr?.onPlayhead(playbackPositionMs)
-+        scheduleSettle()
 +        scheduleAlignment()
 +        maybeSampleSpots()
 +        val now = SystemClock.elapsedRealtime()
@@ -5168,6 +5167,7 @@ index 00000000..e303ae00
 +    }
 +
 +    private fun scheduleAlignment() {
++        scheduleSettle()
 +        val current = session ?: return
 +        if (!enabled || released) return
 +        val now = SystemClock.elapsedRealtime()
