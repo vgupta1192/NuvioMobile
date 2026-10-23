@@ -23,7 +23,7 @@ index 297a157f..3ca8b963 100644
      private val _retryState = MutableStateFlow(AutoSyncRetryUiState())
      val retryState: StateFlow<AutoSyncRetryUiState> = _retryState.asStateFlow()
  
-@@ -161,8 +163,31 @@ internal class AutoSyncPlayerCoordinator(
+@@ -161,8 +163,32 @@ internal class AutoSyncPlayerCoordinator(
          )
      }
  
@@ -34,6 +34,7 @@ index 297a157f..3ca8b963 100644
 +    fun restoreSynced(url: String, srt: String): Boolean {
 +        cancel()
 +        com.nuvio.app.features.player.SyncedSubtitles.restoredUrls += url
++        com.nuvio.app.features.player.SyncedSubtitles.adopt(url)
 +        if (!sidecar.startSidecarAddonSubtitle(url = url, useLibass = false, rawBodyLoader = { srt })) {
 +            com.nuvio.app.features.player.SyncedSubtitles.restoredUrls -= url
 +            return false
@@ -439,7 +440,7 @@ new file mode 100644
 index 00000000..94e9b375
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
-@@ -0,0 +1,307 @@
+@@ -0,0 +1,332 @@
 +package com.nuvio.app.features.player
 +
 +import androidx.compose.runtime.compositionLocalOf
@@ -714,6 +715,31 @@ index 00000000..94e9b375
 +        val name = indexName(playback.videoId)
 +        val keys = localLoad?.invoke(name)?.lines()?.filter { it.isNotBlank() }.orEmpty()
 +        if (playback.streamKey !in keys) localSave?.invoke(name, (keys + playback.streamKey).joinToString("\n"))
++    }
++
++    /**
++     * A saved subtitle was applied in this playback without a sync of its own (it was saved under
++     * another stream row, or another device): keep it for this row too, so the row shows the mark.
++     */
++    fun adopt(url: String) {
++        val playback = _playback.value ?: return
++        val saved = savedFor(url) ?: return
++        if (playback.streamKey in _marks.value[playback.videoId].orEmpty()) return
++        addLocalMark(playback)
++        val encoded = json.encodeToString(Saved.serializer(), saved)
++        scope.launch {
++            runCatching {
++                SupabaseProvider.client.postgrest.rpc(
++                    "synced_subtitles_push_one",
++                    buildJsonObject {
++                        put("p_video_id", playback.videoId)
++                        put("p_stream_key", playback.streamKey)
++                        put("p_subtitle_key", fnv64(saved.subtitleUrl))
++                        put("p_payload", Json.parseToJsonElement(encoded))
++                    },
++                )
++            }
++        }
 +    }
 +
 +    /** A JSON list of saved subtitles, or one saved subtitle (files written by older builds). */
