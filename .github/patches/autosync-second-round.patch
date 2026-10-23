@@ -1,0 +1,116 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
+index 5133ce71..72312fb2 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
+@@ -394,6 +394,9 @@ internal class AudioSubtitleSyncController(
+         spotStatus = ""
+         lastSpotWait = ""
+         heardPlaybackPcm = false
++        spotRound = 0
++        spotRoundEndedAt = 0L
++        sampledSpots = emptyList()
+         gaveUpKey = null
+         model = null
+         lockedAtElapsedMs = 0L
+@@ -435,6 +438,7 @@ internal class AudioSubtitleSyncController(
+      * chosen subtitle is still unsynced. Once per stream, on unmetered networks only.
+      */
+     private fun maybeSampleSpots() {
++        maybeSampleMoreSpots()
+         if (spotSamplingStarted.get()) return
+         val source = spotSource ?: return
+         val current = session ?: return
+@@ -465,6 +469,24 @@ internal class AudioSubtitleSyncController(
+         }
+     }
+ 
++    /**
++     * The first round of spots found no mapping: sample other places in the film once, so a stream
++     * whose first spots held music or off-script talk still gets a chance to match a subtitle.
++     */
++    private fun maybeSampleMoreSpots() {
++        if (spotRound != 0 || !spotSamplingStarted.get() || spotRoundEndedAt == 0L) return
++        val source = spotSource ?: return
++        val current = session ?: return
++        if (!enabled || released || source.sourceKey != sourceKey || (model != null && !estimated)) return
++        if (SystemClock.elapsedRealtime() - spotRoundEndedAt < MORE_SPOTS_AFTER_MS) return
++        spotRound = 1
++        SyncLog.i("no mapping from the first spots; sampling other places in the film")
++        Thread({ sampleSpots(source, current, round = 1) }, "NuvioAudioSyncSpots2").apply {
++            isDaemon = true
++            start()
++        }
++    }
++
+     @Volatile
+     private var lastSpotWait = ""
+ 
+@@ -479,7 +501,17 @@ internal class AudioSubtitleSyncController(
+     @Volatile
+     private var heardPlaybackPcm = false
+ 
+-    private fun sampleSpots(source: SpotSource, current: Session) {
++    /** Second round of spots (see [maybeSampleMoreSpots]): 0 until it starts, the places sampled so far. */
++    @Volatile
++    private var spotRound = 0
++
++    @Volatile
++    private var spotRoundEndedAt = 0L
++
++    @Volatile
++    private var sampledSpots: List<Long> = emptyList()
++
++    private fun sampleSpots(source: SpotSource, current: Session, round: Int = 0) {
+         Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+         val weights = runCatching { loadWeights(appContext) }.getOrNull() ?: return
+         createDecoder()
+@@ -505,10 +537,14 @@ internal class AudioSubtitleSyncController(
+             val coveredMs = timeline.segments(fromFrame = SpeechTimeline.frameForTimeUs(playbackPositionMs * 1_000L))
+                 .firstOrNull()?.let { (it.toFrame * SpeechTimeline.FRAME_DURATION_MS).toLong() } ?: 0L
+             val notBeforeMs = if (playbackPositionMs < RESUME_THRESHOLD_MS) coveredMs + SPOT_MS else 0L
+-            val spots = DialogueSpotPlanner.plan(tracks, mediaDurationMs, SPOT_COUNT, SPOT_MS, notBeforeMs)
++            val planned = DialogueSpotPlanner.plan(tracks, mediaDurationMs, SPOT_COUNT * (round + 1), SPOT_MS, notBeforeMs)
++            val spots = if (round == 0) planned else planned
++                .filter { spot -> sampledSpots.none { kotlin.math.abs(it - spot) < 2 * SPOT_MS } }
++                .take(SPOT_COUNT)
+             if (spots.isEmpty()) return
++            sampledSpots = sampledSpots + spots
+             SyncLog.i("sampling audio at ${spots.map { it / 1_000 }}s")
+-            spotStatus = "sampling ${spots.size} dialogue spots…"
++            spotStatus = if (round == 0) "sampling ${spots.size} dialogue spots…" else "sampling ${spots.size} more dialogue spots…"
+             val startedAt = SystemClock.elapsedRealtime()
+             // On mobile data the target is also the cap; on other networks a high-bitrate file may
+             // use more so each spot still holds whole sentences.
+@@ -556,6 +592,7 @@ internal class AudioSubtitleSyncController(
+             SyncLog.w("audio sampling failed: ${error.message}")
+         } finally {
+             decoders.forEach(AudioSyncDecoder::release)
++            spotRoundEndedAt = SystemClock.elapsedRealtime()
+         }
+     }
+ 
+@@ -1391,7 +1428,10 @@ internal class AudioSubtitleSyncController(
+         private const val RESUME_THRESHOLD_MS = 10 * 60_000L
+         private const val SPOT_BACKOFF_MS = 5L
+         private const val DRAIN_TIMEOUT_MS = 10_000L
+-        private const val GIVE_UP_AFTER_MS = 6 * 60_000L
++        private const val GIVE_UP_AFTER_MS = 4 * 60_000L
++
++        /** Without a mapping this long after the first spots, a second round samples other places. */
++        private const val MORE_SPOTS_AFTER_MS = 30_000L
+         private const val HLS_SAMPLE_AFTER_MS = 10_000L
+ 
+         /** Playback has started and buffered this much before sampling competes for bandwidth. */
+diff --git a/composeApp/src/commonMain/composeResources/values/audio_sync_strings.xml b/composeApp/src/commonMain/composeResources/values/audio_sync_strings.xml
+index 1105221b..5f54fcb0 100644
+--- a/composeApp/src/commonMain/composeResources/values/audio_sync_strings.xml
++++ b/composeApp/src/commonMain/composeResources/values/audio_sync_strings.xml
+@@ -3,7 +3,7 @@
+     <string name="player_audio_sync_model_downloading">Downloading speech recognition model (%1$s MB) for faster subtitle sync…</string>
+     <string name="player_audio_sync_model_needs_wifi">Connect to Wi-Fi once to download the %1$s MB speech model for faster subtitle sync</string>
+     <string name="player_audio_sync_live_only">No look-ahead for %1$s audio on this device, syncing from live audio (slower)</string>
+-    <string name="player_audio_sync_withdrawn">Couldn't confirm subtitle sync, restored original timing</string>
++    <string name="player_audio_sync_withdrawn">No subtitle matches this stream's audio, original timing kept. Try Generate subtitles</string>
+     <string name="player_audio_sync_estimated">Syncing subtitles to audio (%1$s), fine-tuning…</string>
+     <string name="player_audio_sync_synced">Subtitle sync confirmed (%1$s)</string>
+     <string name="player_audio_sync_synced_rate">Subtitle sync confirmed (%1$s, frame rate corrected)</string>
