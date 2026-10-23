@@ -890,7 +890,7 @@ new file mode 100644
 index 00000000..8ea125fa
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
-@@ -0,0 +1,976 @@
+@@ -0,0 +1,1085 @@
 +@file:OptIn(androidx.media3.common.util.UnstableApi::class)
 +
 +package com.nuvio.app.features.player.generated
@@ -924,6 +924,11 @@ index 00000000..8ea125fa
 +import java.io.File
 +import java.security.MessageDigest
 +import com.nuvio.app.features.player.GeneratedSubtitleSync
++import com.nuvio.app.features.autosync.bubble.AutoSyncBubbleKind
++import com.nuvio.app.features.autosync.bubble.AutoSyncBubbleToasts
++import kotlinx.coroutines.async
++import kotlinx.coroutines.awaitAll
++import kotlinx.coroutines.coroutineScope
 +import kotlinx.coroutines.CoroutineScope
 +import kotlinx.coroutines.runBlocking
 +import kotlinx.coroutines.withTimeoutOrNull
@@ -978,6 +983,17 @@ index 00000000..8ea125fa
 +        /** Shown at the playhead while no generated line covers it. */
 +        @Volatile
 +        var status: String? = "Generating subtitles from the audio…"
++            set(value) {
++                field = value
++                if (value != null) onStatus?.invoke(value)
++            }
++
++        /** Mirrors every status line to the player's bubble; set once the run is active. */
++        @Volatile
++        var onStatus: ((String) -> Unit)? = null
++
++        @Volatile
++        var lastBubbleText: String? = null
 +
 +        val cues = ArrayList<CuesWithTiming>()
 +
@@ -1001,6 +1017,12 @@ index 00000000..8ea125fa
 +        active = current
 +        running = true
 +        SyncLog.i("generated subtitles: started")
++        current.onStatus = { text -> bubbleStatus(current, text) }
++        bubble(
++            current,
++            AutoSyncBubbleKind.Working,
++            if (current.url == GeneratedSubtitles.ONLINE_URL) "Starting subtitles · online (Groq Whisper large-v3)" else "Starting subtitles · on this device",
++        )
 +        current.ticker = scope.launch { tick(current) }
 +        current.worker = Thread({ work(current) }, "NuvioGeneratedSubs").apply {
 +            isDaemon = true
@@ -1017,6 +1039,38 @@ index 00000000..8ea125fa
 +        current.ticker?.cancel()
 +        current.worker?.interrupt()
 +        SyncLog.i("generated subtitles: stopped")
++        dismissBubble()
++    }
++
++    // ---- status bubble (the AutoSync bubble, for what generation is doing) ----
++
++    @Volatile
++    private var ownBubbleId = -1L
++
++    /** [text] is "headline" or "headline • detail"; a working bubble shows only its last part. */
++    private fun bubble(current: Run, kind: AutoSyncBubbleKind, text: String) {
++        if (current.stopped || active !== current) return
++        runCatching {
++            if (AutoSyncBubbleToasts.post(kind, "Generated subtitles • $text")) {
++                ownBubbleId = AutoSyncBubbleToasts.current.value?.id ?: -1L
++            }
++        }
++    }
++
++    /** Removes this feature's bubble while it still says "working"; a result is left to fade by itself. */
++    private fun dismissBubble() {
++        runCatching {
++            val shown = AutoSyncBubbleToasts.current.value ?: return
++            if (shown.id == ownBubbleId && shown.kind == AutoSyncBubbleKind.Working) AutoSyncBubbleToasts.finished(shown.id)
++        }
++    }
++
++    private fun bubbleStatus(current: Run, text: String) {
++        if (text == current.lastBubbleText) return
++        current.lastBubbleText = text
++        val failed = FAILURE_MARKERS.any { text.contains(it, ignoreCase = true) }
++        if (failed) bubble(current, AutoSyncBubbleKind.Failure, "Subtitle generation failed • $text")
++        else bubble(current, AutoSyncBubbleKind.Working, "Generating subtitles · $text")
 +    }
 +
 +    /** Main thread: follows the player, notices when the subtitle is replaced, pushes cues. */
@@ -1079,6 +1133,7 @@ index 00000000..8ea125fa
 +                return
 +            }
 +            val language = spokenLanguage(current)
++            bubble(current, AutoSyncBubbleKind.Working, "Looking for saved subtitles · this device and your account")
 +            // Lines made earlier for this title and stream come back at once; only the rest is
 +            // generated (and, online, paid for).
 +            repeat(40) {
@@ -1093,6 +1148,16 @@ index 00000000..8ea125fa
 +                skewKeys.mapNotNull { cacheKey(current, language, online = current.url != GeneratedSubtitles.ONLINE_URL, skewMs = it) }
 +            val neighbourPushKeys = skewKeys.mapNotNull { cacheKey(current, language, online = current.url == GeneratedSubtitles.ONLINE_URL, skewMs = it) }
 +            cache?.let { loadCache(it, current, covered, otherKey = cacheKey(current, language, online = current.url != GeneratedSubtitles.ONLINE_URL), neighbourKeys = neighbourKeys) }
++            var finishedAnnounced = false
++            val savedLines = synchronized(current.cues) { current.cues.size }
++            if (current.durationMs > 0 && isFullyCovered(covered, current.durationMs)) {
++                finishedAnnounced = true
++                current.status = null
++                SyncLog.i("generated subtitles: loaded from the saved copy, $savedLines lines, nothing to generate")
++                bubble(current, AutoSyncBubbleKind.Success, "Subtitles ready • loaded from the saved copy ($savedLines lines)")
++            } else if (savedLines > 0) {
++                bubble(current, AutoSyncBubbleKind.Working, "Reusing $savedLines saved lines · generating the rest")
++            }
 +            // Whisper translates from the audio itself, which reads far better than recognising
 +            // first and translating text; the faster models are opt-in. English needs no translation.
 +            val fast = GeneratedSubtitles.fastAsianModel.value
@@ -1272,6 +1337,17 @@ index 00000000..8ea125fa
 +                        "speech segments in ${(System.currentTimeMillis() - startedAt) / 1_000}s",
 +                )
 +                cache?.let { saveCache(it, current, covered, neighbourPushKeys) }
++                val total = synchronized(current.cues) { current.cues.size }
++                if (!finishedAnnounced && current.durationMs > 0 && isFullyCovered(covered, current.durationMs)) {
++                    finishedAnnounced = true
++                    bubble(current, AutoSyncBubbleKind.Success, "Subtitles ready • $total lines")
++                } else {
++                    bubble(
++                        current,
++                        AutoSyncBubbleKind.Working,
++                        "Generating subtitles · read ${clock(fromMs)} to ${clock(toMs)} · $total lines",
++                    )
++                }
 +            }
 +        } catch (_: InterruptedException) {
 +        } catch (error: Throwable) {
@@ -1398,59 +1474,89 @@ index 00000000..8ea125fa
 +
 +    private fun cacheFile(key: String): File = File(appContext.filesDir, "$CACHE_DIR/$key.json")
 +
++    private class SavedCopy(val cues: List<CuesWithTiming>, val covered: List<LongArray>)
++
++    private fun parseSaved(payload: String): SavedCopy? = try {
++        val json = JSONObject(payload)
++        val lines = json.getJSONArray("cues")
++        val loaded = ArrayList<CuesWithTiming>(lines.length())
++        for (index in 0 until lines.length()) {
++            val line = lines.getJSONArray(index)
++            loaded += cue(line.getLong(0), line.getLong(1), line.getString(2))
++        }
++        val ranges = json.getJSONArray("covered")
++        val ranged = ArrayList<LongArray>()
++        for (index in 0 until ranges.length()) {
++            val range = ranges.getJSONArray(index)
++            addCovered(ranged, range.getLong(0), range.getLong(1))
++        }
++        SavedCopy(loaded, ranged)
++    } catch (error: Exception) {
++        SyncLog.w("generated subtitles: saved lines unreadable: ${error.message}")
++        null
++    }
++
 +    /**
-+     * Loads saved lines: this device's copy, merged with the copy in the Nuvio account (made on any
-+     * device). With neither, lines made the other way (online / on this device) are reused.
++     * Loads every saved copy of this title (this device and the Nuvio account, online and on this
++     * device, the stream durations a second off), starts from the copy that covers the most and
++     * fills only its gaps from the others. A partial copy made one way never hides a complete
++     * copy made the other way.
 +     */
 +    private fun loadCache(key: String, current: Run, covered: MutableList<LongArray>, otherKey: String?, neighbourKeys: List<String> = emptyList()) {
-+        val local = cacheFile(key).takeIf { it.isFile }?.let { runCatching { it.readText() }.getOrNull() }
-+        val remote = runBlocking { withTimeoutOrNull(SYNC_TIMEOUT_MS) { GeneratedSubtitleSync.pull(key) } }
-+        var payloads = listOfNotNull(local, remote)
-+        if (payloads.isEmpty() && otherKey != null) {
-+            payloads = listOfNotNull(
-+                cacheFile(otherKey).takeIf { it.isFile }?.let { runCatching { it.readText() }.getOrNull() },
-+                runBlocking { withTimeoutOrNull(SYNC_TIMEOUT_MS) { GeneratedSubtitleSync.pull(otherKey) } },
-+            )
++        val keys = (listOf(key) + neighbourKeys + listOfNotNull(otherKey)).distinct()
++        val found = runBlocking {
++            coroutineScope {
++                keys.map { k ->
++                    async {
++                        val local = cacheFile(k).takeIf { it.isFile }?.let { runCatching { it.readText() }.getOrNull() }
++                        local to withTimeoutOrNull(SYNC_TIMEOUT_MS) { GeneratedSubtitleSync.pull(k) }
++                    }
++                }.awaitAll()
++            }
 +        }
-+        if (payloads.isEmpty()) {
-+            // Nothing under the exact duration: lines saved under a duration a second off are the same release.
-+            for (candidate in neighbourKeys) {
-+                val found = cacheFile(candidate).takeIf { it.isFile }?.let { runCatching { it.readText() }.getOrNull() }
-+                    ?: runBlocking { withTimeoutOrNull(SYNC_TIMEOUT_MS) { GeneratedSubtitleSync.pull(candidate) } }
-+                if (found != null) {
-+                    payloads = listOf(found)
-+                    break
++        if (found.any { it.second != null }) SyncLog.i("generated subtitles: lines from your Nuvio account found")
++        val copies = found.flatMap { listOfNotNull(it.first, it.second) }
++            .mapNotNull { parseSaved(it) }
++            .sortedByDescending { copy -> copy.covered.sumOf { it[1] - it[0] } }
++        val merged = ArrayList<CuesWithTiming>()
++        copies.forEach { copy ->
++            copy.covered.forEach { range ->
++                uncoveredParts(covered, range[0], range[1]).forEach { gap ->
++                    merged += copy.cues.filter { it.startTimeUs / 1_000L in gap[0] until gap[1] }
++                    addCovered(covered, gap[0], gap[1])
 +                }
 +            }
 +        }
-+        payloads.forEach { applyPayload(it, current, covered) }
-+        if (remote != null) SyncLog.i("generated subtitles: lines from your Nuvio account found")
++        if (merged.isEmpty()) return
++        synchronized(current.cues) {
++            current.cues += merged
++            current.cues.sortBy { it.startTimeUs }
++            current.cuesVersion++
++        }
++        SyncLog.i("generated subtitles: ${merged.size} saved lines reused, ${covered.sumOf { it[1] - it[0] } / 1_000}s already done")
 +    }
 +
-+    private fun applyPayload(payload: String, current: Run, covered: MutableList<LongArray>) {
-+        try {
-+            val json = JSONObject(payload)
-+            val lines = json.getJSONArray("cues")
-+            val loaded = ArrayList<CuesWithTiming>(lines.length())
-+            for (index in 0 until lines.length()) {
-+                val line = lines.getJSONArray(index)
-+                loaded += cue(line.getLong(0), line.getLong(1), line.getString(2))
-+            }
-+            val ranges = json.getJSONArray("covered")
-+            for (index in 0 until ranges.length()) {
-+                val range = ranges.getJSONArray(index)
-+                addCovered(covered, range.getLong(0), range.getLong(1))
-+            }
-+            synchronized(current.cues) {
-+                val known = current.cues.mapTo(HashSet()) { it.startTimeUs }
-+                current.cues += loaded.filter { it.startTimeUs !in known }
-+                current.cues.sortBy { it.startTimeUs }
-+                current.cuesVersion++
-+            }
-+            SyncLog.i("generated subtitles: ${loaded.size} saved lines reused, ${covered.sumOf { it[1] - it[0] } / 1_000}s already done")
-+        } catch (error: Exception) {
-+            SyncLog.w("generated subtitles: saved lines unreadable: ${error.message}")
++    /** The parts of [fromMs]..[toMs] that [covered] does not reach yet. */
++    private fun uncoveredParts(covered: List<LongArray>, fromMs: Long, toMs: Long): List<LongArray> {
++        var cursor = fromMs
++        val parts = ArrayList<LongArray>()
++        for (range in covered.sortedBy { it[0] }) {
++            if (range[1] <= cursor) continue
++            if (range[0] >= toMs) break
++            if (range[0] > cursor) parts += longArrayOf(cursor, range[0])
++            cursor = maxOf(cursor, range[1])
 +        }
++        if (cursor < toMs) parts += longArrayOf(cursor, toMs)
++        return parts
++    }
++
++    private fun isFullyCovered(covered: List<LongArray>, durationMs: Long): Boolean =
++        covered.any { it[0] <= 3_000L && it[1] >= durationMs - 3_000L }
++
++    private fun clock(ms: Long): String {
++        val seconds = ms / 1_000L
++        return if (seconds >= 3_600L) "%d:%02d:%02d".format(seconds / 3_600L, seconds % 3_600L / 60L, seconds % 60L)
++        else "%d:%02d".format(seconds / 60L, seconds % 60L)
 +    }
 +
 +    private fun saveCache(key: String, current: Run, covered: List<LongArray>, extraKeys: List<String> = emptyList()) {
@@ -1629,6 +1735,9 @@ index 00000000..8ea125fa
 +        private const val PLACEHOLDER_SRT = "1\n00:00:00,000 --> 00:00:00,100\n…\n"
 +        private const val TICK_MS = 250L
 +        private const val STATUS_SHOW_MS = 2_500L
++
++        /** Status lines containing one of these report a failure in the bubble; the rest are progress. */
++        private val FAILURE_MARKERS = listOf("couldn't", "can't", "failed", "stopped:", "check the groq key")
 +        private const val LOOKAHEAD_MS = 120_000L
 +        private const val FIRST_WINDOW_MS = 20_000L
 +        private const val WINDOW_MS = 60_000L
