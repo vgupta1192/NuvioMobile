@@ -949,7 +949,7 @@ new file mode 100644
 index 00000000..8ea125fa
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
-@@ -0,0 +1,1087 @@
+@@ -0,0 +1,1119 @@
 +@file:OptIn(androidx.media3.common.util.UnstableApi::class)
 +
 +package com.nuvio.app.features.player.generated
@@ -1054,6 +1054,10 @@ index 00000000..8ea125fa
 +        @Volatile
 +        var lastBubbleText: String? = null
 +
++        /** When the "working" bubble was last shown; it is shown at the start and now and then, not all the time. */
++        @Volatile
++        var lastWorkingBubbleAt = 0L
++
 +        val cues = ArrayList<CuesWithTiming>()
 +
 +        @Volatile
@@ -1128,8 +1132,20 @@ index 00000000..8ea125fa
 +        if (text == current.lastBubbleText) return
 +        current.lastBubbleText = text
 +        val failed = FAILURE_MARKERS.any { text.contains(it, ignoreCase = true) }
-+        if (failed) bubble(current, AutoSyncBubbleKind.Failure, "Subtitle generation failed • $text")
-+        else bubble(current, AutoSyncBubbleKind.Working, "Generating subtitles · $text")
++        if (failed) {
++            bubble(current, AutoSyncBubbleKind.Failure, "Subtitle generation failed • $text")
++            return
++        }
++        // Show the bubble when the run starts and again now and then, for a few seconds each time,
++        // so it does not sit over the picture (or the subtitles) for the whole run.
++        val now = System.currentTimeMillis()
++        if (current.lastWorkingBubbleAt != 0L && now - current.lastWorkingBubbleAt < WORKING_BUBBLE_GAP_MS) return
++        current.lastWorkingBubbleAt = now
++        bubble(current, AutoSyncBubbleKind.Working, "Generating subtitles · $text")
++        scope.launch {
++            delay(WORKING_BUBBLE_HOLD_MS)
++            if (active === current && current.lastWorkingBubbleAt == now) dismissBubble()
++        }
 +    }
 +
 +    /** Main thread: follows the player, notices when the subtitle is replaced, pushes cues. */
@@ -1695,6 +1711,19 @@ index 00000000..8ea125fa
 +            val part = parts.lastOrNull { it.first <= sec + 0.05 } ?: parts.first()
 +            return part.third + ((sec.coerceIn(part.first, part.second) - part.first) * 1_000).toLong()
 +        }
++        // Whisper puts a line's start in the quiet before the words, or a little after they began. The
++        // upload holds only speech, so a start that falls in a gap moves to the next speech part (not
++        // back to the end of the previous one) and a start near a part's edge snaps to the edge.
++        fun startOnTimeline(sec: Double): Long {
++            val part = parts.firstOrNull { sec < it.second } ?: parts.last()
++            val into = sec - part.first
++            return if (into < SNAP_EDGE_SEC) part.third else part.third + ((into.coerceAtMost(part.second - part.first)) * 1_000).toLong()
++        }
++        fun endOnTimeline(sec: Double): Long {
++            val part = parts.lastOrNull { it.first < sec } ?: parts.first()
++            val into = (sec - part.first).coerceIn(0.0, part.second - part.first)
++            return if (part.second - part.first - into < SNAP_EDGE_SEC) part.third + ((part.second - part.first) * 1_000).toLong() else part.third + (into * 1_000).toLong()
++        }
 +        val hint = language.takeUnless { it == GeneratedSubtitles.AUTO }.orEmpty()
 +        var heard = groq.recognize(audio, rate, translate = deepl == null, language = hint)
 +        var english: List<String>? = null
@@ -1715,8 +1744,8 @@ index 00000000..8ea125fa
 +        heard.forEachIndexed { index, line ->
 +            val text = (english?.getOrNull(index) ?: line.text).let(::cleanText) ?: return@forEachIndexed
 +            if (isWhisperFiller(text) || !looksEnglish(text)) return@forEachIndexed
-+            val startMs = timelineMs(line.startSec)
-+            val endMs = maxOf(timelineMs(line.endSec), startMs + MIN_CUE_MS)
++            val startMs = startOnTimeline(line.startSec)
++            val endMs = maxOf(endOnTimeline(line.endSec), startMs + MIN_CUE_MS)
 +            addLine(current, startMs, endMs, text)
 +            added++
 +        }
@@ -1796,6 +1825,9 @@ index 00000000..8ea125fa
 +        private const val PLACEHOLDER_SRT = "1\n00:00:00,000 --> 00:00:00,100\n…\n"
 +        private const val TICK_MS = 250L
 +        private const val STATUS_SHOW_MS = 2_500L
++        private const val WORKING_BUBBLE_GAP_MS = 60_000L
++        private const val SNAP_EDGE_SEC = 0.8
++        private const val WORKING_BUBBLE_HOLD_MS = 6_000L
 +
 +        /** Status lines containing one of these report a failure in the bubble; the rest are progress. */
 +        private val FAILURE_MARKERS = listOf("couldn't", "can't", "failed", "stopped:", "check the groq key")
