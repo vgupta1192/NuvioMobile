@@ -1,0 +1,60 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
+index 72312fb2..ca4a5bea 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
+@@ -349,7 +349,7 @@ internal class AudioSubtitleSyncController(
+             problem = problem ?: when {
+                 decoderUnavailable -> "Speech detector could not be loaded"
+                 gaveUpKey == current.key && synced == null ->
+-                    "No confident match with this audio; subtitle keeps its own timing (still listening)"
++                    "No better timing found for this audio; the subtitle keeps its own timing"
+                 else -> null
+             },
+         )
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleSyncStatusOverlay.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleSyncStatusOverlay.kt
+index 95069e89..e2c083ca 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleSyncStatusOverlay.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleSyncStatusOverlay.kt
+@@ -37,15 +37,19 @@ internal fun SubtitleSyncStatusOverlay(modifier: Modifier = Modifier) {
+     val current = diagnostics
+     var hideAfterSync by remember { mutableStateOf(false) }
+     val synced = current?.phase == SubtitleSyncDiagnostics.Phase.Synced
+-    LaunchedEffect(synced, current?.mapping) {
++    // A give-up (nothing matched, the subtitle keeps its own timing) is not an error: it hides like a sync.
++    val gaveUp = current?.phase == SubtitleSyncDiagnostics.Phase.Unavailable &&
++        current?.problem?.startsWith("No better timing found") == true
++    val settled = synced || gaveUp
++    LaunchedEffect(settled, current?.mapping) {
+         hideAfterSync = false
+-        if (synced) {
++        if (settled) {
+             delay(if (current?.notice != null) 12_000 else 8_000)
+             hideAfterSync = true
+         }
+     }
+     AnimatedVisibility(
+-        visible = current != null && !(synced && hideAfterSync),
++        visible = current != null && !(settled && hideAfterSync),
+         enter = fadeIn(),
+         exit = fadeOut(),
+         modifier = modifier,
+@@ -63,7 +67,9 @@ internal fun SubtitleSyncStatusOverlay(modifier: Modifier = Modifier) {
+                 SubtitleSyncDiagnostics.Phase.Estimated ->
+                     "Syncing ${formatOffset(state.offsetMs)} (early estimate)…" to Color(0xFFFFD166)
+                 SubtitleSyncDiagnostics.Phase.Listening -> "Syncing subtitles to audio…" to Color.White
+-                SubtitleSyncDiagnostics.Phase.Unavailable -> "Subtitle sync unavailable" to Color(0xFFFF8A80)
++                SubtitleSyncDiagnostics.Phase.Unavailable ->
++                    if (gaveUp) "Original subtitle timing kept" to Color.White
++                    else "Subtitle sync unavailable" to Color(0xFFFF8A80)
+             }
+             Text(headline, color = color, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+             state.notice?.let { Line(it, Color(0xFF7CE38B)) }
+@@ -78,7 +84,7 @@ internal fun SubtitleSyncStatusOverlay(modifier: Modifier = Modifier) {
+             if (state.recognizer.isNotEmpty()) Line("Speech recognition: ${state.recognizer}")
+             if (state.reference.isNotEmpty()) Line("English reference: ${state.reference}")
+             if (state.alternatives.isNotEmpty()) Line("Other subtitles: ${state.alternatives}")
+-            state.problem?.let { Line(it, Color(0xFFFFB4A9)) }
++            state.problem?.let { Line(it, if (gaveUp) Color.White.copy(alpha = 0.85f) else Color(0xFFFFB4A9)) }
+         }
+     }
+ }
