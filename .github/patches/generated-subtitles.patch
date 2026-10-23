@@ -949,7 +949,7 @@ new file mode 100644
 index 00000000..8ea125fa
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
-@@ -0,0 +1,1132 @@
+@@ -0,0 +1,1145 @@
 +@file:OptIn(androidx.media3.common.util.UnstableApi::class)
 +
 +package com.nuvio.app.features.player.generated
@@ -1236,6 +1236,19 @@ index 00000000..8ea125fa
 +                (if (language == GeneratedSubtitles.AUTO) emptyList() else
 +                    listOf(0L, -1_000L, 1_000L).mapNotNull { cacheKey(current, GeneratedSubtitles.AUTO, online = online0, skewMs = it) })
 +            cache?.let { loadCache(it, current, covered, otherKey = cacheKey(current, language, online = current.url != GeneratedSubtitles.ONLINE_URL), neighbourKeys = neighbourKeys + autoKeys) }
++            // Still not complete: two other links of one title often differ by a couple of seconds, so
++            // copies up to 3 s away are tried too, and only fill what is still missing.
++            if (current.durationMs > 0 && !isFullyCovered(covered, current.durationMs)) {
++                val wide = listOf(-3_000L, -2_000L, 2_000L, 3_000L).flatMap { skew ->
++                    listOfNotNull(
++                        cacheKey(current, language, online = online0, skewMs = skew),
++                        cacheKey(current, language, online = !online0, skewMs = skew),
++                        if (language == GeneratedSubtitles.AUTO) null else cacheKey(current, GeneratedSubtitles.AUTO, online = online0, skewMs = skew),
++                        if (language == GeneratedSubtitles.AUTO) null else cacheKey(current, GeneratedSubtitles.AUTO, online = !online0, skewMs = skew),
++                    )
++                }.distinct()
++                wide.firstOrNull()?.let { loadCache(it, current, covered, otherKey = null, neighbourKeys = wide.drop(1)) }
++            }
 +            var finishedAnnounced = false
 +            val savedLines = synchronized(current.cues) { current.cues.size }
 +            if (current.durationMs > 0 && isFullyCovered(covered, current.durationMs)) {
