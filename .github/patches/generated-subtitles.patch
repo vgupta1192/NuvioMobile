@@ -949,7 +949,7 @@ new file mode 100644
 index 00000000..8ea125fa
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
-@@ -0,0 +1,1119 @@
+@@ -0,0 +1,1131 @@
 +@file:OptIn(androidx.media3.common.util.UnstableApi::class)
 +
 +package com.nuvio.app.features.player.generated
@@ -1221,8 +1221,20 @@ index 00000000..8ea125fa
 +            val skewKeys = listOf(-1_000L, 1_000L)
 +            val neighbourKeys = skewKeys.mapNotNull { cacheKey(current, language, online = current.url == GeneratedSubtitles.ONLINE_URL, skewMs = it) } +
 +                skewKeys.mapNotNull { cacheKey(current, language, online = current.url != GeneratedSubtitles.ONLINE_URL, skewMs = it) }
-+            val neighbourPushKeys = skewKeys.mapNotNull { cacheKey(current, language, online = current.url == GeneratedSubtitles.ONLINE_URL, skewMs = it) }
-+            cache?.let { loadCache(it, current, covered, otherKey = cacheKey(current, language, online = current.url != GeneratedSubtitles.ONLINE_URL), neighbourKeys = neighbourKeys) }
++            // The audio track's language tag differs between devices (one says "und" and keeps "auto",
++            // another reads "eng" as "en"), so every copy is also saved and looked up under "auto".
++            val online0 = current.url == GeneratedSubtitles.ONLINE_URL
++            val autoKeys = if (language == GeneratedSubtitles.AUTO) emptyList() else
++                listOf(0L, -1_000L, 1_000L).flatMap { skew ->
++                    listOfNotNull(
++                        cacheKey(current, GeneratedSubtitles.AUTO, online = online0, skewMs = skew),
++                        cacheKey(current, GeneratedSubtitles.AUTO, online = !online0, skewMs = skew),
++                    )
++                }
++            val neighbourPushKeys = skewKeys.mapNotNull { cacheKey(current, language, online = current.url == GeneratedSubtitles.ONLINE_URL, skewMs = it) } +
++                (if (language == GeneratedSubtitles.AUTO) emptyList() else
++                    listOf(0L, -1_000L, 1_000L).mapNotNull { cacheKey(current, GeneratedSubtitles.AUTO, online = online0, skewMs = it) })
++            cache?.let { loadCache(it, current, covered, otherKey = cacheKey(current, language, online = current.url != GeneratedSubtitles.ONLINE_URL), neighbourKeys = neighbourKeys + autoKeys) }
 +            var finishedAnnounced = false
 +            val savedLines = synchronized(current.cues) { current.cues.size }
 +            if (current.durationMs > 0 && isFullyCovered(covered, current.durationMs)) {
