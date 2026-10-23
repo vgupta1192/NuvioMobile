@@ -890,7 +890,7 @@ new file mode 100644
 index 00000000..8ea125fa
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
-@@ -0,0 +1,1085 @@
+@@ -0,0 +1,1087 @@
 +@file:OptIn(androidx.media3.common.util.UnstableApi::class)
 +
 +package com.nuvio.app.features.player.generated
@@ -1155,6 +1155,8 @@ index 00000000..8ea125fa
 +                current.status = null
 +                SyncLog.i("generated subtitles: loaded from the saved copy, $savedLines lines, nothing to generate")
 +                bubble(current, AutoSyncBubbleKind.Success, "Subtitles ready • loaded from the saved copy ($savedLines lines)")
++                // Nothing is left to read: stop here so no model loads and no "generating" status follows the green tick.
++                return
 +            } else if (savedLines > 0) {
 +                bubble(current, AutoSyncBubbleKind.Working, "Reusing $savedLines saved lines · generating the rest")
 +            }
