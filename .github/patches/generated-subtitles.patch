@@ -1173,7 +1173,7 @@ index 00000000..8ea125fa
 +            current.positionMs = player.currentPosition.coerceAtLeast(0L)
 +            current.durationMs = player.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0L
 +            current.audioFormat = player.currentTracks.selectedAudioFormat()
-+            val status = current.status?.takeIf { !hasCueNear(current, current.positionMs) }
++            val status = current.status?.takeIf { !hasCueNear(current, current.positionMs) && it != "Generating subtitles from the audio…" }
 +            val statusMoved = status != null && kotlin.math.abs(current.positionMs - statusAtMs) > 1_000L
 +            if (current.cuesVersion != committedVersion || status != committedStatus || statusMoved) {
 +                val list = synchronized(current.cues) { ArrayList(current.cues) }
