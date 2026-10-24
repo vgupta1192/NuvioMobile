@@ -1,0 +1,454 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt
+index e6c8e237..c817f482 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt
+@@ -3,10 +3,8 @@ package com.nuvio.app.features.player
+ import com.nuvio.app.core.build.AppFeaturePolicy
+ import com.nuvio.app.core.build.TrailerPlaybackMode
+ import com.nuvio.app.features.addons.httpGetTextWithHeaders
+-import com.nuvio.app.features.addons.httpPostJsonWithHeaders
+ import kotlinx.coroutines.async
+ import kotlinx.coroutines.sync.withLock
+-import kotlinx.coroutines.withTimeoutOrNull
+ import kotlinx.serialization.json.Json
+ import kotlinx.serialization.json.JsonArray
+ import kotlinx.serialization.json.JsonObject
+@@ -19,110 +17,19 @@ import kotlinx.serialization.json.longOrNull
+ import kotlinx.serialization.json.put
+ 
+ /**
+- * Nuvio fork: the subtitles YouTube itself has for a YouStream video. YouStream cannot send
+- * them (YouTube refuses its server), so the device asks YouTube the same way it resolves the
+- * video, and lists the caption tracks like any add-on subtitles. Only tracks whose text really
+- * downloads as WebVTT or SRT are listed, so the player and AutoSync can read them as they are.
++ * Nuvio fork: the subtitles YouTube itself has for a YouStream video. The YouStream server fetches
++ * them (rate limited, cached, through its own proxy), so this device never asks YouTube and its IP
++ * address cannot be blocked. They are listed like any add-on subtitles, as WebVTT or SRT files.
+  */
+ internal object YouTubeCaptions {
+     private const val ID_PREFIX = "youstream:"
+-    private const val TIMEOUT_MS = 25_000L
+-    private const val BLOCK_MS = 30 * 60_000L
++    private const val SERVER = "https://youstream.kissmissi.duckdns.org/captions/"
++    private const val BUSY_MS = 5 * 60_000L
+     private const val CAPTIONS_TTL_MS = 30L * 24 * 3_600_000
+     private const val NONE_TTL_MS = 2L * 3_600_000
+-    private const val HOUR_MS = 3_600_000L
+-    private const val MAX_VIDEOS_PER_HOUR = 12
+-    private const val MAX_TRACKS = 5
+     private val VIDEO_ID = Regex("^[A-Za-z0-9_-]{11}$")
+-    private val API_KEY = Regex("\"INNERTUBE_API_KEY\":\"([^\"]+)\"")
+-    private val VISITOR_DATA = Regex("\"visitorData\":\"([^\"]+)\"")
+-    private val FORMAT_PARAM = Regex("[?&]fmt=[^&]*")
+     private val json = Json { ignoreUnknownKeys = true }
+ 
+-    private class Client(
+-        val name: String,
+-        val id: String,
+-        val version: String,
+-        val userAgent: String,
+-        val context: JsonObject,
+-    )
+-
+-    private val CLIENTS = listOf(
+-        Client(
+-            name = "ANDROID",
+-            id = "3",
+-            version = "20.10.35",
+-            userAgent = "com.google.android.youtube/20.10.35 (Linux; U; Android 14; en_US) gzip",
+-            context = buildJsonObject {
+-                put("clientName", "ANDROID")
+-                put("clientVersion", "20.10.35")
+-                put("osName", "Android")
+-                put("osVersion", "14")
+-                put("platform", "MOBILE")
+-                put("androidSdkVersion", 34)
+-                put("hl", "en")
+-                put("gl", "US")
+-            },
+-        ),
+-        Client(
+-            name = "IOS",
+-            id = "5",
+-            version = "20.10.1",
+-            userAgent = "com.google.ios.youtube/20.10.1 (iPhone16,2; U; CPU iOS 17_4 like Mac OS X)",
+-            context = buildJsonObject {
+-                put("clientName", "IOS")
+-                put("clientVersion", "20.10.1")
+-                put("deviceModel", "iPhone16,2")
+-                put("osName", "iPhone")
+-                put("osVersion", "17.4.0.21E219")
+-                put("platform", "MOBILE")
+-                put("hl", "en")
+-                put("gl", "US")
+-            },
+-        ),
+-    )
+-
+-    private val EXTRA_CLIENTS = listOf(
+-        Client(
+-            name = "TVHTML5",
+-            id = "7",
+-            version = "7.20250219.14.00",
+-            userAgent = "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version",
+-            context = buildJsonObject {
+-                put("clientName", "TVHTML5")
+-                put("clientVersion", "7.20250219.14.00")
+-                put("hl", "en")
+-                put("gl", "US")
+-            },
+-        ),
+-        Client(
+-            name = "WEB_EMBEDDED",
+-            id = "56",
+-            version = "1.20250310.01.00",
+-            userAgent = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
+-            context = buildJsonObject {
+-                put("clientName", "WEB_EMBEDDED_PLAYER")
+-                put("clientVersion", "1.20250310.01.00")
+-                put("hl", "en")
+-                put("gl", "US")
+-            },
+-        ),
+-        Client(
+-            name = "MWEB",
+-            id = "2",
+-            version = "2.20250310.01.00",
+-            userAgent = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
+-            context = buildJsonObject {
+-                put("clientName", "MWEB")
+-                put("clientVersion", "2.20250310.01.00")
+-                put("hl", "en")
+-                put("gl", "US")
+-            },
+-        ),
+-    )
+-
+-    private class Track(val languageCode: String, val label: String, val baseUrl: String)
+-
+     /** The YouTube video id of a YouStream video id, when captions can be asked for it here. */
+     fun videoIdOrNull(videoId: String): String? {
+         if (AppFeaturePolicy.trailerPlaybackMode != TrailerPlaybackMode.IN_APP) return null
+@@ -150,9 +57,7 @@ internal object YouTubeCaptions {
+     }
+ 
+     private var store: CaptionStore? = null
+-    private var blockedUntilMs = 0L
+-    private val recentFetches = ArrayDeque<Long>()
+-    private val networkLock = kotlinx.coroutines.sync.Mutex()
++    private var serverBusyUntilMs = 0L
+ 
+     fun installStore(captionStore: CaptionStore) {
+         store = captionStore
+@@ -160,17 +65,6 @@ internal object YouTubeCaptions {
+ 
+     private fun nowMs(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
+ 
+-    /** YouTube answers HTTP 429 to every caption download once it counts too many requests: stop asking for a while, also after an app restart. */
+-    private fun isBlocked(): Boolean {
+-        if (blockedUntilMs == 0L) blockedUntilMs = store?.read("blocked-until")?.trim()?.toLongOrNull() ?: -1L
+-        return nowMs() < blockedUntilMs
+-    }
+-
+-    private fun block() {
+-        blockedUntilMs = nowMs() + BLOCK_MS
+-        store?.write("blocked-until", blockedUntilMs.toString())
+-    }
+-
+     /** Captions saved by an earlier fetch: the rows, an empty list for a video known to have none, null when unknown or old. */
+     private fun readDisk(youtubeId: String): List<AddonSubtitle>? {
+         val store = store ?: return null
+@@ -213,33 +107,56 @@ internal object YouTubeCaptions {
+         return result
+     }
+ 
+-    /** The copy in the user's account first (another device may have fetched it), YouTube only when there is none. */
++    /** The copy in the user's account first (another device may have fetched it), then the YouStream server. This device never asks YouTube. */
+     private suspend fun fetchSharedOrNetwork(youtubeId: String): List<AddonSubtitle> {
+         pullShared(youtubeId)?.let { return it }
+-        if (isBlocked()) {
+-            SyncedSubtitles.log("youtube captions: YouTube said HTTP 429 not long ago, not asking for $youtubeId yet")
+-            return emptyList()
+-        }
+-        val now = nowMs()
+-        val allowed = fetchLock.withLock {
+-            while (recentFetches.isNotEmpty() && now - recentFetches.first() > HOUR_MS) recentFetches.removeFirst()
+-            if (recentFetches.size >= MAX_VIDEOS_PER_HOUR) false else { recentFetches.addLast(now); true }
+-        }
+-        if (!allowed) {
+-            SyncedSubtitles.log("youtube captions: $MAX_VIDEOS_PER_HOUR videos asked this hour, not asking for $youtubeId yet")
++        if (nowMs() < serverBusyUntilMs) {
++            SyncedSubtitles.log("youtube captions: YouStream server was busy not long ago, not asking for $youtubeId yet")
+             return emptyList()
+         }
+-        val rows = networkLock.withLock { fetchWithRetry(youtubeId) }
++        val rows = fetchFromServer(youtubeId)
+         if (rows.isNotEmpty()) pushShared(youtubeId)
+         return rows
+     }
+ 
++    private suspend fun fetchFromServer(youtubeId: String): List<AddonSubtitle> {
++        SyncedSubtitles.log("youtube captions: asking the YouStream server for $youtubeId")
++        val raw = try {
++            httpGetTextWithHeaders(url = "$SERVER$youtubeId.json", headers = mapOf("Accept" to "application/json"))
++        } catch (error: kotlinx.coroutines.CancellationException) {
++            throw error
++        } catch (error: Exception) {
++            serverBusyUntilMs = nowMs() + BUSY_MS
++            SyncedSubtitles.log("youtube captions: YouStream server did not answer for $youtubeId: ${error.message}")
++            return emptyList()
++        }
++        val root = runCatching { json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return emptyList()
++        return when (root["status"]?.jsonPrimitive?.contentOrNull) {
++            "ok" -> applyPayload(youtubeId, root, "the YouStream server") ?: emptyList()
++            "none" -> {
++                store?.write("$youtubeId.idx", nowMs().toString())
++                SyncedSubtitles.log("youtube captions: none offered for $youtubeId")
++                emptyList()
++            }
++            else -> {
++                serverBusyUntilMs = nowMs() + BUSY_MS
++                SyncedSubtitles.log("youtube captions: YouStream server busy for $youtubeId")
++                emptyList()
++            }
++        }
++    }
++
+     private fun sharedKey(youtubeId: String) = "yt-captions|$youtubeId"
+ 
+     private suspend fun pullShared(youtubeId: String): List<AddonSubtitle>? {
+-        val store = store ?: return null
++        if (store == null) return null
+         val raw = GeneratedSubtitleSync.pull(sharedKey(youtubeId)) ?: return null
+         val root = runCatching { json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
++        return applyPayload(youtubeId, root, "the account")
++    }
++
++    private fun applyPayload(youtubeId: String, root: JsonObject, origin: String): List<AddonSubtitle>? {
++        val store = store ?: return null
+         val savedAt = root["savedAt"]?.jsonPrimitive?.longOrNull ?: return null
+         if (nowMs() - savedAt !in 0 until CAPTIONS_TTL_MS) return null
+         val tracks = root["tracks"]?.jsonArray ?: return null
+@@ -258,7 +175,7 @@ internal object YouTubeCaptions {
+         }
+         if (count == 0) return null
+         store.write("$youtubeId.idx", index.toString())
+-        SyncedSubtitles.log("youtube captions: $count tracks from the account for $youtubeId, YouTube not asked")
++        SyncedSubtitles.log("youtube captions: $count tracks from $origin for $youtubeId, YouTube not asked")
+         return readDisk(youtubeId)
+     }
+ 
+@@ -285,213 +202,4 @@ internal object YouTubeCaptions {
+         val ok = GeneratedSubtitleSync.push(sharedKey(youtubeId), "youstream:$youtubeId", payload.toString())
+         SyncedSubtitles.log("youtube captions: saved to the account for $youtubeId: $ok")
+     }
+-
+-    private suspend fun fetchWithRetry(youtubeId: String): List<AddonSubtitle> {
+-        val first = fetchOnce(youtubeId)
+-        if (first.isNotEmpty() || isBlocked() || store?.read("$youtubeId.idx") != null) return first
+-        kotlinx.coroutines.delay(1_500)
+-        SyncedSubtitles.log("youtube captions: nothing the first time, asking once more for $youtubeId")
+-        return fetchOnce(youtubeId)
+-    }
+-
+-    private suspend fun fetchOnce(youtubeId: String): List<AddonSubtitle> = try {
+-        SyncedSubtitles.log("youtube captions: asking for $youtubeId")
+-        val startedAt = kotlin.time.TimeSource.Monotonic.markNow()
+-        (withTimeoutOrNull(TIMEOUT_MS) { load(youtubeId) }
+-            ?: run {
+-                SyncedSubtitles.log("youtube captions: gave up after ${TIMEOUT_MS / 1000} s for $youtubeId")
+-                emptyList()
+-            }).also { SyncedSubtitles.log("youtube captions: finished in ${startedAt.elapsedNow().inWholeMilliseconds} ms with ${it.size} rows") }
+-    } catch (error: kotlinx.coroutines.CancellationException) {
+-        throw error
+-    } catch (error: Exception) {
+-        SyncedSubtitles.log("youtube captions: failed ${error::class.simpleName}: ${error.message}")
+-        emptyList()
+-    }
+-
+-    private suspend fun load(youtubeId: String): List<AddonSubtitle> {
+-        val watch = runCatching {
+-            httpGetTextWithHeaders(
+-                url = "https://www.youtube.com/watch?v=$youtubeId&hl=en",
+-                headers = mapOf(
+-                    "Accept" to "text/html,*/*",
+-                    "Accept-Language" to "en-US,en;q=0.9",
+-                    "User-Agent" to "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
+-                ),
+-            )
+-        }.onFailure { SyncedSubtitles.log("youtube captions: watch page failed: ${it.message}") }.getOrNull().orEmpty()
+-        val apiKey = API_KEY.find(watch)?.groupValues?.get(1)
+-        val visitorData = VISITOR_DATA.find(watch)?.groupValues?.get(1)
+-        SyncedSubtitles.log("youtube captions: watch page ${watch.length} chars, key ${apiKey != null}, visitor ${visitorData != null}")
+-        // Each source (the watch page, then each YouTube client) is probed with its first track; the first
+-        // source whose track really downloads as vtt or srt wins, because the others may need a token.
+-        val sources: List<Client?> = listOf(null) + CLIENTS + EXTRA_CLIENTS
+-        var anyTracks = false
+-        for (client in sources) {
+-            if (isBlocked()) break
+-            val name = client?.name ?: "watch page"
+-            val tracks = runCatching {
+-                if (client == null) pageTracks(watch) else playerTracks(youtubeId, client, apiKey, visitorData)
+-            }
+-                .onFailure { SyncedSubtitles.log("youtube captions: $name failed: ${it.message}") }
+-                .getOrNull().orEmpty()
+-            if (tracks.isEmpty()) {
+-                SyncedSubtitles.log("youtube captions: $name offers no tracks")
+-                continue
+-            }
+-            anyTracks = true
+-            val urls = mutableListOf<Triple<Track, String, String>>()
+-            for (track in tracks.take(MAX_TRACKS)) {
+-                if (urls.isNotEmpty()) {
+-                    if (isBlocked()) break
+-                    kotlinx.coroutines.delay(300)
+-                }
+-                val readable = readableUrl(name, track)
+-                if (readable != null) urls += Triple(track, readable.first, readable.second)
+-                else if (urls.isEmpty()) break
+-            }
+-            if (urls.isEmpty()) {
+-                SyncedSubtitles.log("youtube captions: $name tracks would not download as vtt or srt")
+-                continue
+-            }
+-            SyncedSubtitles.log("youtube captions: $name gives ${urls.size} of ${tracks.size} tracks for $youtubeId")
+-            val index = StringBuilder(nowMs().toString())
+-            val rows = urls.mapIndexed { position, (track, remoteUrl, text) ->
+-                val fileName = "$youtubeId.$position.${track.languageCode}.${if ("fmt=vtt" in remoteUrl) "vtt" else "srt"}"
+-                val saved = store?.let { it.write(fileName, text); true } == true
+-                if (saved) {
+-                    index.append('\n').append(track.languageCode).append('\t')
+-                        .append(track.label.replace('\t', ' ').replace('\n', ' ')).append('\t').append(fileName)
+-                }
+-                AddonSubtitle(
+-                    id = "youtube_${youtubeId}_${track.languageCode}_$position",
+-                    url = if (saved) store!!.uri(fileName) else remoteUrl,
+-                    language = normalizeLanguageCode(track.languageCode) ?: track.languageCode,
+-                    display = "${track.label} · YouTube",
+-                    addonName = "YouTube",
+-                )
+-            }
+-            store?.write("$youtubeId.idx", index.toString())
+-            return rows
+-        }
+-        if (!anyTracks && watch.isNotEmpty() && !isBlocked()) store?.write("$youtubeId.idx", nowMs().toString())
+-        SyncedSubtitles.log(
+-            if (anyTracks) "youtube captions: tracks found but none downloads for $youtubeId"
+-            else "youtube captions: none offered for $youtubeId",
+-        )
+-        return emptyList()
+-    }
+-
+-    /** The caption tracks inside the watch page's own player response. */
+-    private fun pageTracks(watch: String): List<Track> {
+-        val start = watch.indexOf("\"captionTracks\":")
+-        if (start < 0) return emptyList()
+-        val open = watch.indexOf('[', start)
+-        if (open < 0) return emptyList()
+-        var depth = 0
+-        var index = open
+-        var inString = false
+-        while (index < watch.length) {
+-            val c = watch[index]
+-            if (inString) {
+-                if (c == '\\') index++ else if (c == '"') inString = false
+-            } else when (c) {
+-                '"' -> inString = true
+-                '[' -> depth++
+-                ']' -> { depth--; if (depth == 0) break }
+-            }
+-            index++
+-        }
+-        if (depth != 0) return emptyList()
+-        val list = json.parseToJsonElement(watch.substring(open, index + 1)) as? JsonArray ?: return emptyList()
+-        return tracksFrom(list)
+-    }
+-
+-    private suspend fun playerTracks(
+-        youtubeId: String,
+-        client: Client,
+-        apiKey: String?,
+-        visitorData: String?,
+-    ): List<Track> {
+-        val endpoint = "https://www.youtube.com/youtubei/v1/player" + (apiKey?.let { "?key=$it" } ?: "")
+-        val headers = buildMap {
+-            put("Accept", "application/json")
+-            put("Origin", "https://www.youtube.com")
+-            put("User-Agent", client.userAgent)
+-            put("X-YouTube-Client-Name", client.id)
+-            put("X-YouTube-Client-Version", client.version)
+-            if (!visitorData.isNullOrBlank()) put("X-Goog-Visitor-Id", visitorData)
+-        }
+-        val body = buildJsonObject {
+-            put("videoId", youtubeId)
+-            put("contentCheckOk", true)
+-            put("racyCheckOk", true)
+-            put("context", buildJsonObject { put("client", client.context) })
+-        }.toString()
+-        val response = json.parseToJsonElement(httpPostJsonWithHeaders(endpoint, body, headers)).jsonObject
+-        val status = response["playabilityStatus"]?.jsonObject
+-        SyncedSubtitles.log(
+-            "youtube captions: ${client.name} ${status?.get("status")?.jsonPrimitive?.contentOrNull} " +
+-                (status?.get("reason")?.jsonPrimitive?.contentOrNull.orEmpty()),
+-        )
+-        val list = response["captions"]?.jsonObject
+-            ?.get("playerCaptionsTracklistRenderer")?.jsonObject
+-            ?.get("captionTracks") as? JsonArray
+-            ?: return emptyList()
+-        return tracksFrom(list)
+-    }
+-
+-    private fun tracksFrom(list: JsonArray): List<Track> {
+-        return list.mapNotNull { element ->
+-            val track = element as? JsonObject ?: return@mapNotNull null
+-            val baseUrl = (track["baseUrl"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+-                ?: return@mapNotNull null)
+-                .let { if (it.startsWith("/")) "https://www.youtube.com$it" else it }
+-            val code = track["languageCode"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+-                ?: return@mapNotNull null
+-            val name = track["name"]?.jsonObject
+-            val label = name?.get("simpleText")?.jsonPrimitive?.contentOrNull
+-                ?: name?.get("runs")?.jsonArray?.firstOrNull()?.jsonObject?.get("text")?.jsonPrimitive?.contentOrNull
+-                ?: code
+-            Track(code, label, baseUrl)
+-        }
+-    }
+-
+-    /** The track's address in a format the player reads as it is, or null when neither downloads. */
+-    private suspend fun readableUrl(source: String, track: Track): Pair<String, String>? {
+-        // SRT first: YouTube's auto-generated WebVTT carries cue settings (align:start position:0%) that
+-        // the player obeys, which pins the text to the left edge.
+-        val srt = withFormat(track.baseUrl, "srt")
+-        download(source, track, srt)?.takeIf(::isSrt)?.let { return srt to it }
+-        if (isBlocked()) return null
+-        val vtt = withFormat(track.baseUrl, "vtt")
+-        download(source, track, vtt)?.takeIf(::isVtt)?.let { return vtt to it }
+-        return null
+-    }
+-
+-    private fun withFormat(baseUrl: String, format: String): String {
+-        val cleaned = FORMAT_PARAM.replace(baseUrl) { if (it.value.startsWith("?")) "?" else "" }
+-            .replace("?&", "?")
+-            .trimEnd('?')
+-        return cleaned + (if ('?' in cleaned) "&" else "?") + "fmt=$format"
+-    }
+-
+-    private suspend fun download(source: String, track: Track, url: String): String? = runCatching {
+-        httpGetTextWithHeaders(url = url, headers = mapOf("Accept" to "*/*"))
+-    }.onSuccess {
+-        SyncedSubtitles.log(
+-            "youtube captions: $source ${track.languageCode} ${url.substringAfterLast("fmt=")} -> ${it.length} chars " +
+-                it.take(40).replace('\n', ' '),
+-        )
+-    }.onFailure {
+-        SyncedSubtitles.log("youtube captions: $source ${track.languageCode} download failed: ${it.message}")
+-        if ("429" in it.message.orEmpty()) {
+-            block()
+-            SyncedSubtitles.log("youtube captions: HTTP 429, pausing caption requests for ${BLOCK_MS / 60_000} min")
+-        }
+-    }.getOrNull()
+-
+-    private fun isVtt(text: String) = text.trimStart('﻿', ' ', '\r', '\n', '\t').startsWith("WEBVTT") && "-->" in text
+-
+-    private fun isSrt(text: String) = "-->" in text && !text.trimStart().startsWith("<")
+ }
