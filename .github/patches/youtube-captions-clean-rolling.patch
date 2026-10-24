@@ -1,0 +1,56 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerSidecarSubtitles.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerSidecarSubtitles.kt
+index 88ef591f..fcac1269 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerSidecarSubtitles.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerSidecarSubtitles.kt
+@@ -118,7 +118,7 @@ internal class SidecarSubtitleController(
+             try {
+                 val rawBody = rawBodyLoader?.invoke() ?: withContext(Dispatchers.IO) {
+                     if (url.startsWith("file:")) {
+-                        java.io.File(java.net.URI(url)).readText()
++                        cleanRollingSrt(java.io.File(java.net.URI(url)).readText())
+                     } else {
+                         httpGetTextWithHeaders(url = url, headers = headers)
+                     }
+@@ -399,3 +399,42 @@ private fun normalizeSidecarCuePosition(cue: Cue): Cue {
+         .setLineAnchor(Cue.TYPE_UNSET)
+         .build()
+ }
++
++// YouTube auto-captions are rolling: each cue repeats the previous line and overlaps the next cue.
++// Drop repeated lines and cut each cue at the start of the next one.
++internal fun cleanRollingSrt(text: String): String {
++    val time = Regex("""(\d+):(\d\d):(\d\d)[,.](\d{1,3})\s*-->\s*(\d+):(\d\d):(\d\d)[,.](\d{1,3})""")
++    fun ms(g: List<String>, o: Int) =
++        ((g[o].toLong() * 60 + g[o + 1].toLong()) * 60 + g[o + 2].toLong()) * 1000 + g[o + 3].padEnd(3, '0').toLong()
++    class Cue(val start: Long, var end: Long, val lines: List<String>)
++    val cues = text.replace("\r", "").split(Regex("\n{2,}")).mapNotNull { block ->
++        val lines = block.split("\n")
++        val i = lines.indexOfFirst { time.containsMatchIn(it) }
++        if (i < 0) return@mapNotNull null
++        val g = time.find(lines[i])!!.groupValues
++        Cue(ms(g, 1), ms(g, 5), lines.drop(i + 1).map { it.trim() }.filter { it.isNotEmpty() })
++    }.sortedBy { it.start }
++    if (cues.size < 2) return text
++    val out = ArrayList<Cue>()
++    var prev: List<String> = emptyList()
++    var prevEnd = -1L
++    for (c in cues) {
++        val fresh = if (c.start < prevEnd) c.lines.filter { it !in prev } else c.lines
++        prev = c.lines
++        prevEnd = c.end
++        val last = out.lastOrNull()
++        if (fresh.isEmpty()) {
++            if (last != null) last.end = maxOf(last.end, c.end)
++            continue
++        }
++        if (last != null && last.end > c.start) last.end = maxOf(c.start, last.start + 1)
++        out.add(Cue(c.start, c.end, fresh))
++    }
++    fun stamp(t: Long): String {
++        fun p(n: Long, w: Int = 2) = n.toString().padStart(w, '0')
++        return "${p(t / 3600000)}:${p(t / 60000 % 60)}:${p(t / 1000 % 60)},${p(t % 1000, 3)}"
++    }
++    return out.withIndex().joinToString("\n") { (i, c) ->
++        "${i + 1}\n${stamp(c.start)} --> ${stamp(maxOf(c.end, c.start + 1))}\n${c.lines.joinToString("\n")}\n"
++    }
++}
