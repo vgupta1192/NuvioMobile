@@ -87,7 +87,7 @@ index 6b359c01..397b2aad 100644
                  _error.value = getString(Res.string.compose_player_no_subtitles_found)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt
 new file mode 100644
-index 0000000..99293de
+index 0000000..6c0db5d
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt
 @@ -0,0 +1,310 @@
@@ -355,8 +355,8 @@ index 0000000..99293de
 +    private fun tracksFrom(list: JsonArray): List<Track> {
 +        return list.mapNotNull { element ->
 +            val track = element as? JsonObject ?: return@mapNotNull null
-+            val baseUrl = track["baseUrl"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
-+                ?: return@mapNotNull null
++            val baseUrl = (track["baseUrl"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
++                ?: return@mapNotNull null)
 +                .let { if (it.startsWith("/")) "https://www.youtube.com$it" else it }
 +            val code = track["languageCode"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
 +                ?: return@mapNotNull null
