@@ -1,0 +1,17 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerSidecarSubtitles.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerSidecarSubtitles.kt
+index 9b406e01..88ef591f 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerSidecarSubtitles.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerSidecarSubtitles.kt
+@@ -117,7 +117,11 @@ internal class SidecarSubtitleController(
+         sidecarSubtitleJob = scope.launch {
+             try {
+                 val rawBody = rawBodyLoader?.invoke() ?: withContext(Dispatchers.IO) {
+-                    httpGetTextWithHeaders(url = url, headers = headers)
++                    if (url.startsWith("file:")) {
++                        java.io.File(java.net.URI(url)).readText()
++                    } else {
++                        httpGetTextWithHeaders(url = url, headers = headers)
++                    }
+                 }
+                 if (!isCurrent()) return@launch
+ 
