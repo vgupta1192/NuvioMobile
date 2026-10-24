@@ -87,10 +87,10 @@ index 6b359c01..397b2aad 100644
                  _error.value = getString(Res.string.compose_player_no_subtitles_found)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt
 new file mode 100644
-index 0000000..3017336
+index 0000000..99293de
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt
-@@ -0,0 +1,307 @@
+@@ -0,0 +1,310 @@
 +package com.nuvio.app.features.player
 +
 +import com.nuvio.app.core.build.AppFeaturePolicy
@@ -357,6 +357,7 @@ index 0000000..3017336
 +            val track = element as? JsonObject ?: return@mapNotNull null
 +            val baseUrl = track["baseUrl"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
 +                ?: return@mapNotNull null
++                .let { if (it.startsWith("/")) "https://www.youtube.com$it" else it }
 +            val code = track["languageCode"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
 +                ?: return@mapNotNull null
 +            val name = track["name"]?.jsonObject
@@ -369,10 +370,12 @@ index 0000000..3017336
 +
 +    /** The track's address in a format the player reads as it is, or null when neither downloads. */
 +    private suspend fun readableUrl(source: String, track: Track): String? {
-+        val vtt = withFormat(track.baseUrl, "vtt")
-+        if (download(source, track, vtt)?.let(::isVtt) == true) return vtt
++        // SRT first: YouTube's auto-generated WebVTT carries cue settings (align:start position:0%) that
++        // the player obeys, which pins the text to the left edge.
 +        val srt = withFormat(track.baseUrl, "srt")
 +        if (download(source, track, srt)?.let(::isSrt) == true) return srt
++        val vtt = withFormat(track.baseUrl, "vtt")
++        if (download(source, track, vtt)?.let(::isVtt) == true) return vtt
 +        return null
 +    }
 +
