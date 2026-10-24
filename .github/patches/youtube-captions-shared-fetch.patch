@@ -1,0 +1,61 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt
+index 6c0db5de..ab5f45ee 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt
+@@ -4,6 +4,8 @@ import com.nuvio.app.core.build.AppFeaturePolicy
+ import com.nuvio.app.core.build.TrailerPlaybackMode
+ import com.nuvio.app.features.addons.httpGetTextWithHeaders
+ import com.nuvio.app.features.addons.httpPostJsonWithHeaders
++import kotlinx.coroutines.async
++import kotlinx.coroutines.sync.withLock
+ import kotlinx.coroutines.withTimeoutOrNull
+ import kotlinx.serialization.json.Json
+ import kotlinx.serialization.json.JsonArray
+@@ -128,13 +130,44 @@ internal object YouTubeCaptions {
+     fun isCaptionUrl(url: String): Boolean =
+         url.substringAfter("://", "").substringBefore('/').endsWith("youtube.com") && "/api/timedtext" in url
+ 
+-    suspend fun fetch(youtubeId: String): List<AddonSubtitle> = try {
++    private val fetchScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
++    private val fetchLock = kotlinx.coroutines.sync.Mutex()
++    private val inflight = mutableMapOf<String, kotlinx.coroutines.Deferred<List<AddonSubtitle>>>()
++    private val cache = mutableMapOf<String, List<AddonSubtitle>>()
++
++    /** One fetch per video, shared: a caller that is cancelled and asks again joins the running fetch instead of restarting it. */
++    suspend fun fetch(youtubeId: String): List<AddonSubtitle> {
++        val job = fetchLock.withLock {
++            cache[youtubeId]?.let {
++                SyncedSubtitles.log("youtube captions: ${it.size} rows from memory for $youtubeId")
++                return it
++            }
++            inflight.getOrPut(youtubeId) { fetchScope.async { fetchWithRetry(youtubeId) } }
++        }
++        val result = job.await()
++        fetchLock.withLock {
++            inflight.remove(youtubeId)
++            if (result.isNotEmpty()) cache[youtubeId] = result
++        }
++        return result
++    }
++
++    private suspend fun fetchWithRetry(youtubeId: String): List<AddonSubtitle> {
++        val first = fetchOnce(youtubeId)
++        if (first.isNotEmpty()) return first
++        kotlinx.coroutines.delay(1_500)
++        SyncedSubtitles.log("youtube captions: nothing the first time, asking once more for $youtubeId")
++        return fetchOnce(youtubeId)
++    }
++
++    private suspend fun fetchOnce(youtubeId: String): List<AddonSubtitle> = try {
+         SyncedSubtitles.log("youtube captions: asking for $youtubeId")
+-        withTimeoutOrNull(TIMEOUT_MS) { load(youtubeId) }
++        val startedAt = kotlin.time.TimeSource.Monotonic.markNow()
++        (withTimeoutOrNull(TIMEOUT_MS) { load(youtubeId) }
+             ?: run {
+                 SyncedSubtitles.log("youtube captions: gave up after ${TIMEOUT_MS / 1000} s for $youtubeId")
+                 emptyList()
+-            }
++            }).also { SyncedSubtitles.log("youtube captions: finished in ${startedAt.elapsedNow().inWholeMilliseconds} ms with ${it.size} rows") }
+     } catch (error: kotlinx.coroutines.CancellationException) {
+         throw error
+     } catch (error: Exception) {
