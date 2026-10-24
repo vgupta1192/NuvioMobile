@@ -1,0 +1,13 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt
+index 9c21f477..0d429941 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt
+@@ -469,7 +469,7 @@ private fun SubtitleOptionRow(
+                 )
+             }
+         }
+-        if (option is SubtitleSelectionOption.Addon) {
++        if (option is SubtitleSelectionOption.Addon && !GeneratedSubtitles.isGenerated(option.subtitle.url)) {
+             // Sync again: run AutoSync on this subtitle once more, ignoring its saved timing.
+             Row(
+                 modifier = Modifier
