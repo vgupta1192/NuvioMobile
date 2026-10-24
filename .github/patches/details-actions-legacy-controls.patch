@@ -34,10 +34,10 @@ index a469b68b..5dd419e6 100644
          onCastClick = { person, avatarTransitionKey ->
              val tmdbId = person.tmdbId
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index 13f28b59..d125c412 100644
+index 5175144e..4cd81556 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-@@ -1047,6 +1047,8 @@ internal fun MainAppContent(
+@@ -1050,6 +1050,8 @@ internal fun MainAppContent(
              resumeProgressFraction: Float?,
              manualSelection: Boolean,
              startFromBeginning: Boolean,
@@ -46,7 +46,7 @@ index 13f28b59..d125c412 100644
          ) {
              val targetResumePositionMs = if (startFromBeginning) 0L else (resumePositionMs ?: 0L)
              val targetResumeProgressFraction = if (startFromBeginning) null else resumeProgressFraction
-@@ -1086,7 +1088,7 @@ internal fun MainAppContent(
+@@ -1089,7 +1091,7 @@ internal fun MainAppContent(
                          initialPositionMs = targetResumePositionMs,
                          initialProgressFraction = targetResumeProgressFraction,
                      )
@@ -55,7 +55,7 @@ index 13f28b59..d125c412 100644
                          coroutineScope.launch { openExternalPlayback(playerLaunch) }
                          return
                      }
-@@ -1121,6 +1123,8 @@ internal fun MainAppContent(
+@@ -1124,6 +1126,8 @@ internal fun MainAppContent(
                      resumeProgressFraction = targetResumeProgressFraction,
                      manualSelection = manualSelection,
                      startFromBeginning = startFromBeginning,
@@ -64,7 +64,7 @@ index 13f28b59..d125c412 100644
                  ),
              )
              navController.navigate(
-@@ -1200,6 +1204,77 @@ internal fun MainAppContent(
+@@ -1203,6 +1207,77 @@ internal fun MainAppContent(
                  )
              }
  
@@ -142,7 +142,7 @@ index 13f28b59..d125c412 100644
          LaunchedEffect(Unit) {
              if (!ownsAppRuntime) return@LaunchedEffect
              PartyRepository.events.collect { event ->
-@@ -1626,6 +1701,9 @@ internal fun MainAppContent(
+@@ -1634,6 +1709,9 @@ internal fun MainAppContent(
                          navController = navController,
                          onPlay = onPlay,
                          onPlayManually = onPlayManually,
@@ -172,21 +172,21 @@ index f5d98b28..33c36072 100644
                          saveForReuse = stream != sharedStream?.stream,
                      )
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
-index 99085289..f57dcf46 100644
+index e44d97d3..1f175529 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
-@@ -45,6 +45,10 @@ import com.nuvio.app.core.ui.NuvioLoadingIndicator
+@@ -46,7 +46,10 @@ import com.nuvio.app.core.ui.NuvioLoadingIndicator
  import androidx.compose.material3.MaterialTheme
  import androidx.compose.material3.Text
  import androidx.compose.runtime.Composable
 +import androidx.compose.runtime.SideEffect
-+import androidx.compose.runtime.CompositionLocalProvider
+ import androidx.compose.runtime.CompositionLocalProvider
 +import com.nuvio.app.features.details.components.LocalDetailExtraActions
 +import com.nuvio.app.features.details.components.DetailExtraActionsHolder
  import androidx.compose.runtime.LaunchedEffect
  import androidx.compose.runtime.State
  import androidx.compose.runtime.derivedStateOf
-@@ -173,6 +177,9 @@ fun MetaDetailsScreen(
+@@ -177,6 +180,9 @@ fun MetaDetailsScreen(
      onBack: () -> Unit,
      onPlay: ((type: String, videoId: String, parentMetaId: String, parentMetaType: String, title: String, logo: String?, poster: String?, background: String?, seasonNumber: Int?, episodeNumber: Int?, episodeTitle: String?, episodeThumbnail: String?, pauseDescription: String?, resumePositionMs: Long?) -> Unit)? = null,
      onPlayManually: ((type: String, videoId: String, parentMetaId: String, parentMetaType: String, title: String, logo: String?, poster: String?, background: String?, seasonNumber: Int?, episodeNumber: Int?, episodeTitle: String?, episodeThumbnail: String?, pauseDescription: String?, resumePositionMs: Long?) -> Unit)? = null,
@@ -196,7 +196,7 @@ index 99085289..f57dcf46 100644
      onOpenMeta: ((MetaPreview) -> Unit)? = null,
      onCastClick: ((MetaPerson, String?) -> Unit)? = null,
      onCompanyClick: ((MetaCompany, String) -> Unit)? = null,
-@@ -255,6 +262,8 @@ fun MetaDetailsScreen(
+@@ -259,6 +265,8 @@ fun MetaDetailsScreen(
      var commentsError by remember(type, id) { mutableStateOf<String?>(null) }
      var selectedComment by remember(type, id) { mutableStateOf<TraktCommentReview?>(null) }
      val detailsScope = rememberCoroutineScope()
@@ -205,7 +205,7 @@ index 99085289..f57dcf46 100644
      var showLibraryListPicker by remember(type, id) { mutableStateOf(false) }
      var pickerTabs by remember(type, id) { mutableStateOf<List<TrackingLibraryTab>>(emptyList()) }
      var pickerMembership by remember(type, id) { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
-@@ -903,6 +912,63 @@ fun MetaDetailsScreen(
+@@ -907,6 +915,63 @@ fun MetaDetailsScreen(
                              }
                          }
                      }
@@ -269,7 +269,7 @@ index 99085289..f57dcf46 100644
                  val onEpisodePlayClick: (MetaVideo) -> Unit = { video ->
                      val season = video.season
                      val episode = video.episode
-@@ -1783,6 +1849,7 @@ fun MetaDetailsScreen(
+@@ -1787,6 +1852,7 @@ fun MetaDetailsScreen(
              )
          }
      }
@@ -349,7 +349,7 @@ index 00000000..4fd36abc
 +
 +val LocalDetailExtraActions = compositionLocalOf<DetailExtraActionsHolder?> { null }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
-index 25882cf4..c50c9df6 100644
+index 71973ba8..be8746c6 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
 @@ -28,6 +28,14 @@ import androidx.compose.material.icons.Icons
@@ -367,7 +367,7 @@ index 25882cf4..c50c9df6 100644
  import androidx.compose.material.icons.rounded.Flag
  import androidx.compose.material.icons.rounded.Groups
  import androidx.compose.material.icons.rounded.Forward10
-@@ -200,6 +208,11 @@ internal fun PlayerControlsShell(
+@@ -199,6 +207,11 @@ internal fun PlayerControlsShell(
                      onPartyClick = onPartyClick,
                      partyActive = partyActive,
                      onBack = onBack,
@@ -379,7 +379,7 @@ index 25882cf4..c50c9df6 100644
                      modifier = Modifier
                          .align(Alignment.TopStart)
                          .fillMaxWidth()
-@@ -279,6 +292,9 @@ internal fun PlayerControlsShell(
+@@ -278,6 +291,9 @@ internal fun PlayerControlsShell(
                      onAudioClick = onAudioClick,
                      onSourcesClick = onSourcesClick,
                      onEpisodesClick = onEpisodesClick,
@@ -389,7 +389,7 @@ index 25882cf4..c50c9df6 100644
                      modifier = Modifier
                          .align(Alignment.BottomCenter)
                          .fillMaxWidth()
-@@ -372,6 +388,11 @@ private fun PlayerHeader(
+@@ -365,6 +381,11 @@ private fun PlayerHeader(
      partyActive: Boolean,
      onBack: () -> Unit,
      modifier: Modifier = Modifier,
@@ -401,7 +401,7 @@ index 25882cf4..c50c9df6 100644
  ) {
      val typeScale = MaterialTheme.nuvioTypeScale
      val metadataAlpha by animateFloatAsState(
-@@ -461,6 +482,36 @@ private fun PlayerHeader(
+@@ -454,6 +475,36 @@ private fun PlayerHeader(
                      horizontalArrangement = Arrangement.spacedBy(10.dp),
                      verticalAlignment = Alignment.CenterVertically,
                  ) {
@@ -438,7 +438,7 @@ index 25882cf4..c50c9df6 100644
                      if (onSubmitIntroClick != null) {
                          PlayerHeaderIconButton(
                              icon = Icons.Rounded.Flag,
-@@ -659,6 +710,9 @@ private fun ProgressControls(
+@@ -652,6 +703,9 @@ private fun ProgressControls(
      onSourcesClick: (() -> Unit)? = null,
      onEpisodesClick: (() -> Unit)? = null,
      modifier: Modifier = Modifier,
@@ -448,7 +448,7 @@ index 25882cf4..c50c9df6 100644
  ) {
      val aspectRatioPainter = appIconPainter(AppIconResource.PlayerAspectRatio)
      val subtitlesPainter = appIconPainter(AppIconResource.PlayerSubtitles)
-@@ -726,6 +780,21 @@ private fun ProgressControls(
+@@ -719,6 +773,21 @@ private fun ProgressControls(
                              onClick = onEpisodesClick,
                          )
                      }
@@ -484,10 +484,10 @@ index 1a47be1a..1cf3b5ac 100644
  
  object StreamLaunchStore {
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt
-index 1e22c13b..cea270ed 100644
+index b117039c..33f67d0c 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt
-@@ -115,6 +115,7 @@ fun StreamsScreen(
+@@ -117,6 +117,7 @@ fun StreamsScreen(
      manualSelection: Boolean = false,
      startFromBeginning: Boolean = false,
      showLoadingScreen: Boolean = false,
@@ -495,7 +495,7 @@ index 1e22c13b..cea270ed 100644
      onStreamSelected: (stream: StreamItem, resumePositionMs: Long?, resumeProgressFraction: Float?) -> Unit = { _, _, _ -> },
      onStreamActionOpen: (
          stream: StreamItem,
-@@ -227,6 +228,61 @@ fun StreamsScreen(
+@@ -229,6 +230,61 @@ fun StreamsScreen(
          )
      }
  
@@ -557,7 +557,7 @@ index 1e22c13b..cea270ed 100644
      if (showLoadingScreen) return
  
      // Synced subtitles hook: streams of this title with a synced subtitle are marked.
-@@ -256,7 +312,11 @@ fun StreamsScreen(
+@@ -258,7 +314,11 @@ fun StreamsScreen(
                  resumePositionMs = effectiveResumePositionMs,
                  resumeProgressFraction = effectiveResumeProgressFraction,
                  onStreamSelected = { stream, positionMs, progressFraction ->
@@ -570,7 +570,7 @@ index 1e22c13b..cea270ed 100644
                  },
                  onStreamLongPress = { stream -> streamActionsTarget = stream },
                  onRefresh = reloadStreams,
-@@ -278,7 +338,11 @@ fun StreamsScreen(
+@@ -280,7 +340,11 @@ fun StreamsScreen(
                  resumePositionMs = effectiveResumePositionMs,
                  resumeProgressFraction = effectiveResumeProgressFraction,
                  onStreamSelected = { stream, positionMs, progressFraction ->
@@ -583,7 +583,7 @@ index 1e22c13b..cea270ed 100644
                  },
                  onStreamLongPress = { stream -> streamActionsTarget = stream },
                  onRefresh = reloadStreams,
-@@ -340,60 +404,7 @@ fun StreamsScreen(
+@@ -343,60 +407,7 @@ fun StreamsScreen(
                      NuvioToastController.show(noDirectStreamLinkText)
                  }
              },

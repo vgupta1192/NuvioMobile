@@ -1,5 +1,5 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
-index 024e5524..9eee9de2 100644
+index 73dcae99..abe157a6 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 @@ -108,6 +108,7 @@ open class MainActivity : AppCompatActivity() {
@@ -28,7 +28,7 @@ index 6d067fc7..6281caba 100644
      init {
          EmbeddedSubtitleCueStore.reset(sourceKey)
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt
-index 3ca8b963..baf0527d 100644
+index 0d6b5baf..e33c1099 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt
 @@ -86,6 +86,9 @@ internal class AutoSyncPlayerCoordinator(
@@ -41,7 +41,7 @@ index 3ca8b963..baf0527d 100644
      /** Synced subtitles hook: saves synced timing, and shows saved timing without syncing. */
      private val syncedKeeper = SyncedSubtitleKeeper(scope, sidecar)
      private val _retryState = MutableStateFlow(AutoSyncRetryUiState())
-@@ -188,6 +191,7 @@ internal class AutoSyncPlayerCoordinator(
+@@ -189,6 +192,7 @@ internal class AutoSyncPlayerCoordinator(
      fun dispose() {
          cancel()
          syncedKeeper.release()
@@ -2065,10 +2065,10 @@ index 00000000..f4855b0f
 +    <string name="settings_seekr_api_key_invalid">Seekr didn't accept this key.</string>
 +</resources>
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
-index 2c174cf8..2c949925 100644
+index b7441f70..7bc1b893 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
-@@ -710,6 +710,9 @@ private fun ProgressControls(
+@@ -703,6 +703,9 @@ private fun ProgressControls(
                              onClick = onEpisodesClick,
                          )
                      }
@@ -2078,10 +2078,10 @@ index 2c174cf8..2c949925 100644
                  }
              }
          }
-@@ -727,8 +730,12 @@ internal fun PlayerSeekBar(
- ) {
-     val seekDurationMs = durationMs.coerceAtLeast(1L)
+@@ -722,8 +725,12 @@ internal fun PlayerSeekBar(
      val seekDescription = stringResource(Res.string.player_seek_position)
+     val seekState = remember(seekDurationMs) { SliderState(trackRange = 0f..seekDurationMs.toFloat()) }
+     seekState.value = displayedPositionMs.coerceIn(0L, seekDurationMs).toFloat()
 +    val interactionSource = rememberSeekPreviewInteraction() // Seek previews hook
 +    val isDragged = seekPreviewDragged(interactionSource)
      Column(modifier = modifier) {
@@ -2171,10 +2171,10 @@ index 92024451..03424e47 100644
                  if (targetMs == null) {
                      isScrubbingTimeline = false
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTimeline.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTimeline.kt
-index f8897ce8..49bc9709 100644
+index f8a296de..bbfb3971 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTimeline.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTimeline.kt
-@@ -136,6 +136,7 @@ internal fun PlayerTimeline(
+@@ -117,6 +117,7 @@ internal fun PlayerTimeline(
      val isPressed by interactionSource.collectIsPressedAsState()
      val isDragged by interactionSource.collectIsDraggedAsState()
      val isInteracting = enabled && durationMs > 0L && (isPressed || isDragged)
@@ -2182,15 +2182,15 @@ index f8897ce8..49bc9709 100644
      val trackThickness by animateDpAsState(
          targetValue = if (isInteracting) 10.dp else 6.dp,
          animationSpec = tween(durationMillis = if (isInteracting) 140 else 180),
-@@ -143,6 +144,7 @@ internal fun PlayerTimeline(
-     )
+@@ -127,6 +128,7 @@ internal fun PlayerTimeline(
+     sliderState.value = displayedPositionMs.coerceIn(0L, durationMs).toFloat()
  
      CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
 +        SeekPreviewAboveTimeline(displayedPositionMs, durationMs, active = isInteracting) // Seek previews hook
          Slider(
-             value = displayedPositionMs.coerceIn(0L, durationMs).toFloat(),
+             state = sliderState,
              onValueChange = { value ->
-@@ -185,6 +187,7 @@ internal fun PlayerTimeline(
+@@ -168,6 +170,7 @@ internal fun PlayerTimeline(
                                  size = Size(size.width * (state.value / rangeEnd).coerceIn(0f, 1f), trackHeight),
                                  cornerRadius = radius,
                              )
@@ -4139,10 +4139,10 @@ index 00000000..5ccc2afa
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-index c29d42d5..fb5a8196 100644
+index 8d683f96..b261b677 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-@@ -612,6 +612,8 @@ private fun PlaybackSettingsSection(
+@@ -615,6 +615,8 @@ private fun PlaybackSettingsSection(
              )
          }
  

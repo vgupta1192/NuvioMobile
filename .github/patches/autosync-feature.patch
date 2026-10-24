@@ -1,5 +1,5 @@
 diff --git a/androidApp/build.gradle.kts b/androidApp/build.gradle.kts
-index c745995d..cc626704 100644
+index 19a9b280..2910dbc2 100644
 --- a/androidApp/build.gradle.kts
 +++ b/androidApp/build.gradle.kts
 @@ -95,6 +95,8 @@ android {
@@ -12,7 +12,7 @@ index c745995d..cc626704 100644
                  "lib/*/libc++_shared.so",
                  "lib/*/libavcodec.so",
 diff --git a/composeApp/build.gradle.kts b/composeApp/build.gradle.kts
-index 6b7a5933..67c2682e 100644
+index ac365b5d..a7d336ae 100644
 --- a/composeApp/build.gradle.kts
 +++ b/composeApp/build.gradle.kts
 @@ -12,6 +12,8 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
@@ -49,7 +49,7 @@ index 6b7a5933..67c2682e 100644
  kotlin {
      android {
          namespace = "com.nuvio.app"
-@@ -467,6 +487,7 @@ kotlin {
+@@ -470,6 +490,7 @@ kotlin {
                  implementation("androidx.annotation:annotation-experimental:1.3.1")
                  implementation(libs.mpv.android.lib)
                  implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("lib-*.aar"))))
@@ -141,7 +141,7 @@ index 00000000..e9bba608
 +    }
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
-index c8611d39..fc98e625 100644
+index 278d1b6e..4e56b569 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 @@ -2,7 +2,6 @@ package com.nuvio.app
@@ -152,7 +152,7 @@ index c8611d39..fc98e625 100644
  import android.os.Bundle
  import androidx.activity.compose.setContent
  
-@@ -88,7 +87,6 @@ open class MainActivity : AppCompatActivity() {
+@@ -89,7 +88,6 @@ open class MainActivity : AppCompatActivity() {
          SentrySettingsStorage.initialize(applicationContext)
          SentryInitializer.start(application)
          super.onCreate(savedInstanceState)
@@ -160,7 +160,7 @@ index c8611d39..fc98e625 100644
          window.setBackgroundDrawableResource(R.color.nuvio_background)
          pipRemoteActionReceiver = PipRemoteActionReceiver.register(this)
          SyncClientIdentityStorage.initialize(applicationContext)
-@@ -107,6 +105,7 @@ open class MainActivity : AppCompatActivity() {
+@@ -108,6 +106,7 @@ open class MainActivity : AppCompatActivity() {
          PlayerTrackPreferenceStorage.initialize(applicationContext)
          P2pSettingsStorage.initialize(applicationContext)
          P2pStreamingEngine.initialize(applicationContext)
@@ -3685,10 +3685,10 @@ index fc6d4af6..395f6bf0 100644
                  headers.forEach { (key, value) ->
                      setRequestProperty(key, value)
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index 04c61665..4b3b2f79 100644
+index e658d9ad..cf1e541a 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-@@ -52,6 +52,7 @@ import androidx.media3.datasource.DefaultDataSource
+@@ -53,6 +53,7 @@ import androidx.media3.datasource.DefaultDataSource
  import androidx.media3.datasource.TransferListener
  import androidx.media3.exoplayer.DefaultRenderersFactory
  import androidx.media3.exoplayer.ExoPlayer
@@ -3696,7 +3696,7 @@ index 04c61665..4b3b2f79 100644
  import androidx.media3.exoplayer.ForwardingRenderer
  import androidx.media3.exoplayer.Renderer
  import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-@@ -71,6 +72,7 @@ import com.nuvio.app.features.autosync.LIBMPV_AUTOSYNC_FILE_PREFIX
+@@ -72,6 +73,7 @@ import com.nuvio.app.features.autosync.LIBMPV_AUTOSYNC_FILE_PREFIX
  import com.nuvio.app.features.autosync.rememberAutoSyncCoordinator
  import com.nuvio.app.features.autosync.rememberLibmpvAutoSyncCoordinator
  import com.nuvio.app.R
@@ -3704,7 +3704,7 @@ index 04c61665..4b3b2f79 100644
  import com.nuvio.app.features.streams.normalizeStreamType
  import `is`.xyz.mpv.BaseMPVView
  import `is`.xyz.mpv.MPV
-@@ -298,29 +300,23 @@ private fun ExoPlayerSurface(
+@@ -327,29 +329,23 @@ private fun ExoPlayerSurface(
      var probeAttempted by remember(playerSourceKey) { mutableStateOf(false) }
  
      val extractorsFactory = remember(sourceUrl) {
@@ -3743,7 +3743,7 @@ index 04c61665..4b3b2f79 100644
              context = context,
              defaultRequestHeaders = sanitizedSourceHeaders,
              defaultResponseHeaders = sanitizedSourceResponseHeaders,
-@@ -328,6 +324,19 @@ private fun ExoPlayerSurface(
+@@ -357,6 +353,19 @@ private fun ExoPlayerSurface(
              useLongReadTimeout = isLoopbackPlaybackSource(sourceUrl),
              externalSubtitles = externalSubtitles,
          )
@@ -3763,7 +3763,7 @@ index 04c61665..4b3b2f79 100644
          val mimeType = playbackMediaItemFromUrl(
              url = sourceUrl,
              responseHeaders = sanitizedSourceResponseHeaders,
-@@ -558,8 +567,11 @@ private fun ExoPlayerSurface(
+@@ -595,8 +604,11 @@ private fun ExoPlayerSurface(
          externalSubtitles = externalSubtitles,
          useLibass = useLibass,
          preferredSubtitleLanguage = playerSettings.preferredSubtitleLanguage,
@@ -3775,7 +3775,7 @@ index 04c61665..4b3b2f79 100644
      )
  
      fun syncPlayerViewKeepScreenOn() {
-@@ -944,10 +956,16 @@ private fun ExoPlayerSurface(
+@@ -988,10 +1000,16 @@ private fun ExoPlayerSurface(
                              .setSubtitleConfigurations(listOf(subtitleConfig))
                              .build()
                          Log.d(TAG, "setSubtitleUri: newMediaItem subtitleConfigs count=${newMediaItem.localConfiguration?.subtitleConfigurations?.size}")
@@ -3792,7 +3792,7 @@ index 04c61665..4b3b2f79 100644
                              .setPreferredTextRoleFlags(C.ROLE_FLAG_SUBTITLE)
                              .build()
                          Log.d(TAG, "setSubtitleUri: track params set before prepare, textDisabled=${exoPlayer.trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)}")
-@@ -2375,6 +2393,13 @@ private class SubtitleOffsetRenderersFactory(
+@@ -2567,6 +2585,13 @@ private class SubtitleOffsetRenderersFactory(
      private val shouldStripSdhProvider: () -> Boolean,
      private val videoBoundsFractionProvider: () -> RectF?,
  ) : DefaultRenderersFactory(context) {
@@ -3807,7 +3807,7 @@ index 04c61665..4b3b2f79 100644
          context: Context,
          output: TextOutput,
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerLibassCompat.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerLibassCompat.kt
-index 792f21ef..83bf6d2d 100644
+index 844cef0b..a001fe74 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerLibassCompat.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerLibassCompat.kt
 @@ -107,10 +107,8 @@ private fun ExtractorsFactory.withAssMkvSupportCompat(
@@ -4003,7 +4003,7 @@ index 00000000..a95a3d3d
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
 new file mode 100644
-index 00000000..e303ae00
+index 00000000..b4c7d03e
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
 @@ -0,0 +1,1392 @@
@@ -19257,14 +19257,16 @@ index 81f29aab..48f12716 100644
 +</resources>
 \ No newline at end of file
 diff --git a/composeApp/src/commonMain/composeResources/values-es/autosync_toast_strings.xml b/composeApp/src/commonMain/composeResources/values-es/autosync_toast_strings.xml
-new file mode 100644
-index 00000000..1cbb20c9
---- /dev/null
+index 9c540596..1cbb20c9 100644
+--- a/composeApp/src/commonMain/composeResources/values-es/autosync_toast_strings.xml
 +++ b/composeApp/src/commonMain/composeResources/values-es/autosync_toast_strings.xml
-@@ -0,0 +1,16 @@
-+<?xml version="1.0" encoding="utf-8"?>
+@@ -1,7 +1,16 @@
+ <?xml version="1.0" encoding="utf-8"?>
 +<!-- AutoSync toasts and the "Auto synced" label. Keep keys in sync across locales. -->
-+<resources>
+ <resources>
+-    <string name="autosync_toast_failed">Error de sincronización: la sincronización automática no ha podido hacer coincidir este subtítulo con el vídeo.</string>
+-    <string name="autosync_toast_failed_no_reference">Error de sincronización: no hay subtítulos integrados utilizables para comparar.</string>
+-    <string name="autosync_toast_failed_unsupported">Error de sincronización: este formato de subtítulos no es compatible.</string>
 +    <string name="autosync_toast_analyzing">Auto Sync • Analizando…</string>
 +    <string name="autosync_toast_synced">Auto Sync • Subtítulos sincronizados</string>
 +    <string name="autosync_toast_synced_replaced">Auto Sync • Se ha cambiado a un subtítulo que coincide mejor</string>
@@ -19276,8 +19278,8 @@ index 00000000..1cbb20c9
 +    <string name="autosync_toast_retry_synced">Auto Sync • Sincronizado con otra referencia</string>
 +    <string name="autosync_toast_retry_none">Auto Sync • No se encontró una referencia mejor</string>
 +    <string name="autosync_toast_retry_failed">Auto Sync • Falló el reintento con otra referencia • se mantuvo la sincronización actual</string>
-+    <string name="autosync_label_synced">Sincronizado automáticamente</string>
-+</resources>
+     <string name="autosync_label_synced">Sincronizado automáticamente</string>
+ </resources>
 diff --git a/composeApp/src/commonMain/composeResources/values-fr/autosync_toast_strings.xml b/composeApp/src/commonMain/composeResources/values-fr/autosync_toast_strings.xml
 new file mode 100644
 index 00000000..8a721382
@@ -19322,19 +19324,6 @@ index 00000000..7941fa1c
 +    <string name="autosync_toast_retry_failed">Auto Sync • ניסיון חוזר עם ייחוס אחר נכשל • הסנכרון הנוכחי נשמר</string>
 +    <string name="autosync_label_synced">סונכרן אוטומטית</string>
 +</resources>
-diff --git a/composeApp/src/commonMain/composeResources/values-hu/autosync_toast_strings.xml b/composeApp/src/commonMain/composeResources/values-hu/autosync_toast_strings.xml
-deleted file mode 100644
-index ad1a64c9..00000000
---- a/composeApp/src/commonMain/composeResources/values-hu/autosync_toast_strings.xml
-+++ /dev/null
-@@ -1,7 +0,0 @@
--<?xml version="1.0" encoding="utf-8"?>
--<resources>
--    <string name="autosync_toast_failed">Szinkronizálás sikertelen: Az auto szinkron nem tudta illeszteni ezt a feliratot a videóhoz.</string>
--    <string name="autosync_toast_failed_no_reference">Szinkronizálás sikertelen: Nincs használható beágyazott felirat az összehasonlításhoz.</string>
--    <string name="autosync_toast_failed_unsupported">Szinkronizálás sikertelen: Ez a feliratformátum nem támogatott.</string>
--    <string name="autosync_label_synced">Auto szinkronizálva</string>
--</resources>
 diff --git a/composeApp/src/commonMain/composeResources/values-id/autosync_toast_strings.xml b/composeApp/src/commonMain/composeResources/values-id/autosync_toast_strings.xml
 new file mode 100644
 index 00000000..2a9ad012
@@ -19718,10 +19707,10 @@ index 872c52da..d0e85fca 100644
      <string name="autosync_label_synced">Auto synced</string>
  </resources>
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index 98ab7d5c..de8d192a 100644
+index c5bedf8b..b0a3c0fd 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-@@ -893,6 +893,7 @@ internal fun MainAppContent(
+@@ -896,6 +896,7 @@ internal fun MainAppContent(
  
          fun openLiveTvChannel(channel: LiveTvChannel, option: LiveTvStreamOption) {
              val stream = option.stream
@@ -20194,7 +20183,7 @@ index 00000000..b8af8117
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/bubble/AutoSyncBubbleToast.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/bubble/AutoSyncBubbleToast.kt
 new file mode 100644
-index 00000000..fb1763e4
+index 00000000..ccb9504c
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/bubble/AutoSyncBubbleToast.kt
 @@ -0,0 +1,817 @@
@@ -21321,7 +21310,7 @@ index ce4d1eca..daf4ccba 100644
              onSuccess = { cues ->
                  subtitleAutoSyncState = subtitleAutoSyncState.copy(
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index 1f9b1ed6..92024451 100644
+index cabeac7a..56f7ef10 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 @@ -21,6 +21,7 @@ import com.nuvio.app.features.p2p.P2pStreamingState
@@ -21939,10 +21928,10 @@ index 00000000..a145c8cf
 +    )
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-index ddc25803..c29d42d5 100644
+index d2dc33d9..98028e6c 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-@@ -560,14 +560,6 @@ private fun PlaybackSettingsSection(
+@@ -572,14 +572,6 @@ private fun PlaybackSettingsSection(
                      isTablet = isTablet,
                      onClick = { showSecondarySubtitleDialog = true },
                  )
@@ -21957,7 +21946,7 @@ index ddc25803..c29d42d5 100644
                  SettingsGroupDivider(isTablet = isTablet)
                  SettingsSwitchRow(
                      title = stringResource(Res.string.settings_playback_subtitle_strip_sdh),
-@@ -610,6 +602,16 @@ private fun PlaybackSettingsSection(
+@@ -622,6 +614,16 @@ private fun PlaybackSettingsSection(
              }
          }
  
