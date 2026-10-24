@@ -87,10 +87,10 @@ index 6b359c01..397b2aad 100644
                  _error.value = getString(Res.string.compose_player_no_subtitles_found)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt
 new file mode 100644
-index 0000000..295b00c
+index 0000000..3017336
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt
-@@ -0,0 +1,302 @@
+@@ -0,0 +1,307 @@
 +package com.nuvio.app.features.player
 +
 +import com.nuvio.app.core.build.AppFeaturePolicy
@@ -116,7 +116,7 @@ index 0000000..295b00c
 + */
 +internal object YouTubeCaptions {
 +    private const val ID_PREFIX = "youstream:"
-+    private const val TIMEOUT_MS = 12_000L
++    private const val TIMEOUT_MS = 25_000L
 +    private const val MAX_TRACKS = 8
 +    private val VIDEO_ID = Regex("^[A-Za-z0-9_-]{11}$")
 +    private val API_KEY = Regex("\"INNERTUBE_API_KEY\":\"([^\"]+)\"")
@@ -222,7 +222,12 @@ index 0000000..295b00c
 +        url.substringAfter("://", "").substringBefore('/').endsWith("youtube.com") && "/api/timedtext" in url
 +
 +    suspend fun fetch(youtubeId: String): List<AddonSubtitle> = try {
-+        withTimeoutOrNull(TIMEOUT_MS) { load(youtubeId) }.orEmpty()
++        SyncedSubtitles.log("youtube captions: asking for $youtubeId")
++        withTimeoutOrNull(TIMEOUT_MS) { load(youtubeId) }
++            ?: run {
++                SyncedSubtitles.log("youtube captions: gave up after ${TIMEOUT_MS / 1000} s for $youtubeId")
++                emptyList()
++            }
 +    } catch (error: kotlinx.coroutines.CancellationException) {
 +        throw error
 +    } catch (error: Exception) {
@@ -393,3 +398,17 @@ index 0000000..295b00c
 +
 +    private fun isSrt(text: String) = "-->" in text && !text.trimStart().startsWith("<")
 +}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTrackSelection.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTrackSelection.kt
+index 7e9b972f..047a5f6b 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTrackSelection.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTrackSelection.kt
+@@ -23,7 +23,8 @@ internal fun buildAddonSubtitleFetchKey(
+         "${manifest.id}:${manifest.transportUrl}"
+     }
+ 
+-    if (compatibleSubtitleAddons.isEmpty()) return null
++    // YouStream videos have YouTube's own captions even when no add-on offers subtitles for them.
++    if (compatibleSubtitleAddons.isEmpty() && YouTubeCaptions.videoIdOrNull(normalizedVideoId) == null) return null
+     return buildString {
+         append(normalizedType)
+         append('|')
