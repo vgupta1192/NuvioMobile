@@ -87,10 +87,10 @@ index 6b359c01..397b2aad 100644
                  _error.value = getString(Res.string.compose_player_no_subtitles_found)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt
 new file mode 100644
-index 00000000..77158471
+index 0000000..295b00c
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt
-@@ -0,0 +1,212 @@
+@@ -0,0 +1,302 @@
 +package com.nuvio.app.features.player
 +
 +import com.nuvio.app.core.build.AppFeaturePolicy
@@ -167,6 +167,45 @@ index 00000000..77158471
 +        ),
 +    )
 +
++    private val EXTRA_CLIENTS = listOf(
++        Client(
++            name = "TVHTML5",
++            id = "7",
++            version = "7.20250219.14.00",
++            userAgent = "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version",
++            context = buildJsonObject {
++                put("clientName", "TVHTML5")
++                put("clientVersion", "7.20250219.14.00")
++                put("hl", "en")
++                put("gl", "US")
++            },
++        ),
++        Client(
++            name = "WEB_EMBEDDED",
++            id = "56",
++            version = "1.20250310.01.00",
++            userAgent = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
++            context = buildJsonObject {
++                put("clientName", "WEB_EMBEDDED_PLAYER")
++                put("clientVersion", "1.20250310.01.00")
++                put("hl", "en")
++                put("gl", "US")
++            },
++        ),
++        Client(
++            name = "MWEB",
++            id = "2",
++            version = "2.20250310.01.00",
++            userAgent = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
++            context = buildJsonObject {
++                put("clientName", "MWEB")
++                put("clientVersion", "2.20250310.01.00")
++                put("hl", "en")
++                put("gl", "US")
++            },
++        ),
++    )
++
 +    private class Track(val languageCode: String, val label: String, val baseUrl: String)
 +
 +    /** The YouTube video id of a YouStream video id, when captions can be asked for it here. */
@@ -192,31 +231,6 @@ index 00000000..77158471
 +    }
 +
 +    private suspend fun load(youtubeId: String): List<AddonSubtitle> {
-+        val tracks = findTracks(youtubeId)
-+        if (tracks.isEmpty()) {
-+            SyncedSubtitles.log("youtube captions: none offered for $youtubeId")
-+            return emptyList()
-+        }
-+        val found = mutableListOf<AddonSubtitle>()
-+        for (track in tracks.take(MAX_TRACKS)) {
-+            val url = readableUrl(track)
-+            if (url == null) {
-+                SyncedSubtitles.log("youtube captions: ${track.languageCode} would not download as vtt or srt")
-+                continue
-+            }
-+            found += AddonSubtitle(
-+                id = "youtube_${youtubeId}_${track.languageCode}_${found.size}",
-+                url = url,
-+                language = normalizeLanguageCode(track.languageCode) ?: track.languageCode,
-+                display = "${track.label} · YouTube",
-+                addonName = "YouTube",
-+            )
-+        }
-+        SyncedSubtitles.log("youtube captions: ${found.size} of ${tracks.size} tracks listed for $youtubeId")
-+        return found
-+    }
-+
-+    private suspend fun findTracks(youtubeId: String): List<Track> {
 +        val watch = runCatching {
 +            httpGetTextWithHeaders(
 +                url = "https://www.youtube.com/watch?v=$youtubeId&hl=en",
@@ -226,17 +240,77 @@ index 00000000..77158471
 +                    "User-Agent" to "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
 +                ),
 +            )
-+        }.getOrNull().orEmpty()
++        }.onFailure { SyncedSubtitles.log("youtube captions: watch page failed: ${it.message}") }.getOrNull().orEmpty()
 +        val apiKey = API_KEY.find(watch)?.groupValues?.get(1)
 +        val visitorData = VISITOR_DATA.find(watch)?.groupValues?.get(1)
-+        for (client in CLIENTS) {
-+            val tracks = runCatching { playerTracks(youtubeId, client, apiKey, visitorData) }
-+                .onFailure { SyncedSubtitles.log("youtube captions: ${client.name} failed: ${it.message}") }
-+                .getOrNull()
-+                .orEmpty()
-+            if (tracks.isNotEmpty()) return tracks
++        SyncedSubtitles.log("youtube captions: watch page ${watch.length} chars, key ${apiKey != null}, visitor ${visitorData != null}")
++        // Each source (the watch page, then each YouTube client) is probed with its first track; the first
++        // source whose track really downloads as vtt or srt wins, because the others may need a token.
++        val sources: List<Client?> = listOf(null) + CLIENTS + EXTRA_CLIENTS
++        var anyTracks = false
++        for (client in sources) {
++            val name = client?.name ?: "watch page"
++            val tracks = runCatching {
++                if (client == null) pageTracks(watch) else playerTracks(youtubeId, client, apiKey, visitorData)
++            }
++                .onFailure { SyncedSubtitles.log("youtube captions: $name failed: ${it.message}") }
++                .getOrNull().orEmpty()
++            if (tracks.isEmpty()) {
++                SyncedSubtitles.log("youtube captions: $name offers no tracks")
++                continue
++            }
++            anyTracks = true
++            val urls = mutableListOf<Pair<Track, String>>()
++            for (track in tracks.take(MAX_TRACKS)) {
++                val url = readableUrl(name, track)
++                if (url != null) urls += track to url
++                else if (urls.isEmpty()) break
++            }
++            if (urls.isEmpty()) {
++                SyncedSubtitles.log("youtube captions: $name tracks would not download as vtt or srt")
++                continue
++            }
++            SyncedSubtitles.log("youtube captions: $name gives ${urls.size} of ${tracks.size} tracks for $youtubeId")
++            return urls.mapIndexed { index, (track, url) ->
++                AddonSubtitle(
++                    id = "youtube_${youtubeId}_${track.languageCode}_$index",
++                    url = url,
++                    language = normalizeLanguageCode(track.languageCode) ?: track.languageCode,
++                    display = "${track.label} · YouTube",
++                    addonName = "YouTube",
++                )
++            }
 +        }
++        SyncedSubtitles.log(
++            if (anyTracks) "youtube captions: tracks found but none downloads for $youtubeId"
++            else "youtube captions: none offered for $youtubeId",
++        )
 +        return emptyList()
++    }
++
++    /** The caption tracks inside the watch page's own player response. */
++    private fun pageTracks(watch: String): List<Track> {
++        val start = watch.indexOf("\"captionTracks\":")
++        if (start < 0) return emptyList()
++        val open = watch.indexOf('[', start)
++        if (open < 0) return emptyList()
++        var depth = 0
++        var index = open
++        var inString = false
++        while (index < watch.length) {
++            val c = watch[index]
++            if (inString) {
++                if (c == '\\') index++ else if (c == '"') inString = false
++            } else when (c) {
++                '"' -> inString = true
++                '[' -> depth++
++                ']' -> { depth--; if (depth == 0) break }
++            }
++            index++
++        }
++        if (depth != 0) return emptyList()
++        val list = json.parseToJsonElement(watch.substring(open, index + 1)) as? JsonArray ?: return emptyList()
++        return tracksFrom(list)
 +    }
 +
 +    private suspend fun playerTracks(
@@ -261,10 +335,19 @@ index 00000000..77158471
 +            put("context", buildJsonObject { put("client", client.context) })
 +        }.toString()
 +        val response = json.parseToJsonElement(httpPostJsonWithHeaders(endpoint, body, headers)).jsonObject
++        val status = response["playabilityStatus"]?.jsonObject
++        SyncedSubtitles.log(
++            "youtube captions: ${client.name} ${status?.get("status")?.jsonPrimitive?.contentOrNull} " +
++                (status?.get("reason")?.jsonPrimitive?.contentOrNull.orEmpty()),
++        )
 +        val list = response["captions"]?.jsonObject
 +            ?.get("playerCaptionsTracklistRenderer")?.jsonObject
 +            ?.get("captionTracks") as? JsonArray
 +            ?: return emptyList()
++        return tracksFrom(list)
++    }
++
++    private fun tracksFrom(list: JsonArray): List<Track> {
 +        return list.mapNotNull { element ->
 +            val track = element as? JsonObject ?: return@mapNotNull null
 +            val baseUrl = track["baseUrl"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
@@ -280,11 +363,11 @@ index 00000000..77158471
 +    }
 +
 +    /** The track's address in a format the player reads as it is, or null when neither downloads. */
-+    private suspend fun readableUrl(track: Track): String? {
++    private suspend fun readableUrl(source: String, track: Track): String? {
 +        val vtt = withFormat(track.baseUrl, "vtt")
-+        if (download(vtt)?.let(::isVtt) == true) return vtt
++        if (download(source, track, vtt)?.let(::isVtt) == true) return vtt
 +        val srt = withFormat(track.baseUrl, "srt")
-+        if (download(srt)?.let(::isSrt) == true) return srt
++        if (download(source, track, srt)?.let(::isSrt) == true) return srt
 +        return null
 +    }
 +
@@ -295,8 +378,15 @@ index 00000000..77158471
 +        return cleaned + (if ('?' in cleaned) "&" else "?") + "fmt=$format"
 +    }
 +
-+    private suspend fun download(url: String): String? = runCatching {
++    private suspend fun download(source: String, track: Track, url: String): String? = runCatching {
 +        httpGetTextWithHeaders(url = url, headers = mapOf("Accept" to "*/*"))
++    }.onSuccess {
++        SyncedSubtitles.log(
++            "youtube captions: $source ${track.languageCode} ${url.substringAfterLast("fmt=")} -> ${it.length} chars " +
++                it.take(40).replace('\n', ' '),
++        )
++    }.onFailure {
++        SyncedSubtitles.log("youtube captions: $source ${track.languageCode} download failed: ${it.message}")
 +    }.getOrNull()
 +
 +    private fun isVtt(text: String) = text.trimStart('﻿', ' ', '\r', '\n', '\t').startsWith("WEBVTT") && "-->" in text
