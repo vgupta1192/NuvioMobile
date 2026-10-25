@@ -1,0 +1,29 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/core/network/ApiHttpClient.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/core/network/ApiHttpClient.android.kt
+index 4294fdd2..db7de3d1 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/core/network/ApiHttpClient.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/core/network/ApiHttpClient.android.kt
+@@ -14,6 +14,8 @@ internal actual fun createApiHttpClient(): HttpClient = HttpClient(OkHttp) {
+     }
+     engine {
+         config {
++            dns(IPv4FirstDns())
++            connectionPool(okhttp3.ConnectionPool(8, 5, java.util.concurrent.TimeUnit.MINUTES))
+             followRedirects(false)
+             followSslRedirects(false)
+             retryOnConnectionFailure(false)
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.android.kt
+index 29d28f43..d944d11f 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.android.kt
+@@ -103,6 +103,11 @@ internal object AddonHttpClientProvider {
+ private fun buildAddonHttpClient(cache: Cache? = null): OkHttpClient =
+     OkHttpClient.Builder()
+         .dns(IPv4FirstDns())
++        .dispatcher(okhttp3.Dispatcher().apply {
++            maxRequests = 128
++            maxRequestsPerHost = 16
++        })
++        .connectionPool(okhttp3.ConnectionPool(16, 5, TimeUnit.MINUTES))
+         .connectTimeout(60, TimeUnit.SECONDS)
+         .readTimeout(60, TimeUnit.SECONDS)
+         .writeTimeout(60, TimeUnit.SECONDS)
