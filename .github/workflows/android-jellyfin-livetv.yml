@@ -486,6 +486,7 @@ jobs:
             echo "applied custom-stretch-ios.patch"
           fi
           apply_required ios-platform-actuals
+          apply_required ios-xcode26-compat
           apply_required ios-runtime-features
           git diff --stat | tail -1
 
