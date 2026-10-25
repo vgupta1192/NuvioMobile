@@ -1,0 +1,25 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerPlaybackNetworking.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerPlaybackNetworking.kt
+index 03233077..486a7dba 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerPlaybackNetworking.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerPlaybackNetworking.kt
+@@ -6,6 +6,8 @@ import androidx.media3.datasource.DefaultDataSource
+ import androidx.media3.datasource.okhttp.OkHttpDataSource
+ import com.nuvio.app.core.diagnostics.SentryNetworkBreadcrumbInterceptor
+ import com.nuvio.app.core.network.IPv4FirstDns
++import okhttp3.ConnectionPool
++import okhttp3.Dispatcher
+ import okhttp3.OkHttpClient
+ import java.net.HttpURLConnection
+ import java.net.URL
+@@ -46,6 +48,11 @@ internal object PlayerPlaybackNetworking {
+     private val playbackHttpClient: OkHttpClient by lazy {
+         OkHttpClient.Builder()
+             .dns(IPv4FirstDns())
++            .dispatcher(Dispatcher().apply {
++                maxRequests = 64
++                maxRequestsPerHost = 16
++            })
++            .connectionPool(ConnectionPool(8, 5, TimeUnit.MINUTES))
+             .sslSocketFactory(sslContext.socketFactory, trustAllManager)
+             .hostnameVerifier(playbackHostnameVerifier)
+             .connectTimeout(15, TimeUnit.SECONDS)
