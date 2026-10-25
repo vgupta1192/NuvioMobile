@@ -1,0 +1,154 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/NuvioApplication.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/NuvioApplication.kt
+index 45f056eb..7be7e381 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/NuvioApplication.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/NuvioApplication.kt
+@@ -4,6 +4,12 @@ import android.app.Application
+ import android.os.Build
+ import coil3.ImageLoader
+ import coil3.SingletonImageLoader
++import coil3.disk.DiskCache
++import coil3.memory.MemoryCache
++import com.nuvio.app.core.network.SharedHttp
++import io.ktor.client.HttpClient
++import io.ktor.client.engine.okhttp.OkHttp
++import okio.Path.Companion.toOkioPath
+ import coil3.gif.AnimatedImageDecoder
+ import coil3.gif.GifDecoder
+ import coil3.network.cachecontrol.CacheControlCacheStrategy
+@@ -26,11 +32,32 @@ class NuvioApplication : Application(), SingletonImageLoader.Factory {
+             .crossfade(true)
+             .diskCachePolicy(CachePolicy.ENABLED)
+             .memoryCachePolicy(CachePolicy.ENABLED)
++            .memoryCache {
++                MemoryCache.Builder().maxSizePercent(context, 0.2).build()
++            }
++            .diskCache {
++                DiskCache.Builder()
++                    .directory(context.cacheDir.resolve("image_cache").toOkioPath())
++                    .maxSizeBytes(384L * 1024L * 1024L)
++                    .build()
++            }
+             .components {
+                 add(CustomPosterFallbackInterceptor())
+                 add(SvgDecoder.Factory())
+                 add(
+                     KtorNetworkFetcherFactory(
++                        httpClient = {
++                            HttpClient(OkHttp) {
++                                engine {
++                                    config {
++                                        connectionPool(SharedHttp.connectionPool)
++                                        dispatcher(
++                                            okhttp3.Dispatcher().apply { maxRequestsPerHost = 16 },
++                                        )
++                                    }
++                                }
++                            }
++                        },
+                         cacheStrategy = { CacheControlCacheStrategy() },
+                     ),
+                 )
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/core/network/ApiHttpClient.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/core/network/ApiHttpClient.android.kt
+index db7de3d1..c26813b1 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/core/network/ApiHttpClient.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/core/network/ApiHttpClient.android.kt
+@@ -15,7 +15,7 @@ internal actual fun createApiHttpClient(): HttpClient = HttpClient(OkHttp) {
+     engine {
+         config {
+             dns(IPv4FirstDns())
+-            connectionPool(okhttp3.ConnectionPool(8, 5, java.util.concurrent.TimeUnit.MINUTES))
++            connectionPool(SharedHttp.connectionPool)
+             followRedirects(false)
+             followSslRedirects(false)
+             retryOnConnectionFailure(false)
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/core/network/SharedHttp.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/core/network/SharedHttp.kt
+new file mode 100644
+index 00000000..3293562c
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/core/network/SharedHttp.kt
+@@ -0,0 +1,15 @@
++package com.nuvio.app.core.network
++
++import okhttp3.ConnectionPool
++import okhttp3.Dispatcher
++import java.util.concurrent.TimeUnit
++
++internal object SharedHttp {
++    val connectionPool: ConnectionPool by lazy { ConnectionPool(24, 5, TimeUnit.MINUTES) }
++    val dispatcher: Dispatcher by lazy {
++        Dispatcher().apply {
++            maxRequests = 128
++            maxRequestsPerHost = 16
++        }
++    }
++}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.android.kt
+index d944d11f..643a866c 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.android.kt
+@@ -4,6 +4,7 @@ import android.content.Context
+ import android.content.SharedPreferences
+ import com.nuvio.app.core.diagnostics.SentryNetworkBreadcrumbInterceptor
+ import com.nuvio.app.core.network.IPv4FirstDns
++import com.nuvio.app.core.network.SharedHttp
+ import kotlinx.coroutines.CancellationException
+ import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.Job
+@@ -103,11 +104,8 @@ internal object AddonHttpClientProvider {
+ private fun buildAddonHttpClient(cache: Cache? = null): OkHttpClient =
+     OkHttpClient.Builder()
+         .dns(IPv4FirstDns())
+-        .dispatcher(okhttp3.Dispatcher().apply {
+-            maxRequests = 128
+-            maxRequestsPerHost = 16
+-        })
+-        .connectionPool(okhttp3.ConnectionPool(16, 5, TimeUnit.MINUTES))
++        .dispatcher(SharedHttp.dispatcher)
++        .connectionPool(SharedHttp.connectionPool)
+         .connectTimeout(60, TimeUnit.SECONDS)
+         .readTimeout(60, TimeUnit.SECONDS)
+         .writeTimeout(60, TimeUnit.SECONDS)
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerPlaybackNetworking.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerPlaybackNetworking.kt
+index 486a7dba..020932e4 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerPlaybackNetworking.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerPlaybackNetworking.kt
+@@ -6,8 +6,7 @@ import androidx.media3.datasource.DefaultDataSource
+ import androidx.media3.datasource.okhttp.OkHttpDataSource
+ import com.nuvio.app.core.diagnostics.SentryNetworkBreadcrumbInterceptor
+ import com.nuvio.app.core.network.IPv4FirstDns
+-import okhttp3.ConnectionPool
+-import okhttp3.Dispatcher
++import com.nuvio.app.core.network.SharedHttp
+ import okhttp3.OkHttpClient
+ import java.net.HttpURLConnection
+ import java.net.URL
+@@ -48,11 +47,8 @@ internal object PlayerPlaybackNetworking {
+     private val playbackHttpClient: OkHttpClient by lazy {
+         OkHttpClient.Builder()
+             .dns(IPv4FirstDns())
+-            .dispatcher(Dispatcher().apply {
+-                maxRequests = 64
+-                maxRequestsPerHost = 16
+-            })
+-            .connectionPool(ConnectionPool(8, 5, TimeUnit.MINUTES))
++            .dispatcher(SharedHttp.dispatcher)
++            .connectionPool(SharedHttp.connectionPool)
+             .sslSocketFactory(sslContext.socketFactory, trustAllManager)
+             .hostnameVerifier(playbackHostnameVerifier)
+             .connectTimeout(15, TimeUnit.SECONDS)
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/seekpreview/SeekrPlatform.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/seekpreview/SeekrPlatform.android.kt
+index 6ade06b3..663c6795 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/seekpreview/SeekrPlatform.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/seekpreview/SeekrPlatform.android.kt
+@@ -15,6 +15,11 @@ internal actual fun createSeekrHttpClient(): HttpClient = HttpClient(OkHttp) {
+         connectTimeoutMillis = 15_000
+         socketTimeoutMillis = 30_000
+     }
++    engine {
++        config {
++            connectionPool(com.nuvio.app.core.network.SharedHttp.connectionPool)
++        }
++    }
+ }
+ 
+ internal actual fun openLocalSeekPreviewTrack(cacheKey: String, durationMs: Long): SeekPreviewTrack? =
