@@ -1,0 +1,204 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SeekPreviewPlayerHooks.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SeekPreviewPlayerHooks.kt
+index 7b946f8a..d068d241 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SeekPreviewPlayerHooks.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SeekPreviewPlayerHooks.kt
+@@ -46,12 +46,11 @@ private const val MaxCueTicks = 400L
+ /**
+  * Wraps the player UI with seek previews: loads the Seekr track for what is playing, provides
+  * it to the seek bars and controls, and draws the swipe-seek strip and Preview Sync panel.
+- * Android only for now.
+- */
++ *  */
+ @Composable
+ internal fun PlayerScreenRuntime.WithSeekPreview(content: @Composable () -> Unit) {
+     val localEnabled by LocalSeekPreviewSettings.enabled.collectAsState()
+-    if (isIos || (SeekrKeyRepository.effectiveKey().isBlank() && !localEnabled)) {
++    if ((SeekrKeyRepository.effectiveKey().isBlank() && !localEnabled)) {
+         content()
+         return
+     }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SeekPreviewSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SeekPreviewSettings.kt
+index b269ee05..30de33da 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SeekPreviewSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SeekPreviewSettings.kt
+@@ -45,7 +45,6 @@ import org.jetbrains.compose.resources.stringResource
+ /** Seek previews (Seekr): lets users use their own API key instead of the shared built-in one. */
+ @Composable
+ internal fun SeekPreviewSettingsSection(isTablet: Boolean) {
+-    if (isIos) return
+     val userKey by SeekrKeyRepository.userKey.collectAsStateWithLifecycle()
+     val localEnabled by LocalSeekPreviewSettings.enabled.collectAsStateWithLifecycle()
+     var showDialog by remember { mutableStateOf(false) }
+@@ -55,13 +54,15 @@ internal fun SeekPreviewSettingsSection(isTablet: Boolean) {
+         isTablet = isTablet,
+     ) {
+         SettingsGroup(isTablet = isTablet) {
+-            SettingsSwitchRow(
+-                title = stringResource(Res.string.settings_seek_preview_local),
+-                description = stringResource(Res.string.settings_seek_preview_local_description),
+-                checked = localEnabled,
+-                isTablet = isTablet,
+-                onCheckedChange = LocalSeekPreviewSettings::setEnabled,
+-            )
++            if (!isIos) {
++                SettingsSwitchRow(
++                    title = stringResource(Res.string.settings_seek_preview_local),
++                    description = stringResource(Res.string.settings_seek_preview_local_description),
++                    checked = localEnabled,
++                    isTablet = isTablet,
++                    onCheckedChange = LocalSeekPreviewSettings::setEnabled,
++                )
++            }
+             SettingsNavigationRow(
+                 title = stringResource(Res.string.settings_seekr_api_key),
+                 description = if (userKey.isBlank()) {
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/MainViewController.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/MainViewController.kt
+index f4f976f7..67babd79 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/MainViewController.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/MainViewController.kt
+@@ -6,6 +6,7 @@ import androidx.compose.ui.uikit.OnFocusBehavior
+ import androidx.compose.ui.window.ComposeUIViewController
+ import com.nuvio.app.core.ui.LocalVerticalBarPadding
+ import com.nuvio.app.core.ui.NativeProfileSwitcherController
++import com.nuvio.app.features.player.installIosFeaturePersistence
+ import com.nuvio.app.navigation.AppRoute
+ import platform.UIKit.UIColor
+ import platform.UIKit.UIViewController
+@@ -106,11 +107,14 @@ fun AppGateViewController(
+ private fun nuvioComposeViewController(
+     verticalBar: VerticalBar = VerticalBar(),
+     content: @androidx.compose.runtime.Composable () -> Unit,
+-): UIViewController = ComposeUIViewController(
+-    configure = { onFocusBehavior = OnFocusBehavior.DoNothing },
+-    content = {
+-        CompositionLocalProvider(LocalVerticalBarPadding provides verticalBar.padding, content)
+-    },
+-).apply {
+-    view.backgroundColor = nuvioBackgroundColor
++): UIViewController {
++    installIosFeaturePersistence()
++    return ComposeUIViewController(
++        configure = { onFocusBehavior = OnFocusBehavior.DoNothing },
++        content = {
++            CompositionLocalProvider(LocalVerticalBarPadding provides verticalBar.padding, content)
++        },
++    ).apply {
++        view.backgroundColor = nuvioBackgroundColor
++    }
+ }
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/IosFeaturePersistence.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/IosFeaturePersistence.kt
+new file mode 100644
+index 00000000..93ed73c1
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/IosFeaturePersistence.kt
+@@ -0,0 +1,22 @@
++package com.nuvio.app.features.player
++
++import com.nuvio.app.features.player.seekpreview.LocalSeekPreviewSettings
++import com.nuvio.app.features.player.seekpreview.SeekrKeyRepository
++import com.nuvio.app.features.player.volumeboost.VolumeBoost
++import platform.Foundation.NSUserDefaults
++
++internal fun installIosFeaturePersistence() {
++    val defaults = NSUserDefaults.standardUserDefaults
++    VolumeBoost.installPersistence(
++        load = { if (defaults.objectForKey("nuvio_volume_boost_enabled") != null) defaults.boolForKey("nuvio_volume_boost_enabled") else true },
++        save = { defaults.setBool(it, forKey = "nuvio_volume_boost_enabled") },
++    )
++    SeekrKeyRepository.installPersistence(
++        load = { defaults.stringForKey("nuvio_seekr_user_api_key") },
++        save = { defaults.setObject(it, forKey = "nuvio_seekr_user_api_key") },
++    )
++    LocalSeekPreviewSettings.installPersistence(
++        load = { if (defaults.objectForKey("nuvio_seekr_local_previews") != null) defaults.boolForKey("nuvio_seekr_local_previews") else null },
++        save = { defaults.setBool(it, forKey = "nuvio_seekr_local_previews") },
++    )
++}
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerBridge.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerBridge.kt
+index 93aed834..e774c028 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerBridge.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerBridge.kt
+@@ -47,6 +47,7 @@ interface NuvioPlayerBridge {
+     fun configureAudioOutput(audioOutput: String)
+     fun setPlaybackSpeed(speed: Float)
+     fun setMuted(muted: Boolean)
++    fun setVolumeGain(mpvVolume: Double)
+     fun setResizeMode(mode: Int) // 0=Fit, 1=Fill, 2=Zoom, 3=Custom Stretch
+     /** Custom Stretch: mpv video-crop value ("" = no crop), used with keepaspect=no (mode 3). */
+     fun setVideoCrop(crop: String)
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerEngine.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerEngine.ios.kt
+index 09acce4a..5ccb97d8 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerEngine.ios.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerEngine.ios.kt
+@@ -31,6 +31,7 @@ import kotlinx.cinterop.usePinned
+ import platform.Foundation.NSData
+ import platform.posix.memcpy
+ import kotlinx.cinterop.useContents
++import kotlin.math.pow
+ import kotlinx.coroutines.delay
+ import kotlinx.coroutines.isActive
+ import kotlinx.serialization.encodeToString
+@@ -85,6 +86,12 @@ actual fun PlatformPlayerSurface(
+         return
+     }
+ 
++    LaunchedEffect(bridge) {
++        com.nuvio.app.features.player.volumeboost.VolumeBoost.gainDb.collect { gainDb ->
++            bridge.setVolumeGain(100.0 * 10.0.pow(gainDb.coerceIn(0f, com.nuvio.app.features.player.volumeboost.VolumeBoost.MAX_GAIN_DB) / 60.0))
++        }
++    }
++
+     val controller = remember(bridge) {
+         object : PlayerEngineController, PlayerSystemControlSource {
+             override val keepsPlaybackInBackground: Boolean
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/seekpreview/SeekrPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/seekpreview/SeekrPlatform.ios.kt
+index 79e8c0f7..be49ce07 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/seekpreview/SeekrPlatform.ios.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/seekpreview/SeekrPlatform.ios.kt
+@@ -1,16 +1,17 @@
+ package com.nuvio.app.features.player.seekpreview
+ 
+ import androidx.compose.ui.graphics.ImageBitmap
++import androidx.compose.ui.graphics.toComposeImageBitmap
+ import io.ktor.client.HttpClient
+ import io.ktor.client.engine.darwin.Darwin
++import org.jetbrains.skia.Image
+ 
+-// Seek previews are Android-only for now; nothing on iOS requests a track, so these only need
+-// to compile.
+ internal actual fun createSeekrHttpClient(): HttpClient = HttpClient(Darwin) {
+     expectSuccess = false
+ }
+ 
+-internal actual fun decodeSeekrSpriteSheet(bytes: ByteArray): ImageBitmap? = null
++internal actual fun decodeSeekrSpriteSheet(bytes: ByteArray): ImageBitmap? =
++    runCatching { Image.makeFromEncoded(bytes).toComposeImageBitmap() }.getOrNull()
+ 
+ // On-device previews need the Android extractor and decoder; iOS falls back to Seekr.
+ internal actual fun openLocalSeekPreviewTrack(cacheKey: String, durationMs: Long): SeekPreviewTrack? = null
+diff --git a/iosApp/iosApp/Player/MPVPlayerBridge.swift b/iosApp/iosApp/Player/MPVPlayerBridge.swift
+index 70d408aa..f870b4dd 100644
+--- a/iosApp/iosApp/Player/MPVPlayerBridge.swift
++++ b/iosApp/iosApp/Player/MPVPlayerBridge.swift
+@@ -113,6 +113,7 @@ final class MPVPlayerBridgeImpl: NSObject, NuvioPlayerBridge {
+     }
+     func setPlaybackSpeed(speed: Float) { playerVC?.setSpeed(speed) }
+     func setMuted(muted: Bool) { playerVC?.setMuted(muted) }
++    func setVolumeGain(mpvVolume: Double) { playerVC?.setVolumeGain(mpvVolume) }
+     func setResizeMode(mode: Int32) { playerVC?.setResize(Int(mode)) }
+     func setVideoCrop(crop: String) {
+         playerVC?.setVideoCrop(crop)
+@@ -807,6 +808,13 @@ final class MPVPlayerViewController: UIViewController {
+         mpv_set_property(mpv, "speed", MPV_FORMAT_DOUBLE, &s)
+     }
+ 
++    func setVolumeGain(_ mpvVolume: Double) {
++        guard mpv != nil else { return }
++        setStringProperty("volume-max", "200")
++        var volume = max(0.0, min(200.0, mpvVolume))
++        mpv_set_property(mpv, "volume", MPV_FORMAT_DOUBLE, &volume)
++    }
++
+     func setMuted(_ muted: Bool) {
+         guard mpv != nil else { return }
+         setFlag("mute", muted)
