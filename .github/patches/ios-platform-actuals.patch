@@ -1,8 +1,8 @@
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-index c29d42d5..0961a152 100644
+index c8a990e2..d650fcaf 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-@@ -602,14 +602,19 @@ private fun PlaybackSettingsSection(
+@@ -626,14 +626,17 @@ private fun PlaybackSettingsSection(
              }
          }
  
@@ -12,9 +12,7 @@ index c29d42d5..0961a152 100644
 -        ) {
 -            AutoSyncSettingsContent(
 -                enabled = !autoPlayPlayerSettings.externalPlayerEnabled,
-+        // iOS has no AutoSync engine yet; the platform content is empty, so the
-+        // section header is hidden there too (same gate pattern as the other
-+        // Android-only sections in this page).
++        // iOS has no AutoSync engine yet; hide the section there.
 +        if (!isIos) {
 +            SettingsSection(
 +                title = "Auto Sync Subtitles",
@@ -28,12 +26,43 @@ index c29d42d5..0961a152 100644
 +            }
          }
  
-         SettingsSection(
+         SeekPreviewSettingsSection(isTablet = isTablet) // Seek previews hook
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/downloads/DownloadsLocationStorage.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/downloads/DownloadsLocationStorage.ios.kt
+new file mode 100644
+index 00000000..86aae894
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/downloads/DownloadsLocationStorage.ios.kt
+@@ -0,0 +1,25 @@
++package com.nuvio.app.features.downloads
++
++import platform.Foundation.NSUserDefaults
++
++internal actual object DownloadsLocationStorage {
++    private const val LOCATION_KEY = "nuvio_download_location_uri"
++    private const val SHOW_BUTTON_KEY = "nuvio_show_download_button"
++
++    actual fun loadLocationUri(): String? =
++        NSUserDefaults.standardUserDefaults.stringForKey(LOCATION_KEY)?.takeIf { it.isNotBlank() }
++
++    actual fun saveLocationUri(uri: String?) {
++        val defaults = NSUserDefaults.standardUserDefaults
++        if (uri == null) defaults.removeObjectForKey(LOCATION_KEY) else defaults.setObject(uri, forKey = LOCATION_KEY)
++    }
++
++    actual fun loadShowDownloadButton(): Boolean {
++        val defaults = NSUserDefaults.standardUserDefaults
++        return if (defaults.objectForKey(SHOW_BUTTON_KEY) == null) true else defaults.boolForKey(SHOW_BUTTON_KEY)
++    }
++
++    actual fun saveShowDownloadButton(enabled: Boolean) {
++        NSUserDefaults.standardUserDefaults.setBool(enabled, forKey = SHOW_BUTTON_KEY)
++    }
++}
 diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
-index 0a9fc370..79371f19 100644
+index d6ef8634..5fdfada9 100644
 --- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
 +++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
-@@ -1,21 +1,63 @@
+@@ -1,22 +1,64 @@
  package com.nuvio.app.features.jellyfin
  
 -// Jellyfin is an Android-first fork feature; this target only needs the declarations to compile.
@@ -103,7 +132,8 @@ index 0a9fc370..79371f19 100644
 +            defaults.setObject(value, forKey = "nuvio_jellyfin_$key")
 +        }
      }
- }
+ 
+     actual fun localEndTimeLabel(minutesFromNow: Long): String? = runCatching {
 diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt
 index c51d57a0..5c44ce70 100644
 --- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt
@@ -426,3 +456,24 @@ index 00000000..0915c5e2
 +        out.result()
 +    }.getOrNull()
 +}
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/settings/DownloadsSettingsPage.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/settings/DownloadsSettingsPage.ios.kt
+new file mode 100644
+index 00000000..76619443
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/settings/DownloadsSettingsPage.ios.kt
+@@ -0,0 +1,15 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++
++// iOS keeps downloads in the app sandbox; there is no folder picker, so the request closes at once.
++@Composable
++internal actual fun DownloadLocationPicker(
++    onLocationSelected: (uri: String) -> Unit,
++    onDismiss: () -> Unit,
++) {
++    LaunchedEffect(Unit) { onDismiss() }
++}
++
++internal actual fun formatUriForDisplay(uri: String): String = uri
