@@ -1,0 +1,258 @@
+diff --git a/composeApp/src/commonMain/composeResources/values/strings_audio_delay.xml b/composeApp/src/commonMain/composeResources/values/strings_audio_delay.xml
+new file mode 100644
+index 00000000..ef2f27d0
+--- /dev/null
++++ b/composeApp/src/commonMain/composeResources/values/strings_audio_delay.xml
+@@ -0,0 +1,6 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <string name="player_audio_delay_title">Audio delay</string>
++    <string name="player_audio_delay_desc">Shift the sound against the picture. Positive plays the sound later.</string>
++    <string name="player_audio_delay_value">%1$d ms</string>
++</resources>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/IosVideoSettingsModal.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/IosVideoSettingsModal.kt
+index fa431084..d5d30a61 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/IosVideoSettingsModal.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/IosVideoSettingsModal.kt
+@@ -21,6 +21,8 @@ import androidx.compose.material3.Surface
+ import androidx.compose.material3.Switch
+ import androidx.compose.material3.Text
+ import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.text.font.FontWeight
+@@ -28,6 +30,9 @@ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.sp
+ import nuvio.composeapp.generated.resources.Res
+ import nuvio.composeapp.generated.resources.action_close
++import nuvio.composeapp.generated.resources.player_audio_delay_desc
++import nuvio.composeapp.generated.resources.player_audio_delay_title
++import nuvio.composeapp.generated.resources.player_audio_delay_value
+ import nuvio.composeapp.generated.resources.player_video_settings_brightness
+ import nuvio.composeapp.generated.resources.player_video_settings_contrast
+ import nuvio.composeapp.generated.resources.player_video_settings_deband
+@@ -139,6 +144,37 @@ internal fun IosVideoSettingsModal(
+                     },
+                 )
+ 
++                val audioDelayMs by PlayerAudioDelay.delayMs.collectAsStateWithLifecycle()
++                Column {
++                    Row(
++                        modifier = Modifier.fillMaxWidth(),
++                        verticalAlignment = Alignment.CenterVertically,
++                    ) {
++                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
++                            Text(
++                                text = stringResource(Res.string.player_audio_delay_title),
++                                color = MaterialTheme.colorScheme.onSurface,
++                                fontWeight = FontWeight.SemiBold,
++                            )
++                            Text(
++                                text = stringResource(Res.string.player_audio_delay_desc),
++                                color = MaterialTheme.colorScheme.onSurfaceVariant,
++                                fontSize = 13.sp,
++                            )
++                        }
++                        Text(
++                            text = stringResource(Res.string.player_audio_delay_value, audioDelayMs),
++                            color = MaterialTheme.colorScheme.primary,
++                        )
++                    }
++                    Slider(
++                        value = audioDelayMs.toFloat(),
++                        onValueChange = { PlayerAudioDelay.set(((it / 50f).roundToInt()) * 50) },
++                        valueRange = AUDIO_DELAY_MIN_MS.toFloat()..AUDIO_DELAY_MAX_MS.toFloat(),
++                        steps = (AUDIO_DELAY_MAX_MS - AUDIO_DELAY_MIN_MS) / 50 - 1,
++                    )
++                }
++
+                 PictureSlider(
+                     title = stringResource(Res.string.player_video_settings_brightness),
+                     value = settings.iosBrightness,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerAudioDelay.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerAudioDelay.kt
+new file mode 100644
+index 00000000..f7628b1a
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerAudioDelay.kt
+@@ -0,0 +1,18 @@
++package com.nuvio.app.features.player
++
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++
++const val AUDIO_DELAY_MIN_MS = -2000
++const val AUDIO_DELAY_MAX_MS = 2000
++
++/** Manual audio delay in milliseconds (positive plays the sound later); applied by the iOS mpv player. */
++object PlayerAudioDelay {
++    private val _delayMs = MutableStateFlow(0)
++    val delayMs: StateFlow<Int> = _delayMs.asStateFlow()
++
++    fun set(value: Int) {
++        _delayMs.value = value.coerceIn(AUDIO_DELAY_MIN_MS, AUDIO_DELAY_MAX_MS)
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+index db860756..406dbdc8 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+@@ -485,13 +485,9 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+                 null
+             },
+             userRating = userRating,
+-            onQualityClick = if (!isIos) {
+-                {
+-                    refreshTracks()
+-                    if (playerQualityState.hasSelectableQualities) showQualityPanel = true else showQualityModal = true
+-                }
+-            } else {
+-                null
++            onQualityClick = {
++                refreshTracks()
++                if (playerQualityState.hasSelectableQualities) showQualityPanel = true else showQualityModal = true
+             },
+             onStreamInfoClick = { openStreamInfo() },
+             parentalWarnings = parentalWarnings,
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerBridge.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerBridge.kt
+index e774c028..da3ba656 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerBridge.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerBridge.kt
+@@ -97,6 +97,7 @@ interface NuvioPlayerBridge {
+     fun getPlaybackSpeed(): Float
+     fun getErrorMessage(): String
+     fun getProperty(name: String): String
++    fun setProperty(name: String, value: String)
+     fun destroy()
+ }
+ 
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerEngine.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerEngine.ios.kt
+index 5ccb97d8..98688d5e 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerEngine.ios.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerEngine.ios.kt
+@@ -153,6 +153,87 @@ actual fun PlatformPlayerSurface(
+                 bridge.setMuted(muted)
+             }
+ 
++            override fun getVideoQualities(): List<VideoQualityOption> {
++                val count = bridge.getProperty("track-list/count").toIntOrNull() ?: return emptyList()
++                val variants = ArrayList<Triple<Int, Int, Boolean>>()
++                for (i in 0 until count) {
++                    if (bridge.getProperty("track-list/$i/type") != "video") continue
++                    if (bridge.getProperty("track-list/$i/albumart") == "yes") continue
++                    val height = bridge.getProperty("track-list/$i/demux-h").toIntOrNull() ?: continue
++                    if (height <= 0) continue
++                    val bitrate = bridge.getProperty("track-list/$i/hls-bitrate").toIntOrNull() ?: 0
++                    variants += Triple(height, bitrate, bridge.getProperty("track-list/$i/selected") == "yes")
++                }
++                if (variants.size < 2) return emptyList()
++                return variants
++                    .groupBy { it.first }
++                    .map { (height, group) ->
++                        val bitrate = group.maxOf { it.second }
++                        VideoQualityOption(
++                            heightPx = height,
++                            label = "${height}p",
++                            bitrate = bitrate.takeIf { it > 0 },
++                            isSelected = group.any { it.third },
++                        )
++                    }
++                    .sortedByDescending { it.heightPx }
++            }
++
++            override fun selectVideoQuality(heightPx: Int?) {
++                if (heightPx == null) {
++                    bridge.setProperty("vid", "auto")
++                    return
++                }
++                val count = bridge.getProperty("track-list/count").toIntOrNull() ?: return
++                var bestId: String? = null
++                var bestBitrate = -1
++                for (i in 0 until count) {
++                    if (bridge.getProperty("track-list/$i/type") != "video") continue
++                    if (bridge.getProperty("track-list/$i/demux-h").toIntOrNull() != heightPx) continue
++                    val bitrate = bridge.getProperty("track-list/$i/hls-bitrate").toIntOrNull() ?: 0
++                    if (bitrate > bestBitrate) {
++                        bestBitrate = bitrate
++                        bestId = bridge.getProperty("track-list/$i/id").ifBlank { null }
++                    }
++                }
++                bestId?.let { bridge.setProperty("vid", it) }
++            }
++
++            override fun supportsSmartEnhance(): Boolean = true
++
++            override fun pictureSupport(): PictureSupport =
++                PictureSupport(gamma = true, sharpen = true, deband = true, toneMapping = true, interpolation = true)
++
++            override fun applyPicture(state: PictureState) {
++                val settings = latestPlayerSettings.value
++                val smart = state.smartEnhance
++                fun level(base: Int, panel: Int, boost: Int) =
++                    (base + panel + if (smart) boost else 0).coerceIn(-100, 100).toString()
++                bridge.setProperty("brightness", level(settings.iosBrightness, state.brightness, 2))
++                bridge.setProperty("contrast", level(settings.iosContrast, state.contrast, 8))
++                bridge.setProperty("saturation", level(settings.iosSaturation, state.saturation, 14))
++                bridge.setProperty("gamma", level(settings.iosGamma, state.gamma, 6))
++                bridge.setProperty("deband", if (state.deband || settings.iosDebandEnabled) "yes" else "no")
++                bridge.setProperty("tone-mapping", state.toneMapping.mpv ?: settings.iosToneMappingMode.mpvValue)
++                val interpolation = state.interpolation || settings.iosInterpolationEnabled
++                bridge.setProperty("interpolation", if (interpolation) "yes" else "no")
++                bridge.setProperty("video-sync", if (interpolation) "display-resample" else "audio")
++                bridge.setProperty("sharpen", (state.sharpen * 0.35).toString())
++            }
++
++            override fun supportsAudioEffects(): Boolean = true
++
++            override fun applyAudioEffects(state: AudioFxState) {
++                bridge.setProperty("af", state.mpvFilterChain())
++            }
++
++            override fun setSmartEnhance(enabled: Boolean) {
++                bridge.setProperty("contrast", if (enabled) "8" else "0")
++                bridge.setProperty("saturation", if (enabled) "14" else "0")
++                bridge.setProperty("gamma", if (enabled) "6" else "0")
++                bridge.setProperty("brightness", if (enabled) "2" else "0")
++            }
++
+             override fun getAudioTracks(): List<AudioTrack> {
+                 val count = bridge.getAudioTrackCount()
+                 return (0 until count).map { i ->
+@@ -321,6 +402,11 @@ actual fun PlatformPlayerSurface(
+         }
+     }
+ 
++    val audioDelayMs by PlayerAudioDelay.delayMs.collectAsStateWithLifecycle()
++    LaunchedEffect(bridge, audioDelayMs) {
++        bridge.setProperty("audio-delay", (audioDelayMs / 1000.0).toString())
++    }
++
+     // Update playWhenReady
+     LaunchedEffect(bridge, playWhenReady) {
+         if (playWhenReady) bridge.play() else bridge.pause()
+diff --git a/iosApp/iosApp/Player/MPVPlayerBridge.swift b/iosApp/iosApp/Player/MPVPlayerBridge.swift
+index f870b4dd..f04007b8 100644
+--- a/iosApp/iosApp/Player/MPVPlayerBridge.swift
++++ b/iosApp/iosApp/Player/MPVPlayerBridge.swift
+@@ -212,6 +212,7 @@ final class MPVPlayerBridgeImpl: NSObject, NuvioPlayerBridge {
+     func getPlaybackSpeed() -> Float { playerVC?.currentSpeed ?? 1.0 }
+     func getErrorMessage() -> String { playerVC?.currentErrorMessage ?? "" }
+     func getProperty(name: String) -> String { playerVC?.getString(name) ?? "" }
++    func setProperty(name: String, value: String) { playerVC?.setMpvProperty(name, value) }
+ 
+     func destroy() {
+         playerVC?.systemControlHandler = nil
+@@ -1419,6 +1420,11 @@ final class MPVPlayerViewController: UIViewController {
+         mpv_set_property(mpv, name, MPV_FORMAT_FLAG, &data)
+     }
+ 
++    func setMpvProperty(_ name: String, _ value: String) {
++        guard mpv != nil else { return }
++        _ = mpv_set_property_string(mpv, name, value)
++    }
++
+     private func setStringProperty(_ name: String, _ value: String) {
+         guard mpv != nil else { return }
+         checkError(mpv_set_property_string(mpv, name, value))
