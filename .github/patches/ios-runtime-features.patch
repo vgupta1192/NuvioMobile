@@ -117,7 +117,7 @@ index f4f976f7..67babd79 100644
 +    }
  }
 diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
-index 5fdfada9..a848e322 100644
+index 5fdfada9..342913c7 100644
 --- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
 +++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
 @@ -63,14 +63,9 @@ internal actual object JellyfinPlatform {
@@ -135,7 +135,7 @@ index 5fdfada9..a848e322 100644
 -                    minutesFromNow * 60.0,
 -            ),
 -        )
-+        formatter.stringFromDate(platform.Foundation.NSDate.dateWithTimeIntervalSinceNow(minutesFromNow * 60.0))
++        formatter.stringFromDate(platform.Foundation.NSDate().dateByAddingTimeInterval(minutesFromNow * 60.0))
      }.getOrNull()
  }
 diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/IosFeaturePersistence.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/IosFeaturePersistence.kt
