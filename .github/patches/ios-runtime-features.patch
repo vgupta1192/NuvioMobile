@@ -1,3 +1,33 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
+index 260e8fdd..736fee40 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
+@@ -51,6 +51,7 @@ internal object AutoSyncSyncedSubtitle {
+ /** "Auto synced" chip: live for the subtitle AutoSync just corrected, and shown for every
+  *  add-on subtitle that already has a saved synced timing for this title + stream. */
+ private val loggedRowBasenames = mutableSetOf<String>()
++private val loggedRowLock = kotlinx.atomicfu.locks.SynchronizedObject()
+ 
+ /** "Auto synced" chip: live for the subtitle AutoSync just corrected, and shown for every
+  *  add-on subtitle that already has a saved synced timing for this title + stream. */
+@@ -59,7 +60,7 @@ internal fun AutoSyncedChip(subtitleUrl: String, selected: Boolean) {
+     // Nuvio fork diagnostics: the stable-looking file name of every row shown in the list, so a
+     // shared log capture can be compared against the saved timings' URLs on the server.
+     val rowBase = subtitleUrl.substringBefore('?').substringAfterLast('/')
+-    synchronized(loggedRowBasenames) {
++    kotlinx.atomicfu.locks.synchronized(loggedRowLock) {
+         if (loggedRowBasenames.add("row:$rowBase")) {
+             com.nuvio.app.features.player.SyncedSubtitles.log("subtitle list row file=$rowBase")
+         }
+@@ -70,7 +71,7 @@ internal fun AutoSyncedChip(subtitleUrl: String, selected: Boolean) {
+     val hasSavedTiming = saved?.second?.values?.any {
+         com.nuvio.app.features.player.SyncedSubtitles.sameSubtitleFile(it.subtitleUrl, subtitleUrl)
+     } == true
+-    synchronized(loggedRowBasenames) {
++    kotlinx.atomicfu.locks.synchronized(loggedRowLock) {
+         if (loggedRowBasenames.add("chip:$rowBase:$liveSynced:$hasSavedTiming")) {
+             com.nuvio.app.features.player.SyncedSubtitles.log(
+                 "chip row file=$rowBase live=$liveSynced saved=$hasSavedTiming mapRows=${saved?.second?.size ?: 0}",
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SeekPreviewPlayerHooks.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SeekPreviewPlayerHooks.kt
 index 7b946f8a..d068d241 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SeekPreviewPlayerHooks.kt
@@ -85,6 +115,28 @@ index f4f976f7..67babd79 100644
 +    ).apply {
 +        view.backgroundColor = nuvioBackgroundColor
 +    }
+ }
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
+index 5fdfada9..a848e322 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinPlatform.ios.kt
+@@ -63,14 +63,9 @@ internal actual object JellyfinPlatform {
+ 
+     actual fun localEndTimeLabel(minutesFromNow: Long): String? = runCatching {
+         val formatter = platform.Foundation.NSDateFormatter().apply {
+-            timeStyle = platform.Foundation.NSDateFormatterStyle.NSDateFormatterStyleShort
+-            dateStyle = platform.Foundation.NSDateFormatterStyle.NSDateFormatterStyleNoStyle
++            timeStyle = platform.Foundation.NSDateFormatterShortStyle
++            dateStyle = platform.Foundation.NSDateFormatterNoStyle
+         }
+-        formatter.stringFromDate(
+-            platform.Foundation.NSDate(
+-                timeIntervalSince1970 = platform.Foundation.NSDate().timeIntervalSince1970 +
+-                    minutesFromNow * 60.0,
+-            ),
+-        )
++        formatter.stringFromDate(platform.Foundation.NSDate.dateWithTimeIntervalSinceNow(minutesFromNow * 60.0))
+     }.getOrNull()
  }
 diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/IosFeaturePersistence.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/IosFeaturePersistence.kt
 new file mode 100644
