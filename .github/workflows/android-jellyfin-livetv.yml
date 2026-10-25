@@ -351,8 +351,6 @@ jobs:
   # (their iOS platform actuals are compile-only stubs), so the IPA behaves like the main app.
   ios:
     name: Build unsigned iOS IPA
-    # Paused 2026-10-16 at the user's request (b90 was the last IPA); delete the next line to build the IPA again.
-    if: false
     runs-on: macos-26
     timeout-minutes: 90
     env:
