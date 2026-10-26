@@ -8,7 +8,7 @@ index 00000000..3101c0e3
 +<resources>
 +    <string name="settings_netflix_style_section">Netflix style</string>
 +    <string name="settings_netflix_style_title">Netflix style</string>
-+    <string name="settings_netflix_style_description">Wide Continue Watching cards with progress bars and a muted hero trailer on detail pages. Turn off to restore your previous settings.</string>
++    <string name="settings_netflix_style_description">Landscape Continue Watching cards with progress bars and a muted hero trailer on detail pages. Turn off to restore your previous settings.</string>
 +</resources>
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/HeroTrailerOptions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/HeroTrailerOptions.kt
 index 1a038c96..73756fab 100644
@@ -112,7 +112,7 @@ index 00000000..6480dd81
 +                    "1|${cwStyle.name}|${if (trailer) 1 else 0}|${if (options.startUnmuted) 1 else 0}|${options.startDelaySeconds}",
 +                )
 +            }
-+            ContinueWatchingPreferencesRepository.setStyle(ContinueWatchingSectionStyle.Wide)
++            ContinueWatchingPreferencesRepository.setStyle(ContinueWatchingSectionStyle.Card)
 +            MetaScreenSettingsRepository.setHeroTrailerPlayback(true)
 +            HeroTrailerOptions.setStartUnmuted(false)
 +            HeroTrailerOptions.setStartDelaySeconds(2)
