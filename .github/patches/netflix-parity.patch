@@ -1,0 +1,316 @@
+diff --git a/composeApp/src/commonMain/composeResources/values/strings_netflix_parity.xml b/composeApp/src/commonMain/composeResources/values/strings_netflix_parity.xml
+new file mode 100644
+index 00000000..c9e0abdf
+--- /dev/null
++++ b/composeApp/src/commonMain/composeResources/values/strings_netflix_parity.xml
+@@ -0,0 +1,5 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <string name="netflix_preview_details">Details</string>
++    <string name="netflix_preview_options">Options</string>
++</resources>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+index 4cd81556..cc3e89b3 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+@@ -295,6 +295,7 @@ internal fun MainAppContent(
+         val liquidGlassNativeTabBarSupported = remember { isLiquidGlassNativeTabBarSupported() }
+         var showExitConfirmation by rememberSaveable { mutableStateOf(false) }
+         var selectedPosterActionTarget by remember { mutableStateOf<PosterActionTarget?>(null) }
++        var netflixPreviewTarget by remember { mutableStateOf<com.nuvio.app.features.home.MetaPreview?>(null) }
+         var selectedPosterAnchor by remember { mutableStateOf<PosterZoomAnchor?>(null) }
+         val posterOverlayHazeState = rememberHazeState()
+         var selectedContinueWatchingForActions by remember { mutableStateOf<ContinueWatchingItem?>(null) }
+@@ -1561,7 +1562,15 @@ internal fun MainAppContent(
+                                 },
+                                 onPosterLongClick = { meta ->
+                                     if (!meta.id.startsWith(JELLYFIN_META_ID_PREFIX)) {
+-                                        openPosterActions(PosterActionTarget(preview = meta))
++                                        com.nuvio.app.features.settings.NetflixStyle.ensureLoaded()
++                                        if (com.nuvio.app.features.settings.NetflixStyle.enabled.value) {
++                                            // Netflix style: long-press opens the expanded preview card.
++                                            PosterZoomAnchorHolder.consume()
++                                            hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
++                                            netflixPreviewTarget = meta
++                                        } else {
++                                            openPosterActions(PosterActionTarget(preview = meta))
++                                        }
+                                     }
+                                 },
+                                 onLibraryPosterClick = { item ->
+@@ -1965,6 +1974,21 @@ internal fun MainAppContent(
+                 )
+             }
+ 
++            netflixPreviewTarget?.let { previewMeta ->
++                com.nuvio.app.features.home.components.NetflixPosterPreviewDialog(
++                    preview = previewMeta,
++                    onDismiss = { netflixPreviewTarget = null },
++                    onOpenDetails = {
++                        netflixPreviewTarget = null
++                        navController.openPreview(previewMeta)
++                    },
++                    onOptions = {
++                        netflixPreviewTarget = null
++                        openPosterActions(PosterActionTarget(preview = previewMeta))
++                    },
++                )
++            }
++
+             selectedPosterActionTarget?.let { posterActionTarget ->
+                 key(posterActionTarget) {
+                     val preview = posterActionTarget.preview
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/components/NetflixPosterPreview.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/components/NetflixPosterPreview.kt
+new file mode 100644
+index 00000000..a112d664
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/components/NetflixPosterPreview.kt
+@@ -0,0 +1,164 @@
++package com.nuvio.app.features.home.components
++
++import androidx.compose.foundation.background
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.aspectRatio
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.alpha
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.layout.ContentScale
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.dp
++import coil3.compose.AsyncImage
++import com.nuvio.app.core.build.AppFeaturePolicy
++import com.nuvio.app.core.build.TrailerPlaybackMode
++import com.nuvio.app.core.ui.DialogButton
++import com.nuvio.app.core.ui.DialogButtonStyle
++import com.nuvio.app.core.ui.DialogButtons
++import com.nuvio.app.core.ui.DialogSurface
++import com.nuvio.app.core.ui.nuvio
++import com.nuvio.app.features.details.MetaDetailsRepository
++import com.nuvio.app.features.details.components.HeroTrailerPlayerSurface
++import com.nuvio.app.features.details.selectHeroTrailer
++import com.nuvio.app.features.details.youtubePlaybackUrl
++import com.nuvio.app.features.home.MetaPreview
++import com.nuvio.app.features.trailer.TrailerPlaybackResolver
++import com.nuvio.app.features.trailer.TrailerPlaybackSource
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.delay
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.netflix_preview_details
++import nuvio.composeapp.generated.resources.netflix_preview_options
++import org.jetbrains.compose.resources.stringResource
++
++/**
++ * Fork feature (Netflix style, touch): the expanded preview card that a long-press on a home poster
++ * opens while the global Netflix style switch is ON. Backdrop, title, short description and a muted
++ * trailer that starts after a short delay (the existing hero trailer player is reused). Buttons open
++ * the details page or the original poster options sheet.
++ */
++@Composable
++internal fun NetflixPosterPreviewDialog(
++    preview: MetaPreview,
++    onDismiss: () -> Unit,
++    onOpenDetails: () -> Unit,
++    onOptions: () -> Unit,
++) {
++    val tokens = MaterialTheme.nuvio
++    var source by remember(preview.id, preview.type) { mutableStateOf<TrailerPlaybackSource?>(null) }
++    var ready by remember(preview.id, preview.type) { mutableStateOf(false) }
++    var description by remember(preview.id, preview.type) { mutableStateOf(preview.description) }
++
++    LaunchedEffect(preview.id, preview.type) {
++        val details = try {
++            MetaDetailsRepository.fetch(type = preview.type, id = preview.id)
++        } catch (error: Throwable) {
++            if (error is CancellationException) throw error
++            null
++        } ?: return@LaunchedEffect
++        if (description.isNullOrBlank()) description = details.description
++        if (!AppFeaturePolicy.heroTrailerPlaybackSupported ||
++            AppFeaturePolicy.trailerPlaybackMode != TrailerPlaybackMode.IN_APP
++        ) {
++            return@LaunchedEffect
++        }
++        val candidate = selectHeroTrailer(details.trailers) ?: return@LaunchedEffect
++        delay(900)
++        source = try {
++            TrailerPlaybackResolver.resolveFromYouTubeUrl(candidate.youtubePlaybackUrl())
++        } catch (error: Throwable) {
++            if (error is CancellationException) throw error
++            null
++        }
++    }
++
++    DialogSurface(onDismissRequest = onDismiss) {
++        val shape = RoundedCornerShape(12.dp)
++        Box(
++            modifier = Modifier
++                .fillMaxWidth()
++                .aspectRatio(16f / 9f)
++                .clip(shape)
++                .background(tokens.colors.surfaceElevated),
++        ) {
++            val image = preview.banner ?: preview.landscapePoster ?: preview.poster
++            if (image != null) {
++                AsyncImage(
++                    model = image,
++                    contentDescription = preview.name,
++                    contentScale = ContentScale.Crop,
++                    modifier = Modifier.fillMaxSize(),
++                )
++            }
++            val playable = source
++            if (playable != null) {
++                HeroTrailerPlayerSurface(
++                    sourceUrl = playable.videoUrl,
++                    sourceAudioUrl = playable.audioUrl,
++                    playWhenReady = true,
++                    muted = true,
++                    modifier = Modifier.fillMaxSize().alpha(if (ready) 1f else 0f),
++                    onReady = { ready = true },
++                    onEnded = { ready = false; source = null },
++                    onError = { ready = false; source = null },
++                )
++            }
++        }
++        Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)) {
++            Text(
++                text = preview.name,
++                style = MaterialTheme.typography.titleMedium,
++                fontWeight = FontWeight.Bold,
++                color = tokens.colors.textPrimary,
++                maxLines = 2,
++                overflow = TextOverflow.Ellipsis,
++            )
++            val meta = listOfNotNull(preview.releaseInfo, preview.genres.take(3).joinToString(" · ").ifBlank { null })
++                .joinToString("  ·  ")
++            if (meta.isNotBlank()) {
++                Text(
++                    text = meta,
++                    style = MaterialTheme.typography.bodySmall,
++                    color = tokens.colors.textMuted,
++                    maxLines = 1,
++                    overflow = TextOverflow.Ellipsis,
++                )
++            }
++            if (!description.isNullOrBlank()) {
++                Text(
++                    text = description.orEmpty(),
++                    style = MaterialTheme.typography.bodySmall,
++                    color = tokens.colors.textSecondary,
++                    maxLines = 4,
++                    overflow = TextOverflow.Ellipsis,
++                    modifier = Modifier.padding(top = 2.dp),
++                )
++            }
++        }
++        DialogButtons {
++            DialogButton(
++                text = stringResource(Res.string.netflix_preview_details),
++                onClick = onOpenDetails,
++                style = DialogButtonStyle.Primary,
++            )
++            DialogButton(
++                text = stringResource(Res.string.netflix_preview_options),
++                onClick = onOptions,
++            )
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvNetflixStyle.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvNetflixStyle.kt
+index 88c91fb9..22f3f0fc 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvNetflixStyle.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvNetflixStyle.kt
+@@ -25,6 +25,15 @@ import androidx.compose.material3.LinearProgressIndicator
+ import androidx.compose.material3.MaterialTheme
+ import androidx.compose.material3.Text
+ import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.draw.alpha
++import com.nuvio.app.core.build.AppFeaturePolicy
++import com.nuvio.app.features.details.components.HeroTrailerPlayerSurface
++import com.nuvio.app.features.player.MiniPlayerController
++import kotlinx.coroutines.delay
+ import androidx.compose.runtime.remember
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+@@ -117,6 +126,11 @@ internal fun LiveTvNetflixGrid(
+                 nowMs = nowMs,
+                 selected = state.selectedChannel?.stableKey() == channel.stableKey(),
+                 favorite = state.isFavorite(channel),
++                previewUrl = if (state.selectedChannel?.stableKey() == channel.stableKey()) {
++                    state.streams.firstOrNull()?.url
++                } else {
++                    null
++                },
+                 onClick = {
+                     if (state.selectedChannel?.stableKey() == channel.stableKey()) {
+                         state.streams.firstOrNull()?.let { onPlay(channel, it) }
+@@ -136,11 +150,31 @@ private fun LiveTvNetflixCard(
+     nowMs: Long,
+     selected: Boolean,
+     favorite: Boolean,
++    previewUrl: String?,
+     onClick: () -> Unit,
+ ) {
+     val tokens = MaterialTheme.nuvio
++    // Muted preview of the selected channel (Netflix style): starts 900 ms after the card is
++    // selected and stops when the card is opened full screen or another channel is chosen.
++    var previewStarted by remember(channel.stableKey(), previewUrl) { mutableStateOf(false) }
++    var previewReady by remember(channel.stableKey(), previewUrl) { mutableStateOf(false) }
++    var previewFailed by remember(channel.stableKey(), previewUrl) { mutableStateOf(false) }
++    var previewSuppressed by remember(channel.stableKey(), selected) { mutableStateOf(false) }
++    LaunchedEffect(channel.stableKey(), previewUrl) {
++        if (previewUrl != null && AppFeaturePolicy.heroTrailerPlaybackSupported) {
++            delay(900)
++            previewStarted = true
++        }
++    }
++    val showPreview = selected && previewUrl != null && previewStarted && !previewFailed &&
++        !previewSuppressed && !MiniPlayerController.isActive
+     val shape = RoundedCornerShape(12.dp)
+-    Column(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
++    Column(
++        modifier = Modifier.fillMaxWidth().clickable {
++            if (selected) previewSuppressed = true
++            onClick()
++        },
++    ) {
+         Box(
+             modifier = Modifier
+                 .fillMaxWidth()
+@@ -165,6 +199,18 @@ private fun LiveTvNetflixCard(
+                     color = tokens.colors.textMuted,
+                 )
+             }
++            if (showPreview && previewUrl != null) {
++                HeroTrailerPlayerSurface(
++                    sourceUrl = previewUrl,
++                    sourceAudioUrl = null,
++                    playWhenReady = true,
++                    muted = true,
++                    modifier = Modifier.fillMaxSize().alpha(if (previewReady) 1f else 0f),
++                    onReady = { previewReady = true },
++                    onEnded = { previewFailed = true },
++                    onError = { previewFailed = true },
++                )
++            }
+             IconButton(
+                 onClick = { LiveTvRepository.toggleFavorite(channel) },
+                 modifier = Modifier.align(Alignment.TopEnd).size(36.dp),
