@@ -1,0 +1,253 @@
+diff --git a/composeApp/src/commonMain/composeResources/values/livetv_iptv_settings_strings.xml b/composeApp/src/commonMain/composeResources/values/livetv_iptv_settings_strings.xml
+new file mode 100644
+index 00000000..b98bdd90
+--- /dev/null
++++ b/composeApp/src/commonMain/composeResources/values/livetv_iptv_settings_strings.xml
+@@ -0,0 +1,4 @@
++<resources>
++    <string name="compose_settings_page_live_tv">Live TV</string>
++    <string name="settings_content_discovery_live_tv_description">Add, switch on or off and remove IPTV sources</string>
++</resources>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/IptvSourcesUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/IptvSourcesUi.kt
+index 07503e01..24296a06 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/IptvSourcesUi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/IptvSourcesUi.kt
+@@ -110,7 +110,7 @@ private fun IptvSourceRow(source: IptvSource, error: String?) {
+ }
+ 
+ @Composable
+-private fun IptvSourceDialog(onDismiss: () -> Unit, onAdd: (IptvSource) -> Unit) {
++internal fun IptvSourceDialog(onDismiss: () -> Unit, onAdd: (IptvSource) -> Unit) {
+     var kind by remember { mutableStateOf(IptvKind.M3U) }
+     var name by remember { mutableStateOf("") }
+     var url by remember { mutableStateOf("") }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContentDiscoverySettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContentDiscoverySettingsPage.kt
+index 21d6c666..910f3381 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContentDiscoverySettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContentDiscoverySettingsPage.kt
+@@ -8,7 +8,9 @@ import com.nuvio.app.core.build.AppFeaturePolicy
+ import com.nuvio.app.features.search.SearchHistoryRepository
+ import nuvio.composeapp.generated.resources.Res
+ import nuvio.composeapp.generated.resources.compose_settings_page_addons
++import nuvio.composeapp.generated.resources.compose_settings_page_live_tv
+ import nuvio.composeapp.generated.resources.compose_settings_page_media_servers
++import nuvio.composeapp.generated.resources.settings_content_discovery_live_tv_description
+ import nuvio.composeapp.generated.resources.compose_settings_page_plugins
+ import nuvio.composeapp.generated.resources.settings_content_discovery_addons_description
+ import nuvio.composeapp.generated.resources.settings_content_discovery_addons_description_appstore
+@@ -26,6 +28,7 @@ internal fun LazyListScope.contentDiscoveryContent(
+     onAddonsClick: () -> Unit,
+     onPluginsClick: () -> Unit,
+     onMediaServersClick: () -> Unit,
++    onLiveTvClick: () -> Unit = {},
+ ) {
+     item {
+         val recentSearchesEnabled by remember {
+@@ -73,6 +76,12 @@ internal fun LazyListScope.contentDiscoveryContent(
+                     isTablet = isTablet,
+                     onClick = onMediaServersClick,
+                 )
++                SettingsNavigationRow(
++                    title = stringResource(Res.string.compose_settings_page_live_tv),
++                    description = stringResource(Res.string.settings_content_discovery_live_tv_description),
++                    isTablet = isTablet,
++                    onClick = onLiveTvClick,
++                )
+                 if (showPluginsEntry) {
+                     SettingsNavigationRow(
+                         title = stringResource(Res.string.compose_settings_page_plugins),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/LiveTvSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/LiveTvSettingsPage.kt
+new file mode 100644
+index 00000000..54aacc00
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/LiveTvSettingsPage.kt
+@@ -0,0 +1,105 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.lazy.LazyListScope
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.rounded.Add
++import androidx.compose.material.icons.rounded.Close
++import androidx.compose.material.icons.rounded.Refresh
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.unit.dp
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.core.ui.NuvioTokens
++import com.nuvio.app.core.ui.nuvio
++import com.nuvio.app.features.livetv.IptvSourceDialog
++import com.nuvio.app.features.livetv.LiveTvRepository
++
++/** Settings, Live TV: add, switch on or off, remove and reload M3U / Xtream / Stalker sources. */
++internal fun LazyListScope.liveTvSettingsContent(isTablet: Boolean) {
++    item {
++        val uiState by remember {
++            LiveTvRepository.initialize()
++            LiveTvRepository.uiState
++        }.collectAsStateWithLifecycle()
++        var showDialog by remember { mutableStateOf(false) }
++
++        SettingsSection(
++            title = "IPTV sources",
++            isTablet = isTablet,
++        ) {
++            SettingsGroup(isTablet = isTablet) {
++                if (uiState.iptvSources.isEmpty()) {
++                    Text(
++                        text = "No IPTV sources yet. Add an M3U playlist, an Xtream Codes login or a Stalker portal.",
++                        style = MaterialTheme.typography.bodyMedium,
++                        color = MaterialTheme.nuvio.colors.textMuted,
++                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
++                    )
++                }
++                uiState.iptvSources.forEachIndexed { index, source ->
++                    if (index > 0) SettingsGroupDivider(isTablet = isTablet)
++                    SettingsSwitchRow(
++                        title = source.name,
++                        description = uiState.iptvErrors[source.id] ?: source.kindLabel,
++                        checked = source.isEnabled,
++                        isTablet = isTablet,
++                        onCheckedChange = { LiveTvRepository.toggleIptvSource(source.id) },
++                    )
++                    SettingsGroupDivider(isTablet = isTablet)
++                    SettingsNavigationRow(
++                        title = "Remove ${source.name}",
++                        description = null,
++                        icon = Icons.Rounded.Close,
++                        isTablet = isTablet,
++                        onClick = { LiveTvRepository.removeIptvSource(source.id) },
++                    )
++                }
++            }
++        }
++
++        Spacer(modifier = Modifier.height(NuvioTokens.Space.s16))
++        SettingsSection(
++            title = "Manage",
++            isTablet = isTablet,
++        ) {
++            SettingsGroup(isTablet = isTablet) {
++                SettingsNavigationRow(
++                    title = "Add IPTV source",
++                    description = "M3U playlist link, Xtream Codes login or Stalker portal",
++                    icon = Icons.Rounded.Add,
++                    isTablet = isTablet,
++                    onClick = { showDialog = true },
++                )
++                if (uiState.iptvSources.isNotEmpty()) {
++                    SettingsGroupDivider(isTablet = isTablet)
++                    SettingsNavigationRow(
++                        title = "Reload IPTV sources",
++                        description = if (uiState.isLoadingIptv) "Loading channels..." else "Fetch the playlists and guides again",
++                        icon = Icons.Rounded.Refresh,
++                        enabled = !uiState.isLoadingIptv,
++                        isTablet = isTablet,
++                        onClick = { LiveTvRepository.refresh() },
++                    )
++                }
++            }
++        }
++
++        if (showDialog) {
++            IptvSourceDialog(
++                onDismiss = { showDialog = false },
++                onAdd = { source ->
++                    LiveTvRepository.addIptvSource(source)
++                    showDialog = false
++                },
++            )
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
+index f0a22ebd..2ddd8270 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
+@@ -24,6 +24,7 @@ import nuvio.composeapp.generated.resources.compose_settings_page_licenses_attri
+ import nuvio.composeapp.generated.resources.compose_settings_page_mdblist_ratings
+ import nuvio.composeapp.generated.resources.compose_settings_page_media_server
+ import nuvio.composeapp.generated.resources.compose_settings_page_media_servers
++import nuvio.composeapp.generated.resources.compose_settings_page_live_tv
+ import nuvio.composeapp.generated.resources.compose_settings_page_meta_screen
+ import nuvio.composeapp.generated.resources.compose_settings_page_notifications
+ import nuvio.composeapp.generated.resources.compose_settings_page_playback
+@@ -128,6 +129,11 @@ internal enum class SettingsPage(
+         category = SettingsCategory.General,
+         parentPage = ContentDiscovery,
+     ),
++    LiveTv(
++        titleRes = Res.string.compose_settings_page_live_tv,
++        category = SettingsCategory.General,
++        parentPage = ContentDiscovery,
++    ),
+     MediaServer(
+         titleRes = Res.string.compose_settings_page_media_server,
+         category = SettingsCategory.General,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
+index 00a60692..b2f1232e 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
+@@ -822,12 +822,14 @@ private fun MobileSettingsScreen(
+                     onAddonsClick = onAddonsClick,
+                     onPluginsClick = onPluginsClick,
+                     onMediaServersClick = { onPageChange(SettingsPage.MediaServers) },
++                    onLiveTvClick = { onPageChange(SettingsPage.LiveTv) },
+                 )
+                 SettingsPage.Addons -> addonsSettingsContent()
+                 SettingsPage.MediaServers -> mediaServersSettingsContent(
+                     isTablet = false,
+                     onServerClick = { onPageChange(SettingsPage.MediaServer) },
+                 )
++                SettingsPage.LiveTv -> liveTvSettingsContent(isTablet = false)
+                 SettingsPage.MediaServer -> mediaServerSettingsContent(
+                     isTablet = false,
+                     onBack = onNavigateBack,
+@@ -1267,12 +1269,14 @@ private fun TabletSettingsScreen(
+                         onAddonsClick = { openInlinePage(SettingsPage.Addons) },
+                         onPluginsClick = { openInlinePage(SettingsPage.Plugins) },
+                         onMediaServersClick = { openInlinePage(SettingsPage.MediaServers) },
++                        onLiveTvClick = { openInlinePage(SettingsPage.LiveTv) },
+                     )
+                     SettingsPage.Addons -> addonsSettingsContent()
+                     SettingsPage.MediaServers -> mediaServersSettingsContent(
+                         isTablet = true,
+                         onServerClick = { openInlinePage(SettingsPage.MediaServer) },
+                     )
++                    SettingsPage.LiveTv -> liveTvSettingsContent(isTablet = true)
+                     SettingsPage.MediaServer -> mediaServerSettingsContent(
+                         isTablet = true,
+                         onBack = onNavigateBack,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsSearch.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsSearch.kt
+index b245a6a2..e4ea940c 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsSearch.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsSearch.kt
+@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
+ import androidx.compose.foundation.layout.padding
+ import androidx.compose.foundation.lazy.LazyListScope
+ import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.rounded.LiveTv
+ import androidx.compose.material.icons.filled.Sync
+ import androidx.compose.material.icons.rounded.AccountCircle
+ import androidx.compose.material.icons.rounded.Close
+@@ -467,6 +468,13 @@ internal fun settingsSearchEntries(
+         description = stringResource(Res.string.settings_content_discovery_media_servers_description),
+         icon = Icons.Rounded.Dns,
+     )
++    addPage(
++        page = SettingsPage.LiveTv,
++        key = "live-tv",
++        title = stringResource(Res.string.compose_settings_page_live_tv),
++        description = stringResource(Res.string.settings_content_discovery_live_tv_description),
++        icon = Icons.Rounded.LiveTv,
++    )
+     if (pluginsEnabled) {
+         addPage(
+             page = SettingsPage.Plugins,
