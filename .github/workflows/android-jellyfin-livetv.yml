@@ -63,7 +63,7 @@ jobs:
         if: steps.ver.outputs.should_build == 'true'
         with:
           repository: NuvioMedia/NuvioMobile
-          ref: cmp-rewrite
+          ref: c114d6fb69fbed2bbed1f728bce7d752b5a19158 # pinned: pre-duo upstream, patches not yet rebased
 
       - uses: actions/setup-java@v4
         if: steps.ver.outputs.should_build == 'true'
@@ -398,7 +398,7 @@ jobs:
         if: steps.ver.outputs.should_build == 'true'
         with:
           repository: NuvioMedia/NuvioMobile
-          ref: cmp-rewrite
+          ref: c114d6fb69fbed2bbed1f728bce7d752b5a19158 # pinned: pre-duo upstream, patches not yet rebased
 
       - uses: actions/setup-java@v4
         if: steps.ver.outputs.should_build == 'true'

@@ -1,5 +1,5 @@
 diff --git a/androidApp/build.gradle.kts b/androidApp/build.gradle.kts
-index a00d9a15..c33c5241 100644
+index 19a9b280..2910dbc2 100644
 --- a/androidApp/build.gradle.kts
 +++ b/androidApp/build.gradle.kts
 @@ -95,6 +95,8 @@ android {
@@ -12,7 +12,7 @@ index a00d9a15..c33c5241 100644
                  "lib/*/libc++_shared.so",
                  "lib/*/libavcodec.so",
 diff --git a/composeApp/build.gradle.kts b/composeApp/build.gradle.kts
-index 907deda5..fa93317a 100644
+index ac365b5d..a7d336ae 100644
 --- a/composeApp/build.gradle.kts
 +++ b/composeApp/build.gradle.kts
 @@ -12,6 +12,8 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
@@ -49,7 +49,7 @@ index 907deda5..fa93317a 100644
  kotlin {
      android {
          namespace = "com.nuvio.app"
-@@ -468,6 +488,7 @@ kotlin {
+@@ -470,6 +490,7 @@ kotlin {
                  implementation("androidx.annotation:annotation-experimental:1.3.1")
                  implementation(libs.mpv.android.lib)
                  implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("lib-*.aar"))))
@@ -141,7 +141,7 @@ index 00000000..e9bba608
 +    }
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
-index c8611d39..fc98e625 100644
+index 278d1b6e..4e56b569 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 @@ -2,7 +2,6 @@ package com.nuvio.app
@@ -152,7 +152,7 @@ index c8611d39..fc98e625 100644
  import android.os.Bundle
  import androidx.activity.compose.setContent
  
-@@ -88,7 +87,6 @@ open class MainActivity : AppCompatActivity() {
+@@ -89,7 +88,6 @@ open class MainActivity : AppCompatActivity() {
          SentrySettingsStorage.initialize(applicationContext)
          SentryInitializer.start(application)
          super.onCreate(savedInstanceState)
@@ -160,7 +160,7 @@ index c8611d39..fc98e625 100644
          window.setBackgroundDrawableResource(R.color.nuvio_background)
          pipRemoteActionReceiver = PipRemoteActionReceiver.register(this)
          SyncClientIdentityStorage.initialize(applicationContext)
-@@ -107,6 +105,7 @@ open class MainActivity : AppCompatActivity() {
+@@ -108,6 +106,7 @@ open class MainActivity : AppCompatActivity() {
          PlayerTrackPreferenceStorage.initialize(applicationContext)
          P2pSettingsStorage.initialize(applicationContext)
          P2pStreamingEngine.initialize(applicationContext)
@@ -3685,10 +3685,10 @@ index fc6d4af6..395f6bf0 100644
                  headers.forEach { (key, value) ->
                      setRequestProperty(key, value)
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index a07bf389..b762a724 100644
+index e658d9ad..cf1e541a 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-@@ -52,6 +52,7 @@ import androidx.media3.datasource.DefaultDataSource
+@@ -53,6 +53,7 @@ import androidx.media3.datasource.DefaultDataSource
  import androidx.media3.datasource.TransferListener
  import androidx.media3.exoplayer.DefaultRenderersFactory
  import androidx.media3.exoplayer.ExoPlayer
@@ -3696,7 +3696,7 @@ index a07bf389..b762a724 100644
  import androidx.media3.exoplayer.ForwardingRenderer
  import androidx.media3.exoplayer.Renderer
  import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-@@ -71,6 +72,7 @@ import com.nuvio.app.features.autosync.LIBMPV_AUTOSYNC_FILE_PREFIX
+@@ -72,6 +73,7 @@ import com.nuvio.app.features.autosync.LIBMPV_AUTOSYNC_FILE_PREFIX
  import com.nuvio.app.features.autosync.rememberAutoSyncCoordinator
  import com.nuvio.app.features.autosync.rememberLibmpvAutoSyncCoordinator
  import com.nuvio.app.R
@@ -3704,7 +3704,7 @@ index a07bf389..b762a724 100644
  import com.nuvio.app.features.streams.normalizeStreamType
  import `is`.xyz.mpv.BaseMPVView
  import `is`.xyz.mpv.MPV
-@@ -298,29 +300,23 @@ private fun ExoPlayerSurface(
+@@ -327,29 +329,23 @@ private fun ExoPlayerSurface(
      var probeAttempted by remember(playerSourceKey) { mutableStateOf(false) }
  
      val extractorsFactory = remember(sourceUrl) {
@@ -3743,7 +3743,7 @@ index a07bf389..b762a724 100644
              context = context,
              defaultRequestHeaders = sanitizedSourceHeaders,
              defaultResponseHeaders = sanitizedSourceResponseHeaders,
-@@ -328,6 +324,19 @@ private fun ExoPlayerSurface(
+@@ -357,6 +353,19 @@ private fun ExoPlayerSurface(
              useLongReadTimeout = isLoopbackPlaybackSource(sourceUrl),
              externalSubtitles = externalSubtitles,
          )
@@ -3763,7 +3763,7 @@ index a07bf389..b762a724 100644
          val mimeType = playbackMediaItemFromUrl(
              url = sourceUrl,
              responseHeaders = sanitizedSourceResponseHeaders,
-@@ -566,8 +575,11 @@ private fun ExoPlayerSurface(
+@@ -595,8 +604,11 @@ private fun ExoPlayerSurface(
          externalSubtitles = externalSubtitles,
          useLibass = useLibass,
          preferredSubtitleLanguage = playerSettings.preferredSubtitleLanguage,
@@ -3775,7 +3775,7 @@ index a07bf389..b762a724 100644
      )
  
      fun syncPlayerViewKeepScreenOn() {
-@@ -952,10 +964,16 @@ private fun ExoPlayerSurface(
+@@ -988,10 +1000,16 @@ private fun ExoPlayerSurface(
                              .setSubtitleConfigurations(listOf(subtitleConfig))
                              .build()
                          Log.d(TAG, "setSubtitleUri: newMediaItem subtitleConfigs count=${newMediaItem.localConfiguration?.subtitleConfigurations?.size}")
@@ -3792,7 +3792,7 @@ index a07bf389..b762a724 100644
                              .setPreferredTextRoleFlags(C.ROLE_FLAG_SUBTITLE)
                              .build()
                          Log.d(TAG, "setSubtitleUri: track params set before prepare, textDisabled=${exoPlayer.trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)}")
-@@ -2389,6 +2407,13 @@ private class SubtitleOffsetRenderersFactory(
+@@ -2567,6 +2585,13 @@ private class SubtitleOffsetRenderersFactory(
      private val shouldStripSdhProvider: () -> Boolean,
      private val videoBoundsFractionProvider: () -> RectF?,
  ) : DefaultRenderersFactory(context) {
@@ -19707,7 +19707,7 @@ index 872c52da..d0e85fca 100644
      <string name="autosync_label_synced">Auto synced</string>
  </resources>
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index aef63b41..38e72bc6 100644
+index c5bedf8b..b0a3c0fd 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 @@ -896,6 +896,7 @@ internal fun MainAppContent(
@@ -21310,10 +21310,10 @@ index ce4d1eca..daf4ccba 100644
              onSuccess = { cues ->
                  subtitleAutoSyncState = subtitleAutoSyncState.copy(
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index dbe22cc3..692c62f8 100644
+index cabeac7a..56f7ef10 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -26,6 +26,7 @@ import com.nuvio.app.features.p2p.P2pStreamingState
+@@ -21,6 +21,7 @@ import com.nuvio.app.features.p2p.P2pStreamingState
  import com.nuvio.app.features.party.PartyRepository
  import com.nuvio.app.features.p2p.formatP2pMegabytes
  import com.nuvio.app.features.p2p.formatP2pSpeed
@@ -21321,23 +21321,23 @@ index dbe22cc3..692c62f8 100644
  import com.nuvio.app.features.player.skip.internalSkipAction
  import com.nuvio.app.features.servers.ServerStreams
  import com.nuvio.app.features.streams.streamAddonInstanceId
-@@ -240,6 +241,8 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+@@ -232,6 +233,8 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
              )
          }
  
 +        SubtitleSyncStatusPanel(horizontalSafePadding) // AutoSync hook: audio sync fallback status
 +
-         RenderPlayerControls(
-             displayedPositionMs = displayedPositionMs,
-             isEpisode = isEpisode,
-@@ -259,6 +262,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
-                 folded = fold != null,
-             )
-         }
+         RenderPlayerControls(displayedPositionMs = displayedPositionMs, isEpisode = isEpisode)
+         RenderPlaybackOverlays(
+             runtime = runtime,
+@@ -243,6 +246,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+             p2pRebufferMessage = p2pRebufferMessage,
+             p2pRebufferProgress = p2pRebufferProgress,
+         )
 +        if (!isInPip) AutoSyncBubbleToastHost(controlsVisible) // AutoSync hook: bubble toast
-         Box(modifier = panelModifier) {
-             RenderPlayerModals(displayedPositionMs = displayedPositionMs)
-             RenderParty(runtime = runtime)
+         RenderPlayerModals(displayedPositionMs = displayedPositionMs)
+         RenderParty(runtime = runtime)
+     }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSubtitleCueParser.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSubtitleCueParser.kt
 index b1c3c064..a9c08dee 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSubtitleCueParser.kt
@@ -21928,10 +21928,10 @@ index 00000000..a145c8cf
 +    )
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-index ef9ddabf..8d683f96 100644
+index d2dc33d9..98028e6c 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-@@ -563,14 +563,6 @@ private fun PlaybackSettingsSection(
+@@ -572,14 +572,6 @@ private fun PlaybackSettingsSection(
                      isTablet = isTablet,
                      onClick = { showSecondarySubtitleDialog = true },
                  )
@@ -21946,7 +21946,7 @@ index ef9ddabf..8d683f96 100644
                  SettingsGroupDivider(isTablet = isTablet)
                  SettingsSwitchRow(
                      title = stringResource(Res.string.settings_playback_subtitle_strip_sdh),
-@@ -613,6 +605,16 @@ private fun PlaybackSettingsSection(
+@@ -622,6 +614,16 @@ private fun PlaybackSettingsSection(
              }
          }
  
