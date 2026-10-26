@@ -1,0 +1,355 @@
+diff --git a/composeApp/src/commonMain/composeResources/values/strings_livetv_netflix_style.xml b/composeApp/src/commonMain/composeResources/values/strings_livetv_netflix_style.xml
+new file mode 100644
+index 00000000..b6790740
+--- /dev/null
++++ b/composeApp/src/commonMain/composeResources/values/strings_livetv_netflix_style.xml
+@@ -0,0 +1,8 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <string name="livetv_netflix_style_section">Netflix style</string>
++    <string name="livetv_netflix_style_title">Netflix style Live TV</string>
++    <string name="livetv_netflix_style_description">Show channels as landscape cards with the current programme and a progress bar. Turning on the global Netflix style also turns this on.</string>
++    <string name="livetv_netflix_style_toggle">Netflix style cards</string>
++    <string name="livetv_netflix_style_favorite">Favorite</string>
++</resources>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvNetflixStyle.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvNetflixStyle.kt
+new file mode 100644
+index 00000000..88c91fb9
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvNetflixStyle.kt
+@@ -0,0 +1,205 @@
++package com.nuvio.app.features.livetv
++
++import androidx.compose.foundation.background
++import androidx.compose.foundation.border
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.aspectRatio
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.lazy.grid.GridCells
++import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
++import androidx.compose.foundation.lazy.grid.items
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.rounded.Star
++import androidx.compose.material.icons.rounded.StarBorder
++import androidx.compose.material3.Icon
++import androidx.compose.material3.IconButton
++import androidx.compose.material3.LinearProgressIndicator
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.remember
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.layout.ContentScale
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.dp
++import coil3.compose.AsyncImage
++import com.nuvio.app.core.storage.AppFileCache
++import com.nuvio.app.core.ui.nuvio
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.livetv_netflix_style_favorite
++import org.jetbrains.compose.resources.stringResource
++
++/**
++ * Fork feature: Netflix style for the Live TV screen (landscape channel cards with the current
++ * programme and a progress bar). Off by default; the original list is untouched when off.
++ *
++ * Persisted as "<0|1>|<snapshot>". The snapshot is the value this preference had when the global
++ * Netflix style was turned on ("-" when no snapshot is held); turning the global switch off puts it back.
++ */
++object LiveTvNetflixStyle {
++    private const val PATH = "settings/livetv_netflix_style"
++
++    private val _enabled = MutableStateFlow(false)
++    val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
++    private var loaded = false
++
++    private fun readParts(): List<String> =
++        runCatching { AppFileCache.read(PATH)?.trim()?.split('|').orEmpty() }.getOrDefault(emptyList())
++
++    private fun save(on: Boolean, snapshot: String) {
++        runCatching { AppFileCache.write(PATH, "${if (on) 1 else 0}|$snapshot") }
++    }
++
++    fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        _enabled.value = readParts().firstOrNull() == "1"
++    }
++
++    /** The user's own toggle (Settings or the Live TV header). Keeps any held snapshot. */
++    fun setEnabled(on: Boolean) {
++        ensureLoaded()
++        if (on == _enabled.value) return
++        save(on, readParts().getOrNull(1) ?: "-")
++        _enabled.value = on
++    }
++
++    /** Called by the global Netflix style switch: ON snapshots and enables, OFF restores the snapshot. */
++    fun onGlobalChanged(globalOn: Boolean) {
++        ensureLoaded()
++        if (globalOn) {
++            save(true, if (_enabled.value) "1" else "0")
++            _enabled.value = true
++        } else {
++            val snapshot = readParts().getOrNull(1)
++            if (snapshot == "0" || snapshot == "1") {
++                val restored = snapshot == "1"
++                save(restored, "-")
++                _enabled.value = restored
++            }
++        }
++    }
++}
++
++@Composable
++internal fun LiveTvNetflixGrid(
++    state: LiveTvUiState,
++    epgRevision: Int,
++    nowMs: Long,
++    onPlay: (LiveTvChannel, LiveTvStreamOption) -> Unit,
++    modifier: Modifier = Modifier,
++) {
++    LazyVerticalGrid(
++        columns = GridCells.Adaptive(minSize = 190.dp),
++        modifier = modifier.fillMaxSize(),
++        horizontalArrangement = Arrangement.spacedBy(12.dp),
++        verticalArrangement = Arrangement.spacedBy(14.dp),
++    ) {
++        items(state.filteredChannels, key = { it.stableKey() }) { channel ->
++            val epg = remember(channel, epgRevision, nowMs) { LiveTvEpgRepository.epgFor(channel, nowMs) }
++            LiveTvNetflixCard(
++                channel = channel,
++                epg = epg,
++                nowMs = nowMs,
++                selected = state.selectedChannel?.stableKey() == channel.stableKey(),
++                favorite = state.isFavorite(channel),
++                onClick = {
++                    if (state.selectedChannel?.stableKey() == channel.stableKey()) {
++                        state.streams.firstOrNull()?.let { onPlay(channel, it) }
++                    } else {
++                        LiveTvRepository.selectChannel(channel)
++                    }
++                },
++            )
++        }
++    }
++}
++
++@Composable
++private fun LiveTvNetflixCard(
++    channel: LiveTvChannel,
++    epg: ChannelEpgInfo?,
++    nowMs: Long,
++    selected: Boolean,
++    favorite: Boolean,
++    onClick: () -> Unit,
++) {
++    val tokens = MaterialTheme.nuvio
++    val shape = RoundedCornerShape(12.dp)
++    Column(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
++        Box(
++            modifier = Modifier
++                .fillMaxWidth()
++                .aspectRatio(16f / 9f)
++                .clip(shape)
++                .background(tokens.colors.surfaceElevated)
++                .then(if (selected) Modifier.border(2.dp, tokens.colors.accent, shape) else Modifier),
++            contentAlignment = Alignment.Center,
++        ) {
++            val logo = channel.displayLogo
++            if (logo != null) {
++                AsyncImage(
++                    model = logo,
++                    contentDescription = channel.name,
++                    contentScale = ContentScale.Fit,
++                    modifier = Modifier.fillMaxSize().padding(16.dp),
++                )
++            } else {
++                Text(
++                    text = channel.name.take(2).uppercase(),
++                    style = MaterialTheme.typography.headlineSmall,
++                    color = tokens.colors.textMuted,
++                )
++            }
++            IconButton(
++                onClick = { LiveTvRepository.toggleFavorite(channel) },
++                modifier = Modifier.align(Alignment.TopEnd).size(36.dp),
++            ) {
++                Icon(
++                    imageVector = if (favorite) Icons.Rounded.Star else Icons.Rounded.StarBorder,
++                    contentDescription = stringResource(Res.string.livetv_netflix_style_favorite),
++                    tint = if (favorite) tokens.colors.warning else tokens.colors.textMuted,
++                )
++            }
++            val now = epg?.nowProgram
++            if (now != null) {
++                LinearProgressIndicator(
++                    progress = now.progress(nowMs),
++                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(3.dp),
++                )
++            }
++        }
++        Text(
++            text = channel.name,
++            style = MaterialTheme.typography.titleSmall,
++            fontWeight = FontWeight.SemiBold,
++            color = tokens.colors.textPrimary,
++            maxLines = 1,
++            overflow = TextOverflow.Ellipsis,
++            modifier = Modifier.padding(top = 6.dp),
++        )
++        val now = epg?.nowProgram
++        Text(
++            text = now?.title
++                ?: listOfNotNull(channel.primaryGenre ?: channel.catalogName, channel.addonName).distinct().joinToString(" · "),
++            style = MaterialTheme.typography.bodySmall,
++            color = if (now != null) tokens.colors.textSecondary else tokens.colors.textMuted,
++            maxLines = 1,
++            overflow = TextOverflow.Ellipsis,
++        )
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvScreen.kt
+index 945f9520..623c1a90 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvScreen.kt
+@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.navigationBars
+ import androidx.compose.foundation.layout.windowInsetsPadding
+ import androidx.compose.foundation.lazy.LazyRow
+ import androidx.compose.material.icons.rounded.GridView
++import androidx.compose.material.icons.rounded.Movie
+ import androidx.compose.material.icons.rounded.Tune
+ import androidx.compose.material.icons.rounded.ViewAgenda
+ import androidx.compose.runtime.mutableStateOf
+@@ -69,6 +70,9 @@ import com.nuvio.app.core.ui.NuvioScreenHeader
+ import com.nuvio.app.core.ui.NuvioSectionLabel
+ import com.nuvio.app.core.ui.nuvio
+ import kotlinx.coroutines.delay
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.livetv_netflix_style_toggle
++import org.jetbrains.compose.resources.stringResource
+ 
+ @Composable
+ fun LiveTvScreen(
+@@ -85,6 +89,10 @@ fun LiveTvScreen(
+             nowMs = LiveTvEpgRepository.nowEpochMs()
+         }
+     }
++    val netflixStyle by remember {
++        LiveTvNetflixStyle.ensureLoaded()
++        LiveTvNetflixStyle.enabled
++    }.collectAsStateWithLifecycle()
+     val tokens = MaterialTheme.nuvio
+ 
+     BoxWithConstraints(
+@@ -128,6 +136,13 @@ fun LiveTvScreen(
+                         }
+                     }
+                     if (!compactDetailOpen && !(compact && showFilters)) {
++                        IconButton(onClick = { LiveTvNetflixStyle.setEnabled(!netflixStyle) }) {
++                            Icon(
++                                imageVector = Icons.Rounded.Movie,
++                                contentDescription = stringResource(Res.string.livetv_netflix_style_toggle),
++                                tint = if (netflixStyle) tokens.colors.accent else tokens.colors.textPrimary,
++                            )
++                        }
+                         IconButton(onClick = { guideMode = !guideMode }) {
+                             Icon(
+                                 imageVector = if (guideMode) Icons.Rounded.ViewAgenda else Icons.Rounded.GridView,
+@@ -434,6 +449,7 @@ private fun LiveTvChannelList(
+     modifier: Modifier = Modifier,
+ ) {
+     val tokens = MaterialTheme.nuvio
++    val netflixStyle by LiveTvNetflixStyle.enabled.collectAsStateWithLifecycle()
+     Box(modifier = modifier) {
+         when {
+             state.isLoadingChannels && state.filteredChannels.isEmpty() -> {
+@@ -463,6 +479,12 @@ private fun LiveTvChannelList(
+                     )
+                 }
+             }
++            netflixStyle -> LiveTvNetflixGrid(
++                state = state,
++                epgRevision = epgRevision,
++                nowMs = nowMs,
++                onPlay = onPlay,
++            )
+             else -> {
+                 val listState = rememberLazyListState()
+                 LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/LiveTvSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/LiveTvSettingsPage.kt
+index 54aacc00..33cef203 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/LiveTvSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/LiveTvSettingsPage.kt
+@@ -20,10 +20,37 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
+ import com.nuvio.app.core.ui.NuvioTokens
+ import com.nuvio.app.core.ui.nuvio
+ import com.nuvio.app.features.livetv.IptvSourceDialog
++import com.nuvio.app.features.livetv.LiveTvNetflixStyle
+ import com.nuvio.app.features.livetv.LiveTvRepository
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.livetv_netflix_style_description
++import nuvio.composeapp.generated.resources.livetv_netflix_style_section
++import nuvio.composeapp.generated.resources.livetv_netflix_style_title
++import org.jetbrains.compose.resources.stringResource
+ 
+ /** Settings, Live TV: add, switch on or off, remove and reload M3U / Xtream / Stalker sources. */
+ internal fun LazyListScope.liveTvSettingsContent(isTablet: Boolean) {
++    item {
++        val netflixStyle by remember {
++            LiveTvNetflixStyle.ensureLoaded()
++            LiveTvNetflixStyle.enabled
++        }.collectAsStateWithLifecycle()
++        SettingsSection(
++            title = stringResource(Res.string.livetv_netflix_style_section),
++            isTablet = isTablet,
++        ) {
++            SettingsGroup(isTablet = isTablet) {
++                SettingsSwitchRow(
++                    title = stringResource(Res.string.livetv_netflix_style_title),
++                    description = stringResource(Res.string.livetv_netflix_style_description),
++                    checked = netflixStyle,
++                    isTablet = isTablet,
++                    onCheckedChange = LiveTvNetflixStyle::setEnabled,
++                )
++            }
++        }
++        Spacer(modifier = Modifier.height(NuvioTokens.Space.s16))
++    }
+     item {
+         val uiState by remember {
+             LiveTvRepository.initialize()
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NetflixStyle.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NetflixStyle.kt
+index bbd20b35..97e1af59 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NetflixStyle.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NetflixStyle.kt
+@@ -7,6 +7,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
+ import com.nuvio.app.core.storage.AppFileCache
+ import com.nuvio.app.features.details.HeroTrailerOptions
+ import com.nuvio.app.features.details.MetaScreenSettingsRepository
++import com.nuvio.app.features.livetv.LiveTvNetflixStyle
+ import com.nuvio.app.features.watchprogress.ContinueWatchingPreferencesRepository
+ import com.nuvio.app.features.watchprogress.ContinueWatchingSectionStyle
+ import kotlinx.coroutines.flow.MutableStateFlow
+@@ -70,6 +71,7 @@ object NetflixStyle {
+             HeroTrailerOptions.setStartDelaySeconds(parts.getOrNull(4)?.toIntOrNull() ?: 0)
+             runCatching { AppFileCache.write(PATH, "0") }
+         }
++        LiveTvNetflixStyle.onGlobalChanged(on)
+         _enabled.value = on
+     }
+ }
