@@ -1,0 +1,243 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxSecondSubtitle.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxSecondSubtitle.kt
+new file mode 100644
+index 00000000..79b66949
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxSecondSubtitle.kt
+@@ -0,0 +1,170 @@
++package com.nuvio.app.features.player
++
++import androidx.compose.foundation.horizontalScroll
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.BoxWithConstraints
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.graphics.Shadow
++import androidx.compose.ui.geometry.Offset
++import androidx.compose.ui.text.TextStyle
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.style.TextAlign
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.core.storage.AppFileCache
++import com.nuvio.app.features.addons.httpGetTextWithHeaders
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++
++/**
++ * dx.bi port: a second subtitle language drawn on top of the picture, next to the normal subtitles (handy for learning
++ * a language or watching with a friend). The lines come from the addon subtitles of the title, so the second language
++ * is any language an addon offers. Pick it in the player's Subtitles menu; the choice is remembered.
++ */
++internal object DxSecondSubtitle {
++    private const val PATH = "settings/dx_sub2"
++    private val _enabled = MutableStateFlow(true)
++    val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
++    private val _language = MutableStateFlow<String?>(null)
++    val language: StateFlow<String?> = _language.asStateFlow()
++    private var loaded = false
++
++    fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        val values = HashMap<String, String>()
++        AppFileCache.read(PATH)?.lineSequence()?.forEach { line ->
++            val at = line.indexOf('=')
++            if (at > 0) values[line.substring(0, at)] = line.substring(at + 1)
++        }
++        _enabled.value = values["enabled"] != "0"
++        _language.value = values["language"]?.takeIf { it.isNotBlank() }
++    }
++
++    private fun save() {
++        val text = "enabled=${if (_enabled.value) 1 else 0}\nlanguage=${_language.value.orEmpty()}"
++        runCatching { AppFileCache.write(PATH, text) }
++    }
++
++    fun setEnabled(enabled: Boolean) {
++        ensureLoaded()
++        _enabled.value = enabled
++        save()
++    }
++
++    fun setLanguage(code: String?) {
++        ensureLoaded()
++        _language.value = code?.takeIf { it.isNotBlank() }
++        save()
++    }
++
++    /** The addon subtitle to draw as the second line: the chosen language, never the one already playing. */
++    fun pick(language: String?, addonSubtitles: List<AddonSubtitle>, playingId: String?): AddonSubtitle? {
++        val wanted = language ?: return null
++        return addonSubtitles.firstOrNull { subtitle ->
++            subtitle.id != playingId && normalizeLanguageCode(subtitle.language) == wanted
++        }
++    }
++
++    fun cueAt(cues: List<SubtitleSyncCue>, timeMs: Long): String? {
++        for (index in cues.indices) {
++            val cue = cues[index]
++            if (cue.startTimeMs > timeMs) break
++            if (timeMs < cue.endTimeMs) return cue.text
++        }
++        return null
++    }
++}
++
++/** Picker row inside the Subtitles menu. */
++@Composable
++internal fun DxSecondSubtitlePicker(addonSubtitles: List<AddonSubtitle>) {
++    LaunchedEffect(Unit) { DxSecondSubtitle.ensureLoaded() }
++    val enabled by DxSecondSubtitle.enabled.collectAsStateWithLifecycle()
++    val chosen by DxSecondSubtitle.language.collectAsStateWithLifecycle()
++    if (!enabled) return
++    val codes = remember(addonSubtitles.size) {
++        addonSubtitles.mapNotNull { normalizeLanguageCode(it.language) }.distinct()
++    }
++    if (codes.isEmpty() && chosen == null) return
++    Text(
++        text = "Second subtitle on top",
++        color = Color.White,
++        fontSize = 14.sp,
++        fontWeight = FontWeight.Medium,
++        modifier = Modifier.padding(top = 10.dp, bottom = 6.dp),
++    )
++    Row(
++        modifier = Modifier.horizontalScroll(rememberScrollState()),
++        horizontalArrangement = Arrangement.spacedBy(8.dp),
++    ) {
++        com.nuvio.app.core.ui.Chip(label = "Off", selected = chosen == null, onClick = { DxSecondSubtitle.setLanguage(null) })
++        val shown = if (chosen != null && chosen !in codes) listOf(chosen!!) + codes else codes
++        shown.forEach { code ->
++            com.nuvio.app.core.ui.Chip(
++                label = languageLabelForCode(code),
++                selected = chosen == code,
++                onClick = { DxSecondSubtitle.setLanguage(code) },
++            )
++        }
++    }
++}
++
++/** The second line itself, near the top of the picture in a warm yellow so it reads apart from the main subtitles. */
++@Composable
++internal fun PlayerScreenRuntime.DxSecondSubtitleOverlay() {
++    LaunchedEffect(Unit) { DxSecondSubtitle.ensureLoaded() }
++    val enabled by DxSecondSubtitle.enabled.collectAsStateWithLifecycle()
++    val language by DxSecondSubtitle.language.collectAsStateWithLifecycle()
++    if (!enabled || language == null) return
++    val pick = DxSecondSubtitle.pick(language, addonSubtitles, selectedAddonSubtitleId)
++    var cues by remember { mutableStateOf<List<SubtitleSyncCue>>(emptyList()) }
++    val headers = activeSourceHeaders
++    LaunchedEffect(pick?.url) {
++        val subtitle = pick
++        if (subtitle == null) {
++            cues = emptyList()
++            return@LaunchedEffect
++        }
++        cues = emptyList()
++        cues = runCatching {
++            val body = httpGetTextWithHeaders(url = subtitle.url, headers = headers)
++            PlayerSubtitleCueParser.parse(body, subtitle.url)
++        }.getOrDefault(emptyList())
++    }
++    if (cues.isEmpty()) return
++    val text = DxSecondSubtitle.cueAt(cues, playbackSnapshot.positionMs - subtitleDelayMs) ?: return
++    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
++        val size = (minOf(maxWidth.value, maxHeight.value) * 0.045f).coerceIn(12f, 22f)
++        Text(
++            text = text.replace(Regex("<[^>]+>"), ""),
++            color = Color(0xFFFFE39A),
++            textAlign = TextAlign.Center,
++            style = TextStyle(
++                fontSize = size.sp,
++                fontWeight = FontWeight.SemiBold,
++                shadow = Shadow(color = Color.Black, offset = Offset(0f, 2f), blurRadius = 6f),
++            ),
++            modifier = Modifier
++                .align(Alignment.TopCenter)
++                .fillMaxWidth()
++                .padding(top = (maxHeight * 0.05f), start = 48.dp, end = 48.dp),
++        )
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+index 592269ad..efec777e 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+@@ -359,6 +359,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+     }
+     SmartEnhanceBanner()
+     DxPlayerHintHost() // dx.bi player hints hook
++    DxSecondSubtitleOverlay() // dx.bi second subtitle hook
+     AnimatedVisibility(
+         visible = (controlsVisible || showParentalGuide) && !playerControlsLocked && !isInPip && !seekPreview.showSyncPanel,
+         enter = fadeIn(),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt
+index 0d429941..197fcae1 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt
+@@ -321,6 +321,7 @@ fun SubtitleModal(
+                 }
+ 
+                 AutoSyncSubtitleModalSlot() // AutoSync hook
++                DxSecondSubtitlePicker(addonSubtitles) // dx.bi second subtitle hook
+             }
+         }
+     }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxSecondSubtitleSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxSecondSubtitleSettings.kt
+new file mode 100644
+index 00000000..a4481a35
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxSecondSubtitleSettings.kt
+@@ -0,0 +1,25 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.features.player.DxSecondSubtitle
++
++/** dx.bi port: second subtitle language on top of the picture. The switch hides the picker and the overlay. */
++@Composable
++internal fun DxSecondSubtitleSettingsSection(isTablet: Boolean) {
++    LaunchedEffect(Unit) { DxSecondSubtitle.ensureLoaded() }
++    val enabled by DxSecondSubtitle.enabled.collectAsStateWithLifecycle()
++    SettingsSection(title = "Second subtitle on top", isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            SettingsSwitchRow(
++                title = "Second subtitle language",
++                description = "Shows a second subtitle language at the top of the picture. Pick the language in the player's Subtitles menu. Off hides the picker and the extra line.",
++                checked = enabled,
++                isTablet = isTablet,
++                onCheckedChange = DxSecondSubtitle::setEnabled,
++            )
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+index ae3eafdb..08827007 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+@@ -645,6 +645,7 @@ private fun PlaybackSettingsSection(
+         DxSoundSettingsSection(isTablet = isTablet) // dx.bi sound modes hook
+         DxEnhanceSettingsSection(isTablet = isTablet) // dx.bi picture enhance hook
+         DxRememberSettingsSection(isTablet = isTablet) // dx.bi remember hook
++        DxSecondSubtitleSettingsSection(isTablet = isTablet) // dx.bi second subtitle hook
+ 
+         ConnectionFitSettingsSection(isTablet = isTablet) // Nuvio fork: connection-speed fit
+ 

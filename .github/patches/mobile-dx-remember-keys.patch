@@ -1,0 +1,265 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxRemember.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxRemember.kt
+new file mode 100644
+index 00000000..2edd2973
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxRemember.kt
+@@ -0,0 +1,141 @@
++package com.nuvio.app.features.player
++
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.remember
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.composed
++import androidx.compose.ui.focus.FocusRequester
++import androidx.compose.ui.focus.focusRequester
++import androidx.compose.ui.focus.focusable
++import androidx.compose.ui.input.key.Key
++import androidx.compose.ui.input.key.KeyEventType
++import androidx.compose.ui.input.key.isAltPressed
++import androidx.compose.ui.input.key.isCtrlPressed
++import androidx.compose.ui.input.key.isMetaPressed
++import androidx.compose.ui.input.key.key
++import androidx.compose.ui.input.key.onKeyEvent
++import androidx.compose.ui.input.key.type
++import com.nuvio.app.core.storage.AppFileCache
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++
++/**
++ * dx.bi port: remembers the last swipe volume and playback speed from one video to the next, and lets the number
++ * keys 0-9 on a hardware keyboard jump to 0%..90% of the video. Both parts have a Settings switch.
++ */
++internal object DxRemember {
++    private const val PATH = "settings/dx_remember"
++    private val _remember = MutableStateFlow(true)
++    val remember: StateFlow<Boolean> = _remember.asStateFlow()
++    private val _keys = MutableStateFlow(true)
++    val keys: StateFlow<Boolean> = _keys.asStateFlow()
++    private var volume: Float? = null
++    private var speed: Float? = null
++    private var loaded = false
++
++    fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        val values = HashMap<String, String>()
++        AppFileCache.read(PATH)?.lineSequence()?.forEach { line ->
++            val at = line.indexOf('=')
++            if (at > 0) values[line.substring(0, at)] = line.substring(at + 1)
++        }
++        _remember.value = values["remember"] != "0"
++        _keys.value = values["keys"] != "0"
++        volume = values["volume"]?.toFloatOrNull()?.takeIf { it in 0f..1f }
++        speed = values["speed"]?.toFloatOrNull()?.takeIf { it in 0.25f..4f }
++    }
++
++    private fun save() {
++        val text = buildString {
++            append("remember=").append(if (_remember.value) 1 else 0).append('\n')
++            append("keys=").append(if (_keys.value) 1 else 0)
++            volume?.let { append("\nvolume=").append(it) }
++            speed?.let { append("\nspeed=").append(it) }
++        }
++        runCatching { AppFileCache.write(PATH, text) }
++    }
++
++    fun setRemember(enabled: Boolean) {
++        ensureLoaded()
++        _remember.value = enabled
++        save()
++    }
++
++    fun setKeys(enabled: Boolean) {
++        ensureLoaded()
++        _keys.value = enabled
++        save()
++    }
++
++    /** Called after every swipe volume change. Boosted levels past 100% are never kept. */
++    fun noteVolume(level: PlayerAudioLevel?) {
++        ensureLoaded()
++        if (!_remember.value || level == null || level.fraction !in 0f..1f) return
++        if (volume == level.fraction) return
++        volume = level.fraction
++        save()
++    }
++
++    fun noteSpeed(value: Float) {
++        ensureLoaded()
++        if (!_remember.value || value !in 0.25f..4f) return
++        if (speed == value) return
++        speed = value
++        save()
++    }
++
++    fun restoreVolume(controller: PlayerGestureController) {
++        ensureLoaded()
++        if (!_remember.value) return
++        val saved = volume ?: return
++        runCatching { controller.setVolume(saved) }
++    }
++
++    /** Saved speed when it differs from 1x, else null. */
++    fun speedToRestore(): Float? {
++        ensureLoaded()
++        if (!_remember.value) return null
++        return speed?.takeIf { kotlin.math.abs(it - 1f) > 0.01f }
++    }
++
++    fun digitFor(key: Key): Int? = when (key) {
++        Key.Zero, Key.NumPad0 -> 0
++        Key.One, Key.NumPad1 -> 1
++        Key.Two, Key.NumPad2 -> 2
++        Key.Three, Key.NumPad3 -> 3
++        Key.Four, Key.NumPad4 -> 4
++        Key.Five, Key.NumPad5 -> 5
++        Key.Six, Key.NumPad6 -> 6
++        Key.Seven, Key.NumPad7 -> 7
++        Key.Eight, Key.NumPad8 -> 8
++        Key.Nine, Key.NumPad9 -> 9
++        else -> null
++    }
++}
++
++/** Hardware keyboard: 0-9 jump to 0%..90%. Without a keyboard nothing ever reaches this, so it does nothing. */
++internal fun Modifier.dxPlayerKeys(runtime: PlayerScreenRuntime): Modifier = composed {
++    val focusRequester = remember { FocusRequester() }
++    LaunchedEffect(Unit) {
++        DxRemember.ensureLoaded()
++        runCatching { focusRequester.requestFocus() }
++    }
++    this
++        .focusRequester(focusRequester)
++        .focusable()
++        .onKeyEvent { event ->
++            if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
++            if (event.isCtrlPressed || event.isAltPressed || event.isMetaPressed) return@onKeyEvent false
++            if (!DxRemember.keys.value || runtime.isMiniPresentation) return@onKeyEvent false
++            val digit = DxRemember.digitFor(event.key) ?: return@onKeyEvent false
++            val durationMs = runtime.playbackSnapshot.durationMs
++            val controller = runtime.playerController
++            if (durationMs <= 0L || controller == null || runtime.partyBlocksControl()) return@onKeyEvent false
++            controller.seekTo(durationMs / 10L * digit)
++            DxPlayerHint.show("${digit * 10}%")
++            true
++        }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerPlatformEffects.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerPlatformEffects.kt
+index e2bebdf3..e8069114 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerPlatformEffects.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerPlatformEffects.kt
+@@ -76,6 +76,10 @@ fun rememberPlayerGestureController(restoreBrightness: Boolean): PlayerGestureCo
+         }
+         onDispose {}
+     }
++    DisposableEffect(controller) { // dx.bi remember hook
++        DxRemember.restoreVolume(controller)
++        onDispose {}
++    }
+     DisposableEffect(controller) {
+         onDispose { com.nuvio.app.features.player.volumeboost.VolumeBoost.resetSession() } // Volume boost hook: lasts one session
+     }
+@@ -89,7 +93,7 @@ fun rememberPlayerGestureController(restoreBrightness: Boolean): PlayerGestureCo
+ 
+             // Volume boost hook: past 100%
+             override fun currentVolume(): PlayerAudioLevel? = com.nuvio.app.features.player.volumeboost.VolumeBoost.currentVolume(controller)
+-            override fun setVolume(level: Float): PlayerAudioLevel? = com.nuvio.app.features.player.volumeboost.VolumeBoost.setVolume(controller, level)
++            override fun setVolume(level: Float): PlayerAudioLevel? = com.nuvio.app.features.player.volumeboost.VolumeBoost.setVolume(controller, level).also(DxRemember::noteVolume) // dx.bi remember hook
+         }
+     }
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt
+index 6c69e179..e96ce8f6 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt
+@@ -80,7 +80,8 @@ internal fun PlayerScreenContent(args: PlayerScreenArgs) {
+     BoxWithConstraints(
+         modifier = args.modifier
+             .fillMaxSize()
+-            .background(Color.Black),
++            .background(Color.Black)
++            .dxPlayerKeys(runtime), // dx.bi remember/keys hook
+     ) {
+         val density = LocalDensity.current
+         val horizontalSafePadding = playerHorizontalSafePadding()
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
+index cc81b993..025eece0 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
+@@ -278,6 +278,7 @@ internal fun PlayerScreenRuntime.cyclePlaybackSpeed() {
+     val next = speeds.firstOrNull { it > current + 0.01f } ?: speeds.first()
+     partyRateNudge = null
+     playerController?.setPlaybackSpeed(next)
++    DxRemember.noteSpeed(next) // dx.bi remember hook
+     publishPartyPlayback(rate = next)
+     showGestureMessage(formatPlaybackSpeedLabel(next))
+     controlsVisible = true
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+index 665d9568..592269ad 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+@@ -352,6 +352,11 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+         val info = runCatching { controller.getMediaInfo() }.getOrNull() ?: return@LaunchedEffect
+         PlayerEffects.maybeAutoEnhance(info.videoHeight, info.videoBitrate)
+     }
++    LaunchedEffect(playerController, activeSourceUrl) { // dx.bi remember hook
++        val controller = playerController ?: return@LaunchedEffect
++        val speed = DxRemember.speedToRestore() ?: return@LaunchedEffect
++        if (!isPartySynced) controller.setPlaybackSpeed(speed)
++    }
+     SmartEnhanceBanner()
+     DxPlayerHintHost() // dx.bi player hints hook
+     AnimatedVisibility(
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxRememberSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxRememberSettings.kt
+new file mode 100644
+index 00000000..a29f514f
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxRememberSettings.kt
+@@ -0,0 +1,34 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.features.player.DxRemember
++
++/** dx.bi port: remember volume and speed, and number keys 0-9 on a hardware keyboard. */
++@Composable
++internal fun DxRememberSettingsSection(isTablet: Boolean) {
++    LaunchedEffect(Unit) { DxRemember.ensureLoaded() }
++    val remember by DxRemember.remember.collectAsStateWithLifecycle()
++    val keys by DxRemember.keys.collectAsStateWithLifecycle()
++    SettingsSection(title = "Remember volume and speed", isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            SettingsSwitchRow(
++                title = "Remember volume and speed",
++                description = "The next video starts with the volume you last set by swiping and the playback speed you last picked.",
++                checked = remember,
++                isTablet = isTablet,
++                onCheckedChange = DxRemember::setRemember,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Number keys jump in the video",
++                description = "With a hardware keyboard, keys 0 to 9 jump to 0% to 90% of the video.",
++                checked = keys,
++                isTablet = isTablet,
++                onCheckedChange = DxRemember::setKeys,
++            )
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+index fe794ff2..ae3eafdb 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+@@ -644,6 +644,7 @@ private fun PlaybackSettingsSection(
+ 
+         DxSoundSettingsSection(isTablet = isTablet) // dx.bi sound modes hook
+         DxEnhanceSettingsSection(isTablet = isTablet) // dx.bi picture enhance hook
++        DxRememberSettingsSection(isTablet = isTablet) // dx.bi remember hook
+ 
+         ConnectionFitSettingsSection(isTablet = isTablet) // Nuvio fork: connection-speed fit
+ 

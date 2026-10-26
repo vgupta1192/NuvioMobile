@@ -1,0 +1,559 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/DxEnhanceAndroid.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/DxEnhanceAndroid.kt
+new file mode 100644
+index 00000000..ebe70fa6
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/DxEnhanceAndroid.kt
+@@ -0,0 +1,116 @@
++package com.nuvio.app.features.player
++
++import android.content.Context
++import android.opengl.GLES20
++import androidx.media3.common.VideoFrameProcessingException
++import androidx.media3.common.util.GlProgram
++import androidx.media3.common.util.GlUtil
++import androidx.media3.common.util.Size
++import androidx.media3.effect.BaseGlShaderProgram
++import androidx.media3.effect.GlEffect
++import androidx.media3.effect.GlShaderProgram
++
++/**
++ * dx.bi picture enhancement as one GL pass. Sharpen is an unsharp mask. Anime is a reduced take on Anime4K: it pulls
++ * line pixels toward the darkest neighbour (thinner, darker lines) and adds a stronger sharpen. There is no neural
++ * upscaling, which would be too heavy for phones.
++ */
++internal class DxEnhanceEffect(private val anime: Boolean) : GlEffect {
++    override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram =
++        DxEnhanceProgram(useHdr, anime)
++}
++
++private class DxEnhanceProgram(useHdr: Boolean, private val anime: Boolean) : BaseGlShaderProgram(useHdr, 1) {
++    private val glProgram: GlProgram
++
++    init {
++        try {
++            glProgram = GlProgram(VERTEX_SHADER, FRAGMENT_SHADER)
++            glProgram.setBufferAttribute(
++                "aFramePosition",
++                GlUtil.getNormalizedCoordinateBounds(),
++                GlUtil.HOMOGENEOUS_COORDINATE_VECTOR_SIZE,
++            )
++        } catch (e: GlUtil.GlException) {
++            throw VideoFrameProcessingException(e)
++        }
++    }
++
++    override fun configure(inputWidth: Int, inputHeight: Int): Size {
++        glProgram.setFloatsUniform("uTexel", floatArrayOf(1f / inputWidth, 1f / inputHeight))
++        return Size(inputWidth, inputHeight)
++    }
++
++    override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
++        try {
++            glProgram.use()
++            glProgram.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
++            glProgram.setFloatUniform("uThin", if (anime) 0.55f else 0f)
++            glProgram.setFloatUniform("uSharpen", if (anime) 0.6f else 0.45f)
++            glProgram.bindAttributesAndUniforms()
++            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
++        } catch (e: GlUtil.GlException) {
++            throw VideoFrameProcessingException(e, presentationTimeUs)
++        }
++    }
++
++    override fun release() {
++        super.release()
++        try {
++            glProgram.delete()
++        } catch (e: GlUtil.GlException) {
++            throw VideoFrameProcessingException(e)
++        }
++    }
++
++    private companion object {
++        const val VERTEX_SHADER = """
++attribute vec4 aFramePosition;
++varying vec2 vTexSamplingCoord;
++void main() {
++  gl_Position = aFramePosition;
++  vTexSamplingCoord = vec2(aFramePosition.x * 0.5 + 0.5, aFramePosition.y * 0.5 + 0.5);
++}
++"""
++
++        const val FRAGMENT_SHADER = """
++#ifdef GL_FRAGMENT_PRECISION_HIGH
++precision highp float;
++#else
++precision mediump float;
++#endif
++uniform sampler2D uTexSampler;
++uniform vec2 uTexel;
++uniform float uThin;
++uniform float uSharpen;
++varying vec2 vTexSamplingCoord;
++
++float luma(vec3 c) {
++  return dot(c, vec3(0.299, 0.587, 0.114));
++}
++
++void main() {
++  vec2 uv = vTexSamplingCoord;
++  vec4 src = texture2D(uTexSampler, uv);
++  vec3 col = src.rgb;
++  vec3 n = texture2D(uTexSampler, uv + vec2(0.0, uTexel.y)).rgb;
++  vec3 s = texture2D(uTexSampler, uv - vec2(0.0, uTexel.y)).rgb;
++  vec3 e = texture2D(uTexSampler, uv + vec2(uTexel.x, 0.0)).rgb;
++  vec3 w = texture2D(uTexSampler, uv - vec2(uTexel.x, 0.0)).rgb;
++  if (uThin > 0.0) {
++    vec3 darkest = n;
++    if (luma(s) < luma(darkest)) { darkest = s; }
++    if (luma(e) < luma(darkest)) { darkest = e; }
++    if (luma(w) < luma(darkest)) { darkest = w; }
++    float edge = smoothstep(0.04, 0.25, luma(col) - luma(darkest));
++    col = mix(col, darkest, edge * uThin);
++  }
++  if (uSharpen > 0.0) {
++    vec3 blur = (n + s + e + w) * 0.25;
++    col += (col - blur) * uSharpen;
++  }
++  gl_FragColor = vec4(clamp(col, 0.0, 1.0), src.a);
++}
++"""
++    }
++}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEffectsAndroid.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEffectsAndroid.kt
+index 759cba5d..e868e3bc 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEffectsAndroid.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEffectsAndroid.kt
+@@ -173,6 +173,7 @@ internal class ExoAudioEffects(private val player: ExoPlayer) : Player.Listener
+ internal class ExoPictureEffects(private val player: ExoPlayer) : Player.Listener {
+     private var state = PictureState()
+     private var shaderBroken = false
++    private var dxBroken = false
+     private var released = false
+ 
+     init {
+@@ -205,6 +206,8 @@ internal class ExoPictureEffects(private val player: ExoPlayer) : Player.Listene
+                 gamma = 1f / (1f + current.gamma / 100f),
+             )
+         }
++        val dxKind = DxEnhance.currentKind() // dx.bi picture enhance hook
++        if (!dxBroken && dxKind != DxEnhanceKind.NONE) effects += DxEnhanceEffect(dxKind == DxEnhanceKind.ANIME)
+         val brightness = current.brightness / 100f + if (current.smartEnhance) 0.01f else 0f
+         val contrast = current.contrast / 100f + if (current.smartEnhance) 0.05f else 0f
+         val saturation = current.saturation.toFloat() + if (current.smartEnhance) 6f else 0f
+@@ -221,7 +224,12 @@ internal class ExoPictureEffects(private val player: ExoPlayer) : Player.Listene
+     }
+ 
+     override fun onPlayerError(error: PlaybackException) {
+-        if (error.errorCode == PlaybackException.ERROR_CODE_VIDEO_FRAME_PROCESSING_FAILED && !shaderBroken) {
++        if (error.errorCode == PlaybackException.ERROR_CODE_VIDEO_FRAME_PROCESSING_FAILED && !dxBroken && DxEnhance.currentKind() != DxEnhanceKind.NONE) {
++            Log.w(FX_TAG, "dx.bi enhance shader failed, turning it off", error) // dx.bi picture enhance hook
++            dxBroken = true
++            push()
++            runCatching { player.prepare() }
++        } else if (error.errorCode == PlaybackException.ERROR_CODE_VIDEO_FRAME_PROCESSING_FAILED && !shaderBroken) {
+             Log.w(FX_TAG, "Picture shader failed, turning it off", error)
+             shaderBroken = true
+             push()
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+index 04ef76bd..8e877164 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+@@ -1932,7 +1932,7 @@ private class NuvioLibmpvView(
+                     runCatching { mpv.setPropertyString("tone-mapping", state.toneMapping.mpv ?: "auto") }
+                     runCatching { mpv.setPropertyBoolean("interpolation", state.interpolation) }
+                     runCatching { mpv.setPropertyString("video-sync", if (state.interpolation) "display-resample" else "audio") }
+-                    runCatching { mpv.setPropertyDouble("sharpen", state.sharpen * 0.35) }
++                    runCatching { mpv.setPropertyDouble("sharpen", maxOf(state.sharpen * 0.35, DxEnhance.mpvSharpen())) } // dx.bi picture enhance hook
+                 }
+             }
+ 
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxEnhance.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxEnhance.kt
+new file mode 100644
+index 00000000..de941360
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxEnhance.kt
+@@ -0,0 +1,261 @@
++package com.nuvio.app.features.player
++
++import androidx.compose.animation.AnimatedVisibility
++import androidx.compose.foundation.background
++import androidx.compose.foundation.horizontalScroll
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.rounded.AutoFixHigh
++import androidx.compose.material3.Icon
++import androidx.compose.material3.IconButton
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.core.storage.AppFileCache
++import com.nuvio.app.features.details.MetaDetailsRepository
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++
++/** dx.bi picture enhancement choices. Auto picks [DxEnhanceKind.ANIME] for anime and [DxEnhanceKind.SHARPEN] otherwise. */
++enum class DxEnhanceMode(val id: String, val label: String) {
++    OFF("off", "Off"),
++    AUTO("auto", "Auto"),
++    ANIME("anime", "Anime"),
++    SHARPEN("sharpen", "Sharpen");
++
++    companion object {
++        fun fromId(id: String?): DxEnhanceMode = values().firstOrNull { it.id == id } ?: OFF
++    }
++}
++
++/** What the engine actually applies for a title. */
++enum class DxEnhanceKind { NONE, SHARPEN, ANIME }
++
++internal object DxEnhance {
++    private const val PATH = "settings/dx_enhance"
++    private val _mode = MutableStateFlow(DxEnhanceMode.OFF)
++    val mode: StateFlow<DxEnhanceMode> = _mode.asStateFlow()
++    private val _buttonEnabled = MutableStateFlow(true)
++    val buttonEnabled: StateFlow<Boolean> = _buttonEnabled.asStateFlow()
++    private val _anime = MutableStateFlow(false)
++    val anime: StateFlow<Boolean> = _anime.asStateFlow()
++    private val _kind = MutableStateFlow(DxEnhanceKind.NONE)
++    val kind: StateFlow<DxEnhanceKind> = _kind.asStateFlow()
++    private var loaded = false
++
++    fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        val values = HashMap<String, String>()
++        AppFileCache.read(PATH)?.lineSequence()?.forEach { line ->
++            val at = line.indexOf('=')
++            if (at > 0) values[line.substring(0, at)] = line.substring(at + 1)
++        }
++        _mode.value = DxEnhanceMode.fromId(values["mode"])
++        _buttonEnabled.value = values["button"] != "0"
++        recompute()
++    }
++
++    private fun save() {
++        val text = "mode=${_mode.value.id}\nbutton=${if (_buttonEnabled.value) 1 else 0}"
++        runCatching { AppFileCache.write(PATH, text) }
++    }
++
++    private fun recompute() {
++        _kind.value = if (!_buttonEnabled.value) {
++            DxEnhanceKind.NONE
++        } else when (_mode.value) {
++            DxEnhanceMode.OFF -> DxEnhanceKind.NONE
++            DxEnhanceMode.ANIME -> DxEnhanceKind.ANIME
++            DxEnhanceMode.SHARPEN -> DxEnhanceKind.SHARPEN
++            DxEnhanceMode.AUTO -> if (_anime.value) DxEnhanceKind.ANIME else DxEnhanceKind.SHARPEN
++        }
++    }
++
++    fun currentKind(): DxEnhanceKind = _kind.value
++
++    fun setMode(mode: DxEnhanceMode) {
++        ensureLoaded()
++        _mode.value = mode
++        save()
++        recompute()
++    }
++
++    fun setButtonEnabled(enabled: Boolean) {
++        ensureLoaded()
++        _buttonEnabled.value = enabled
++        save()
++        recompute()
++    }
++
++    fun setAnime(anime: Boolean) {
++        _anime.value = anime
++        recompute()
++    }
++
++    /** Off, Auto, Anime, Sharpen, round and round; returns the new mode. */
++    fun cycle(): DxEnhanceMode {
++        val all = DxEnhanceMode.values()
++        val next = all[(_mode.value.ordinal + 1) % all.size]
++        setMode(next)
++        return next
++    }
++
++    /** libmpv `sharpen` value for the current kind (0 when off). */
++    fun mpvSharpen(): Double = when (_kind.value) {
++        DxEnhanceKind.NONE -> 0.0
++        DxEnhanceKind.SHARPEN -> 0.5
++        DxEnhanceKind.ANIME -> 0.8
++    }
++
++    fun describe(): String {
++        val mode = _mode.value
++        return if (mode == DxEnhanceMode.AUTO) {
++            "Picture enhancement: Auto (${if (_kind.value == DxEnhanceKind.ANIME) "Anime" else "Sharpen"})"
++        } else {
++            "Picture enhancement: ${mode.label}"
++        }
++    }
++}
++
++/**
++ * Anime check for Auto: kitsu, mal, anilist or anidb ids, an anime content type, or an Anime genre on the title's
++ * metadata (loaded if it is not cached yet).
++ */
++internal suspend fun dxLooksLikeAnime(
++    parentMetaType: String,
++    parentMetaId: String,
++    videoId: String?,
++    contentType: String?,
++): Boolean {
++    val prefixes = listOf("kitsu:", "mal:", "anilist:", "anidb:")
++    if (prefixes.any { parentMetaId.startsWith(it, ignoreCase = true) || videoId?.startsWith(it, ignoreCase = true) == true }) return true
++    if (contentType.equals("anime", ignoreCase = true) || parentMetaType.equals("anime", ignoreCase = true)) return true
++    val meta = MetaDetailsRepository.peek(parentMetaType, parentMetaId)
++        ?: runCatching { MetaDetailsRepository.fetch(parentMetaType, parentMetaId) }.getOrNull()
++    return meta?.genres.orEmpty().any { it.equals("Anime", ignoreCase = true) }
++}
++
++/** Short text hint over the picture, shared by the dx.bi player features. */
++internal object DxPlayerHint {
++    private val _hint = MutableStateFlow(0 to "")
++    val hint: StateFlow<Pair<Int, String>> = _hint.asStateFlow()
++
++    fun show(text: String) {
++        _hint.value = (_hint.value.first + 1) to text
++    }
++}
++
++@Composable
++internal fun DxPlayerHintHost() {
++    val hint by DxPlayerHint.hint.collectAsStateWithLifecycle()
++    var visible by remember { mutableStateOf(false) }
++    LaunchedEffect(hint.first) {
++        if (hint.first == 0) return@LaunchedEffect
++        visible = true
++        delay(1_800)
++        visible = false
++    }
++    Box(modifier = Modifier.fillMaxSize().padding(top = 28.dp), contentAlignment = Alignment.TopCenter) {
++        AnimatedVisibility(visible = visible) {
++            Text(
++                text = hint.second,
++                color = Color.White,
++                fontSize = 14.sp,
++                fontWeight = FontWeight.Medium,
++                modifier = Modifier
++                    .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(18.dp))
++                    .padding(horizontal = 16.dp, vertical = 8.dp),
++            )
++        }
++    }
++}
++
++private fun dxCycleEnhance() {
++    DxEnhance.cycle()
++    DxPlayerHint.show(DxEnhance.describe())
++}
++
++/** Header layout button: cycles Off, Auto, Anime, Sharpen. Only shown where the engine can enhance the picture. */
++@Composable
++internal fun DxEnhanceHeaderButton(metrics: PlayerLayoutMetrics) {
++    LaunchedEffect(Unit) { DxEnhance.ensureLoaded() }
++    val available by SmartEnhance.available.collectAsStateWithLifecycle()
++    val enabled by DxEnhance.buttonEnabled.collectAsStateWithLifecycle()
++    val mode by DxEnhance.mode.collectAsStateWithLifecycle()
++    if (!available || !enabled) return
++    PlayerHeaderIconButton(
++        icon = Icons.Rounded.AutoFixHigh,
++        contentDescription = "Picture enhancement",
++        buttonSize = metrics.headerIconSize + 16.dp,
++        iconSize = metrics.headerIconSize,
++        onClick = ::dxCycleEnhance,
++        tint = if (mode != DxEnhanceMode.OFF) MaterialTheme.colorScheme.primary else Color.White,
++    )
++}
++
++/** Toolbar button for the legacy layout. */
++@Composable
++internal fun DxEnhanceToolbarAction() {
++    LaunchedEffect(Unit) { DxEnhance.ensureLoaded() }
++    val available by SmartEnhance.available.collectAsStateWithLifecycle()
++    val enabled by DxEnhance.buttonEnabled.collectAsStateWithLifecycle()
++    val mode by DxEnhance.mode.collectAsStateWithLifecycle()
++    if (!available || !enabled) return
++    IconButton(onClick = ::dxCycleEnhance, modifier = Modifier.size(48.dp)) {
++        Icon(
++            imageVector = Icons.Rounded.AutoFixHigh,
++            contentDescription = "Picture enhancement",
++            tint = if (mode != DxEnhanceMode.OFF) MaterialTheme.colorScheme.primary else Color.White,
++            modifier = Modifier.size(24.dp),
++        )
++    }
++}
++
++/** Chips for the picture panel. */
++@Composable
++internal fun DxEnhanceRow() {
++    LaunchedEffect(Unit) { DxEnhance.ensureLoaded() }
++    val enabled by DxEnhance.buttonEnabled.collectAsStateWithLifecycle()
++    val mode by DxEnhance.mode.collectAsStateWithLifecycle()
++    if (!enabled) return
++    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
++        Text("Enhance", color = Color.White, fontSize = 15.sp)
++        Row(
++            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
++            horizontalArrangement = Arrangement.spacedBy(8.dp),
++        ) {
++            DxEnhanceMode.values().forEach { option ->
++                com.nuvio.app.core.ui.Chip(label = option.label, selected = mode == option, onClick = { DxEnhance.setMode(option) })
++            }
++        }
++        Text(
++            text = "Auto uses Anime for anime and Sharpen for everything else.",
++            color = Color.White.copy(alpha = 0.55f),
++            fontSize = 12.sp,
++        )
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
+index b0e9153d..8357b8c6 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
+@@ -81,6 +81,7 @@ internal fun PlayerToolbar(
+     Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+         Spacer(Modifier.weight(1f))
+         SmartEnhanceToolbarAction()
++        DxEnhanceToolbarAction() // dx.bi picture enhance hook
+         if (onCastClick != null) {
+             PlayerAction(
+                 description = stringResource(Res.string.player_cast),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+index 000462fa..0ca4ff59 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+@@ -476,6 +476,7 @@ private fun PlayerHeader(
+                     verticalAlignment = Alignment.CenterVertically,
+                 ) {
+                     SmartEnhanceHeaderButton(metrics)
++                    DxEnhanceHeaderButton(metrics) // dx.bi picture enhance hook
+                     if (onCastClick != null) {
+                         PlayerHeaderIconButton(
+                             icon = if (castActive) Icons.Rounded.CastConnected else Icons.Rounded.Cast,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEffectsPanels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEffectsPanels.kt
+index a7394f20..b326c20e 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEffectsPanels.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEffectsPanels.kt
+@@ -246,6 +246,7 @@ private fun ColumnScope.PicturePanel(controller: PlayerEngineController?) {
+                 Chip(preset.label, state.preset == preset) { PlayerEffects.setPicture(state.withPreset(preset)) }
+             }
+         }
++        DxEnhanceRow() // dx.bi picture enhance hook
+         SliderRow("Brightness", signed(state.brightness), state.brightness.toFloat(), -30f..30f) { edit(state.copy(brightness = it.roundToInt())) }
+         SliderRow("Contrast", signed(state.contrast), state.contrast.toFloat(), -30f..30f) { edit(state.copy(contrast = it.roundToInt())) }
+         SliderRow("Saturation", signed(state.saturation), state.saturation.toFloat(), -50f..50f) { edit(state.copy(saturation = it.roundToInt())) }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+index 8baf44ec..665d9568 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+@@ -328,7 +328,12 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+         SmartEnhance.ensureLoaded()
+         PlayerEffects.enterTitle(parentMetaId)
+     }
+-    LaunchedEffect(playerController, smartEnhanceOn, pictureState) {
++    val dxEnhanceKind by DxEnhance.kind.collectAsStateWithLifecycle() // dx.bi picture enhance hook
++    LaunchedEffect(parentMetaId, parentMetaType, activeVideoId) {
++        DxEnhance.ensureLoaded()
++        DxEnhance.setAnime(dxLooksLikeAnime(parentMetaType, parentMetaId, activeVideoId, contentType))
++    }
++    LaunchedEffect(playerController, smartEnhanceOn, pictureState, dxEnhanceKind) {
+         val controller = playerController
+         SmartEnhance.available.value = controller?.supportsSmartEnhance() == true
+         controller?.applyPicture(pictureState.copy(smartEnhance = smartEnhanceOn))
+@@ -348,6 +353,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+         PlayerEffects.maybeAutoEnhance(info.videoHeight, info.videoBitrate)
+     }
+     SmartEnhanceBanner()
++    DxPlayerHintHost() // dx.bi player hints hook
+     AnimatedVisibility(
+         visible = (controlsVisible || showParentalGuide) && !playerControlsLocked && !isInPip && !seekPreview.showSyncPanel,
+         enter = fadeIn(),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxEnhanceSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxEnhanceSettings.kt
+new file mode 100644
+index 00000000..90bbf97e
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxEnhanceSettings.kt
+@@ -0,0 +1,42 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.core.ui.Chip
++import com.nuvio.app.features.player.DxEnhance
++import com.nuvio.app.features.player.DxEnhanceMode
++
++/** dx.bi port: Anime and Sharpen picture enhancement. The switch hides the player button and turns the effect off. */
++@Composable
++internal fun DxEnhanceSettingsSection(isTablet: Boolean) {
++    LaunchedEffect(Unit) { DxEnhance.ensureLoaded() }
++    val enabled by DxEnhance.buttonEnabled.collectAsStateWithLifecycle()
++    val mode by DxEnhance.mode.collectAsStateWithLifecycle()
++    SettingsSection(title = "Anime and Sharpen enhance", isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            SettingsSwitchRow(
++                title = "Picture enhance button",
++                description = "Shows the enhance button in the player and the Enhance chips in the picture panel. Off also switches the effect off.",
++                checked = enabled,
++                isTablet = isTablet,
++                onCheckedChange = DxEnhance::setButtonEnabled,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsChipRow(
++                title = "Mode",
++                description = "Auto uses Anime for anime titles and Sharpen for everything else. Anime thins and darkens lines, Sharpen is a light unsharp mask.",
++                isTablet = isTablet,
++            ) {
++                DxEnhanceMode.values().forEach { option ->
++                    Chip(
++                        label = option.label,
++                        selected = mode == option,
++                        onClick = { DxEnhance.setMode(option) },
++                    )
++                }
++            }
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+index 9c0b03d0..fe794ff2 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+@@ -643,6 +643,7 @@ private fun PlaybackSettingsSection(
+         PictureSoundSettingsSection(isTablet = isTablet) // Picture and sound hook
+ 
+         DxSoundSettingsSection(isTablet = isTablet) // dx.bi sound modes hook
++        DxEnhanceSettingsSection(isTablet = isTablet) // dx.bi picture enhance hook
+ 
+         ConnectionFitSettingsSection(isTablet = isTablet) // Nuvio fork: connection-speed fit
+ 

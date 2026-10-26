@@ -1,0 +1,395 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/DxStreamStatsAndroid.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/DxStreamStatsAndroid.kt
+new file mode 100644
+index 00000000..e3688763
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/DxStreamStatsAndroid.kt
+@@ -0,0 +1,119 @@
++package com.nuvio.app.features.player
++
++import android.content.Context
++import android.os.SystemClock
++import androidx.annotation.OptIn
++import androidx.media3.common.C
++import androidx.media3.common.util.UnstableApi
++import androidx.media3.exoplayer.ExoPlayer
++import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
++import java.util.Locale
++import java.util.concurrent.atomic.AtomicLong
++
++internal fun dxFormatRate(bytesPerSecond: Double): String = when {
++    bytesPerSecond >= 1_048_576.0 -> String.format(Locale.US, "%.1f MB/s", bytesPerSecond / 1_048_576.0)
++    bytesPerSecond >= 1024.0 -> String.format(Locale.US, "%.0f KB/s", bytesPerSecond / 1024.0)
++    else -> String.format(Locale.US, "%.0f B/s", bytesPerSecond)
++}
++
++internal fun dxFormatBitrate(bitsPerSecond: Long): String = when {
++    bitsPerSecond >= 1_000_000L -> String.format(Locale.US, "%.1f Mbps", bitsPerSecond / 1_000_000.0)
++    bitsPerSecond > 0L -> String.format(Locale.US, "%d kbps", bitsPerSecond / 1000L)
++    else -> "unknown"
++}
++
++/**
++ * dx.bi stream stats for the ExoPlayer engine: the video and audio Format, the video DecoderCounters, the buffered
++ * position, the bytes the player's own network counter saw in the last second and the shared BandwidthMeter estimate.
++ */
++@OptIn(UnstableApi::class)
++internal class DxExoStats(
++    private val context: Context,
++    private val player: ExoPlayer,
++    private val networkBytes: AtomicLong,
++) {
++    private var lastBytes = networkBytes.get()
++    private var lastAt = SystemClock.elapsedRealtime()
++    private var lastSpeed = 0.0
++
++    fun snapshot(): List<Pair<String, String>> {
++        val now = SystemClock.elapsedRealtime()
++        val bytes = networkBytes.get()
++        val elapsed = now - lastAt
++        if (elapsed >= 700L) {
++            lastSpeed = ((bytes - lastBytes).coerceAtLeast(0L)) * 1000.0 / elapsed
++            lastBytes = bytes
++            lastAt = now
++        }
++        val rows = ArrayList<Pair<String, String>>()
++        val video = player.videoFormat
++        if (video != null) {
++            val fps = video.frameRate.takeIf { it > 0f }?.let { String.format(Locale.US, " @ %.2f fps", it) }.orEmpty()
++            rows += "Resolution" to "${video.width}x${video.height}$fps"
++            val codec = CustomDefaultTrackNameProvider.formatNameFromMime(video.sampleMimeType) ?: "video"
++            rows += "Video codec" to listOfNotNull(codec, video.codecs?.takeIf { it.isNotBlank() }).joinToString(" ")
++            val hdr = video.hdrFormats()
++            rows += "HDR" to if (hdr.isEmpty()) "SDR" else hdr.joinToString(" + ")
++            val bitrate = video.averageBitrate.takeIf { it > 0 } ?: video.bitrate
++            rows += "Video bitrate" to dxFormatBitrate(bitrate.toLong().coerceAtLeast(0L))
++        } else {
++            rows += "Resolution" to "waiting for video"
++        }
++        val audio = player.audioFormat
++        if (audio != null) {
++            val codec = CustomDefaultTrackNameProvider.formatNameFromMime(audio.sampleMimeType) ?: "audio"
++            val channels = audio.channelCount.takeIf { it > 0 }?.let { " ${it}ch" }.orEmpty()
++            val rate = audio.sampleRate.takeIf { it > 0 }?.let { " ${it / 1000} kHz" }.orEmpty()
++            rows += "Audio" to codec + channels + rate
++        }
++        val bufferedMs = (player.bufferedPosition - player.currentPosition).coerceAtLeast(0L)
++        rows += "Buffer" to String.format(Locale.US, "%.1f s", bufferedMs / 1000.0)
++        val counters = player.videoDecoderCounters
++        if (counters != null) {
++            counters.ensureUpdated()
++            val dropped = counters.droppedBufferCount + counters.skippedOutputBufferCount
++            rows += "Dropped frames" to "$dropped of ${counters.renderedOutputBufferCount + dropped}"
++        }
++        val estimate = runCatching { DefaultBandwidthMeter.getSingletonInstance(context).bitrateEstimate }.getOrDefault(C.LENGTH_UNSET.toLong())
++        val estimateText = if (estimate > 0L) " (est. ${dxFormatBitrate(estimate)})" else ""
++        rows += "Download" to dxFormatRate(lastSpeed) + estimateText
++        return rows
++    }
++}
++
++/** The same table from libmpv properties; each property may be missing on some builds. */
++internal fun dxMpvStats(property: (String) -> String?): List<Pair<String, String>> {
++    val rows = ArrayList<Pair<String, String>>()
++    val width = property("video-params/w")?.toIntOrNull()
++    val height = property("video-params/h")?.toIntOrNull()
++    val fps = property("estimated-vf-fps")?.toDoubleOrNull() ?: property("container-fps")?.toDoubleOrNull()
++    if (width != null && height != null) {
++        rows += "Resolution" to "${width}x$height" + (fps?.let { String.format(Locale.US, " @ %.2f fps", it) } ?: "")
++    } else {
++        rows += "Resolution" to "waiting for video"
++    }
++    property("current-tracks/video/codec")?.let { codec ->
++        val decoder = property("hwdec-current")?.takeIf { it.isNotBlank() && it != "no" }
++        rows += "Video codec" to codec.uppercase() + (decoder?.let { " ($it)" } ?: " (software)")
++    }
++    val hdr = buildList {
++        if (!property("current-tracks/video/dolby-vision-profile").isNullOrBlank()) add("DV")
++        when (property("video-params/gamma")) {
++            "pq" -> add("HDR10")
++            "hlg" -> add("HLG")
++        }
++    }
++    rows += "HDR" to if (hdr.isEmpty()) "SDR" else hdr.joinToString(" + ")
++    property("video-bitrate")?.toDoubleOrNull()?.let { rows += "Video bitrate" to dxFormatBitrate(it.toLong()) }
++    property("current-tracks/audio/codec")?.let { codec ->
++        val channels = property("audio-params/channel-count")?.toIntOrNull()?.let { " ${it}ch" }.orEmpty()
++        rows += "Audio" to codec.uppercase() + channels
++    }
++    property("demuxer-cache-duration")?.toDoubleOrNull()?.let {
++        rows += "Buffer" to String.format(Locale.US, "%.1f s", it)
++    }
++    val dropped = (property("frame-drop-count")?.toLongOrNull() ?: 0L) + (property("decoder-frame-drop-count")?.toLongOrNull() ?: 0L)
++    rows += "Dropped frames" to dropped.toString()
++    property("cache-speed")?.toDoubleOrNull()?.let { rows += "Download" to dxFormatRate(it) }
++    return rows
++}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+index 8e877164..d6f908da 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+@@ -565,6 +565,7 @@ private fun ExoPlayerSurface(
+     val exoAudioFx = remember(exoPlayer) { ExoAudioEffects(exoPlayer) } // Player effects hook
+     val exoPictureFx = remember(exoPlayer) { ExoPictureEffects(exoPlayer) } // Player effects hook
+     ExoDxSoundEffect(exoPlayer) // dx.bi sound modes hook
++    val dxStats = remember(exoPlayer) { DxExoStats(context, exoPlayer, networkBytesCounter) } // dx.bi stream stats hook
+     DisposableEffect(exoAudioFx, exoPictureFx) { // Player effects hook
+         onDispose {
+             exoAudioFx.release()
+@@ -975,6 +976,8 @@ private fun ExoPlayerSurface(
+                     exoAudioFx.apply(state)
+                 }
+ 
++                override suspend fun dxStreamStats(): List<Pair<String, String>> = dxStats.snapshot() // dx.bi stream stats hook
++
+                 override suspend fun getMediaInfo(): PlayerMediaInfo {
+                     val video = exoPlayer.videoFormat
+                     val audio = exoPlayer.audioFormat
+@@ -1743,6 +1746,13 @@ private class NuvioLibmpvView(
+         }
+     }
+ 
++    suspend fun dxStats(): List<Pair<String, String>> { // dx.bi stream stats hook
++        if (released.get()) return emptyList()
++        return withContext(mpvDispatcher) {
++            if (released.get()) emptyList() else runCatching { dxMpvStats(mpv::getPropertyString) }.getOrDefault(emptyList())
++        }
++    }
++
+     suspend fun mediaInfo(): PlayerMediaInfo {
+         if (released.get()) return PlayerMediaInfo()
+         return withContext(mpvDispatcher) {
+@@ -1895,6 +1905,8 @@ private class NuvioLibmpvView(
+ 
+             override suspend fun getMediaInfo(): PlayerMediaInfo = mediaInfo()
+ 
++            override suspend fun dxStreamStats(): List<Pair<String, String>> = dxStats() // dx.bi stream stats hook
++
+             override fun setPlaybackSpeed(speed: Float) {
+                 executeMpv {
+                     mpv.setPropertyDouble("speed", speed.coerceIn(0.25f, 4f).toDouble())
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxStreamStats.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxStreamStats.kt
+new file mode 100644
+index 00000000..4f013fd0
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxStreamStats.kt
+@@ -0,0 +1,128 @@
++package com.nuvio.app.features.player
++
++import androidx.compose.foundation.background
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.rounded.BarChart
++import androidx.compose.material3.Icon
++import androidx.compose.material3.IconButton
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.text.font.FontFamily
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.core.storage.AppFileCache
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++
++/** dx.bi port: the stream stats overlay. The button switch lives in Settings, the overlay itself opens from the player. */
++internal object DxStreamStats {
++    private const val PATH = "settings/dx_stats"
++    private val _buttonEnabled = MutableStateFlow(true)
++    val buttonEnabled: StateFlow<Boolean> = _buttonEnabled.asStateFlow()
++    private val _visible = MutableStateFlow(false)
++    val visible: StateFlow<Boolean> = _visible.asStateFlow()
++    private var loaded = false
++
++    fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        _buttonEnabled.value = AppFileCache.read(PATH)?.trim() != "0"
++    }
++
++    fun setButtonEnabled(enabled: Boolean) {
++        ensureLoaded()
++        _buttonEnabled.value = enabled
++        if (!enabled) _visible.value = false
++        runCatching { AppFileCache.write(PATH, if (enabled) "1" else "0") }
++    }
++
++    fun toggle() {
++        _visible.value = !_visible.value
++    }
++}
++
++@Composable
++internal fun DxStatsHeaderButton(metrics: PlayerLayoutMetrics) {
++    LaunchedEffect(Unit) { DxStreamStats.ensureLoaded() }
++    val enabled by DxStreamStats.buttonEnabled.collectAsStateWithLifecycle()
++    val visible by DxStreamStats.visible.collectAsStateWithLifecycle()
++    if (!enabled) return
++    PlayerHeaderIconButton(
++        icon = Icons.Rounded.BarChart,
++        contentDescription = "Stream stats",
++        buttonSize = metrics.headerIconSize + 16.dp,
++        iconSize = metrics.headerIconSize,
++        onClick = DxStreamStats::toggle,
++        tint = if (visible) MaterialTheme.colorScheme.primary else Color.White,
++    )
++}
++
++@Composable
++internal fun DxStatsToolbarAction() {
++    LaunchedEffect(Unit) { DxStreamStats.ensureLoaded() }
++    val enabled by DxStreamStats.buttonEnabled.collectAsStateWithLifecycle()
++    val visible by DxStreamStats.visible.collectAsStateWithLifecycle()
++    if (!enabled) return
++    IconButton(onClick = DxStreamStats::toggle, modifier = Modifier.size(48.dp)) {
++        Icon(
++            imageVector = Icons.Rounded.BarChart,
++            contentDescription = "Stream stats",
++            tint = if (visible) MaterialTheme.colorScheme.primary else Color.White,
++            modifier = Modifier.size(24.dp),
++        )
++    }
++}
++
++/** Refreshes once a second while it is open; nothing runs while it is closed. */
++@Composable
++internal fun PlayerScreenRuntime.DxStatsOverlay() {
++    val enabled by DxStreamStats.buttonEnabled.collectAsStateWithLifecycle()
++    val visible by DxStreamStats.visible.collectAsStateWithLifecycle()
++    var rows by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
++    val controller = playerController
++    LaunchedEffect(visible, enabled, controller) {
++        if (!visible || !enabled || controller == null) return@LaunchedEffect
++        while (true) {
++            rows = runCatching { controller.dxStreamStats() }.getOrDefault(emptyList())
++            delay(1_000)
++        }
++    }
++    if (!visible || !enabled) return
++    Box(modifier = Modifier.fillMaxSize().padding(start = 16.dp, top = 72.dp), contentAlignment = Alignment.TopStart) {
++        Column(
++            modifier = Modifier
++                .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(10.dp))
++                .padding(horizontal = 12.dp, vertical = 8.dp),
++        ) {
++            Text("Stream stats", color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(bottom = 4.dp))
++            if (rows.isEmpty()) {
++                Text("No stats from this player", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
++            }
++            rows.forEach { (label, value) ->
++                Row {
++                    Text("$label  ", color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
++                    Text(value, color = Color.White, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
++                }
++            }
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
+index 8357b8c6..9ba1b2c2 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
+@@ -82,6 +82,7 @@ internal fun PlayerToolbar(
+         Spacer(Modifier.weight(1f))
+         SmartEnhanceToolbarAction()
+         DxEnhanceToolbarAction() // dx.bi picture enhance hook
++        DxStatsToolbarAction() // dx.bi stream stats hook
+         if (onCastClick != null) {
+             PlayerAction(
+                 description = stringResource(Res.string.player_cast),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+index 0ca4ff59..9fa2cfbe 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+@@ -477,6 +477,7 @@ private fun PlayerHeader(
+                 ) {
+                     SmartEnhanceHeaderButton(metrics)
+                     DxEnhanceHeaderButton(metrics) // dx.bi picture enhance hook
++                    DxStatsHeaderButton(metrics) // dx.bi stream stats hook
+                     if (onCastClick != null) {
+                         PlayerHeaderIconButton(
+                             icon = if (castActive) Icons.Rounded.CastConnected else Icons.Rounded.Cast,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
+index 23be8ebd..e8a83fd3 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
+@@ -50,6 +50,8 @@ interface PlayerEngineController {
+     fun updateNowPlayingMetadata(info: PlayerNowPlayingInfo) {}
+     fun clearNowPlayingInfo() {}
+     suspend fun getMediaInfo(): PlayerMediaInfo = PlayerMediaInfo()
++    /** dx.bi stream stats: label and value rows for the stats overlay (empty where an engine has none). */
++    suspend fun dxStreamStats(): List<Pair<String, String>> = emptyList()
+ }
+ 
+ internal fun sanitizePlaybackHeaders(headers: Map<String, String>?): Map<String, String> {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+index efec777e..c1e0fabd 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+@@ -360,6 +360,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+     SmartEnhanceBanner()
+     DxPlayerHintHost() // dx.bi player hints hook
+     DxSecondSubtitleOverlay() // dx.bi second subtitle hook
++    DxStatsOverlay() // dx.bi stream stats hook
+     AnimatedVisibility(
+         visible = (controlsVisible || showParentalGuide) && !playerControlsLocked && !isInPip && !seekPreview.showSyncPanel,
+         enter = fadeIn(),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxStatsSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxStatsSettings.kt
+new file mode 100644
+index 00000000..a2e8330d
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxStatsSettings.kt
+@@ -0,0 +1,25 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.features.player.DxStreamStats
++
++/** dx.bi port: stream stats overlay button in the player. */
++@Composable
++internal fun DxStatsSettingsSection(isTablet: Boolean) {
++    LaunchedEffect(Unit) { DxStreamStats.ensureLoaded() }
++    val enabled by DxStreamStats.buttonEnabled.collectAsStateWithLifecycle()
++    SettingsSection(title = "Stream stats", isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            SettingsSwitchRow(
++                title = "Stream stats button",
++                description = "Adds a button to the player that shows resolution, codecs, HDR, bitrate, buffer, dropped frames and download speed, refreshed every second.",
++                checked = enabled,
++                isTablet = isTablet,
++                onCheckedChange = DxStreamStats::setButtonEnabled,
++            )
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+index 08827007..69c3b040 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+@@ -646,6 +646,7 @@ private fun PlaybackSettingsSection(
+         DxEnhanceSettingsSection(isTablet = isTablet) // dx.bi picture enhance hook
+         DxRememberSettingsSection(isTablet = isTablet) // dx.bi remember hook
+         DxSecondSubtitleSettingsSection(isTablet = isTablet) // dx.bi second subtitle hook
++        DxStatsSettingsSection(isTablet = isTablet) // dx.bi stream stats hook
+ 
+         ConnectionFitSettingsSection(isTablet = isTablet) // Nuvio fork: connection-speed fit
+ 

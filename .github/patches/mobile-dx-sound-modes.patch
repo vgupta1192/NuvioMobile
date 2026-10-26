@@ -1,0 +1,404 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/DxSoundModesAndroid.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/DxSoundModesAndroid.kt
+new file mode 100644
+index 00000000..4e9cc1ff
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/DxSoundModesAndroid.kt
+@@ -0,0 +1,146 @@
++package com.nuvio.app.features.player
++
++import android.media.audiofx.AudioEffect
++import android.media.audiofx.DynamicsProcessing
++import android.media.audiofx.LoudnessEnhancer
++import android.os.Build
++import android.util.Log
++import androidx.annotation.RequiresApi
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.DisposableEffect
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.remember
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import androidx.media3.common.C
++import androidx.media3.common.Player
++import androidx.media3.exoplayer.ExoPlayer
++
++private const val DX_SOUND_TAG = "NuvioDxSound"
++
++/** Applies Dialogue boost / Night mode to ExoPlayer and keeps it in step with the saved choice. */
++@Composable
++internal fun ExoDxSoundEffect(player: ExoPlayer) {
++    DxSound.ensureLoaded()
++    val mode by DxSound.mode.collectAsStateWithLifecycle()
++    val rowEnabled by DxSound.rowEnabled.collectAsStateWithLifecycle()
++    val fx = remember(player) { ExoDxSound(player) }
++    DisposableEffect(fx) { onDispose { fx.release() } }
++    LaunchedEffect(fx, mode, rowEnabled) {
++        fx.apply(if (rowEnabled) mode else DxSoundMode.NORMAL)
++    }
++}
++
++/**
++ * DynamicsProcessing (API 28+) on the player's audio session: a three-band-edge pre-equaliser (lows down, speech
++ * presence up), one compressor band with make-up gain and, for Night mode, a limiter. Where it is missing or fails,
++ * a LoudnessEnhancer adds a small gain instead. Nothing is created while the mode is Normal.
++ */
++private class ExoDxSound(private val player: ExoPlayer) : Player.Listener {
++    private var mode = DxSoundMode.NORMAL
++    private var processing: AudioEffect? = null
++    private var enhancer: LoudnessEnhancer? = null
++    private var effectSession = C.AUDIO_SESSION_ID_UNSET
++    private var failedSession = C.AUDIO_SESSION_ID_UNSET
++    private var released = false
++
++    init {
++        player.addListener(this)
++    }
++
++    fun apply(next: DxSoundMode) {
++        mode = next
++        refresh()
++    }
++
++    override fun onAudioSessionIdChanged(audioSessionId: Int) {
++        refresh()
++    }
++
++    private fun refresh() {
++        if (released) return
++        if (mode == DxSoundMode.NORMAL) {
++            releaseEffects()
++            return
++        }
++        val session = player.audioSessionId
++        if (session == C.AUDIO_SESSION_ID_UNSET || session == failedSession) return
++        if (session != effectSession) releaseEffects()
++        effectSession = session
++        if (Build.VERSION.SDK_INT >= 28 && enhancer == null && tryProcessing(session)) return
++        applyFallback(session)
++    }
++
++    @RequiresApi(28)
++    private fun tryProcessing(session: Int): Boolean {
++        val effect = (processing as? DynamicsProcessing) ?: createProcessing(session)?.also { processing = it }
++            ?: return false
++        if (runCatching { configure(effect, mode) }.isSuccess) return true
++        releaseEffects()
++        effectSession = session
++        return false
++    }
++
++    @RequiresApi(28)
++    private fun createProcessing(session: Int): DynamicsProcessing? = runCatching {
++        val config = DynamicsProcessing.Config.Builder(
++            DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION,
++            2,
++            true, 4,
++            true, 1,
++            false, 0,
++            true,
++        ).build()
++        DynamicsProcessing(0, session, config)
++    }.onFailure { Log.w(DX_SOUND_TAG, "DynamicsProcessing unavailable: ${it.message}") }.getOrNull()
++
++    @RequiresApi(28)
++    private fun configure(effect: DynamicsProcessing, mode: DxSoundMode) {
++        // Pre-equaliser bands run up to their cutoff: lows, low-mid, speech presence, highs.
++        effect.setPreEqBandAllChannelsTo(0, DynamicsProcessing.EqBand(true, 200f, mode.lowDb))
++        effect.setPreEqBandAllChannelsTo(1, DynamicsProcessing.EqBand(true, 1500f, 0f))
++        effect.setPreEqBandAllChannelsTo(2, DynamicsProcessing.EqBand(true, 4000f, mode.presenceDb))
++        effect.setPreEqBandAllChannelsTo(3, DynamicsProcessing.EqBand(true, 20000f, 0f))
++        effect.setMbcBandAllChannelsTo(
++            0,
++            DynamicsProcessing.MbcBand(
++                true, 20000f, 10f, 250f, mode.ratio, mode.thresholdDb, 6f, -90f, 1f, 0f, mode.makeupDb,
++            ),
++        )
++        effect.setLimiterAllChannelsTo(
++            DynamicsProcessing.Limiter(mode.limiter, 0, 5f, 100f, 10f, -1f, 0f),
++        )
++        effect.setEnabled(true)
++    }
++
++    private fun applyFallback(session: Int) {
++        if (enhancer == null) {
++            enhancer = runCatching { LoudnessEnhancer(session) }
++                .onFailure {
++                    failedSession = session
++                    Log.w(DX_SOUND_TAG, "LoudnessEnhancer unavailable: ${it.message}")
++                }
++                .getOrNull() ?: return
++        }
++        enhancer?.let { effect ->
++            runCatching {
++                effect.setTargetGain(if (mode == DxSoundMode.NIGHT) 600 else 300)
++                effect.setEnabled(true)
++            }.onFailure { Log.w(DX_SOUND_TAG, "LoudnessEnhancer failed: ${it.message}") }
++        }
++    }
++
++    private fun releaseEffects() {
++        processing?.let { runCatching { it.setEnabled(false) }; runCatching { it.release() } }
++        enhancer?.let { runCatching { it.setEnabled(false) }; runCatching { it.release() } }
++        processing = null
++        enhancer = null
++        effectSession = C.AUDIO_SESSION_ID_UNSET
++    }
++
++    fun release() {
++        released = true
++        player.removeListener(this)
++        releaseEffects()
++    }
++}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+index 75011edf..04ef76bd 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+@@ -564,6 +564,7 @@ private fun ExoPlayerSurface(
+     com.nuvio.app.features.player.volumeboost.ExoVolumeBoostEffect(exoPlayer) // Volume boost hook
+     val exoAudioFx = remember(exoPlayer) { ExoAudioEffects(exoPlayer) } // Player effects hook
+     val exoPictureFx = remember(exoPlayer) { ExoPictureEffects(exoPlayer) } // Player effects hook
++    ExoDxSoundEffect(exoPlayer) // dx.bi sound modes hook
+     DisposableEffect(exoAudioFx, exoPictureFx) { // Player effects hook
+         onDispose {
+             exoAudioFx.release()
+@@ -1939,7 +1940,7 @@ private class NuvioLibmpvView(
+ 
+             // Equaliser bands and the dialogue compressor run as one ffmpeg filter chain; an empty string clears it.
+             override fun applyAudioEffects(state: AudioFxState) {
+-                val chain = state.mpvFilterChain()
++                val chain = DxSound.mergeMpvChain(state.mpvFilterChain()) // dx.bi sound modes hook
+                 executeMpv { runCatching { mpv.setPropertyString("af", chain) } }
+             }
+ 
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxSoundModes.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxSoundModes.kt
+new file mode 100644
+index 00000000..d6a06f73
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxSoundModes.kt
+@@ -0,0 +1,137 @@
++package com.nuvio.app.features.player
++
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.horizontalScroll
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.core.storage.AppFileCache
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++
++/**
++ * dx.bi port: Dialogue boost and Night mode. Dialogue boost lowers booming lows, lifts the speech range and
++ * gently compresses; Night mode also evens out loud and quiet scenes more strongly. The numbers follow dx.bi's
++ * own presets (low shelf at 200 Hz, speech presence at 2.5 kHz, compressor threshold, ratio and make-up gain).
++ * ExoPlayer applies them with Android's DynamicsProcessing (API 28+) or a LoudnessEnhancer fallback; libmpv gets
++ * an ffmpeg filter chain.
++ */
++enum class DxSoundMode(
++    val id: String,
++    val label: String,
++    val hint: String,
++    /** Low shelf gain at 200 Hz, in dB. */
++    val lowDb: Float,
++    /** Speech presence gain around 2.5 kHz, in dB. */
++    val presenceDb: Float,
++    val thresholdDb: Float,
++    val ratio: Float,
++    val makeupDb: Float,
++    val limiter: Boolean,
++) {
++    NORMAL("normal", "Normal", "As the stream comes.", 0f, 0f, 0f, 1f, 0f, false),
++    DIALOGUE(
++        "dialogue", "Dialogue boost", "Raises voices and softens booming lows.",
++        -3f, 5f, -26f, 3f, 3f, false,
++    ),
++    NIGHT(
++        "night", "Night mode", "Evens out loud and quiet scenes so you can keep the volume down.",
++        -6f, 4f, -42f, 8f, 7.5f, true,
++    );
++
++    /** ffmpeg filter chain for libmpv, the same one dx.bi uses; empty for [NORMAL]. */
++    fun mpvFilters(): String = when (this) {
++        NORMAL -> ""
++        DIALOGUE -> "lowshelf=f=200:g=-3,equalizer=f=2500:t=q:w=1:g=5,acompressor=threshold=-26dB:ratio=3:makeup=1.4"
++        NIGHT -> "lowshelf=f=200:g=-6,equalizer=f=2500:t=q:w=1:g=4,acompressor=threshold=-42dB:ratio=8:makeup=2.4,alimiter=limit=0.95"
++    }
++
++    companion object {
++        fun fromId(id: String?): DxSoundMode = values().firstOrNull { it.id == id } ?: NORMAL
++    }
++}
++
++internal object DxSound {
++    private const val PATH = "settings/dx_sound_modes"
++    private val _mode = MutableStateFlow(DxSoundMode.NORMAL)
++    val mode: StateFlow<DxSoundMode> = _mode.asStateFlow()
++
++    /** Feature switch: when off the player panel hides the row and the effect is not applied. */
++    private val _rowEnabled = MutableStateFlow(true)
++    val rowEnabled: StateFlow<Boolean> = _rowEnabled.asStateFlow()
++
++    /** What the player applies right now: the chosen mode, or [DxSoundMode.NORMAL] while the row is switched off. */
++    val effective: DxSoundMode get() = if (_rowEnabled.value) _mode.value else DxSoundMode.NORMAL
++
++    private var loaded = false
++
++    fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        val values = HashMap<String, String>()
++        AppFileCache.read(PATH)?.lineSequence()?.forEach { line ->
++            val at = line.indexOf('=')
++            if (at > 0) values[line.substring(0, at)] = line.substring(at + 1)
++        }
++        _mode.value = DxSoundMode.fromId(values["mode"])
++        _rowEnabled.value = values["row"] != "0"
++    }
++
++    private fun save() {
++        val text = "mode=${_mode.value.id}\nrow=${if (_rowEnabled.value) 1 else 0}"
++        runCatching { AppFileCache.write(PATH, text) }
++    }
++
++    fun setMode(mode: DxSoundMode) {
++        ensureLoaded()
++        _mode.value = mode
++        save()
++    }
++
++    fun setRowEnabled(enabled: Boolean) {
++        ensureLoaded()
++        _rowEnabled.value = enabled
++        save()
++    }
++
++    /** Joins the mode's filters onto an mpv `af` value built elsewhere (`lavfi=[...]` or empty). */
++    fun mergeMpvChain(base: String, mode: DxSoundMode = effective): String {
++        val extra = mode.mpvFilters()
++        if (extra.isEmpty()) return base
++        val inner = base.removePrefix("lavfi=[").removeSuffix("]").takeIf { base.startsWith("lavfi=[") && base.endsWith("]") }
++        return if (inner.isNullOrEmpty()) "lavfi=[$extra]" else "lavfi=[$inner,$extra]"
++    }
++}
++
++/** Dialogue boost and Night mode chips, shown in the player's audio effect panel. */
++@Composable
++internal fun DxSoundModeRow() {
++    LaunchedEffect(Unit) { DxSound.ensureLoaded() }
++    val enabled by DxSound.rowEnabled.collectAsStateWithLifecycle()
++    val mode by DxSound.mode.collectAsStateWithLifecycle()
++    if (!enabled) return
++    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
++        Text("Voice and night", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
++        Row(
++            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
++            horizontalArrangement = Arrangement.spacedBy(8.dp),
++        ) {
++            DxSoundMode.values().forEach { option ->
++                com.nuvio.app.core.ui.Chip(label = option.label, selected = mode == option, onClick = { DxSound.setMode(option) })
++            }
++        }
++        Text(text = mode.hint, color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEffectsPanels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEffectsPanels.kt
+index 0e488015..a7394f20 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEffectsPanels.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEffectsPanels.kt
+@@ -141,6 +141,7 @@ private fun ColumnScope.AudioEffectPanel() {
+                     fontSize = 13.sp,
+                 )
+             }
++            DxSoundModeRow() // dx.bi sound modes hook
+             VolumeBoosterRow()
+         } else {
+             EqualizerTab(state)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+index db860756..8baf44ec 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+@@ -333,7 +333,9 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+         SmartEnhance.available.value = controller?.supportsSmartEnhance() == true
+         controller?.applyPicture(pictureState.copy(smartEnhance = smartEnhanceOn))
+     }
+-    LaunchedEffect(playerController, audioState) {
++    val dxSoundMode by DxSound.mode.collectAsStateWithLifecycle() // dx.bi sound modes hook
++    val dxSoundRow by DxSound.rowEnabled.collectAsStateWithLifecycle()
++    LaunchedEffect(playerController, audioState, dxSoundMode, dxSoundRow) {
+         val controller = playerController
+         PlayerEffects.audioAvailable.value = controller?.supportsAudioEffects() == true
+         controller?.applyAudioEffects(audioState)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxSoundSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxSoundSettings.kt
+new file mode 100644
+index 00000000..fe7e5e1f
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxSoundSettings.kt
+@@ -0,0 +1,42 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.core.ui.Chip
++import com.nuvio.app.features.player.DxSound
++import com.nuvio.app.features.player.DxSoundMode
++
++/** dx.bi port: Dialogue boost and Night mode. The switch hides the row in the player and turns the effect off. */
++@Composable
++internal fun DxSoundSettingsSection(isTablet: Boolean) {
++    LaunchedEffect(Unit) { DxSound.ensureLoaded() }
++    val enabled by DxSound.rowEnabled.collectAsStateWithLifecycle()
++    val mode by DxSound.mode.collectAsStateWithLifecycle()
++    SettingsSection(title = "Dialogue boost & Night mode", isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            SettingsSwitchRow(
++                title = "Dialogue boost and Night mode",
++                description = "Shows the voice and night chips in the player's audio panel. Off also switches the effect off.",
++                checked = enabled,
++                isTablet = isTablet,
++                onCheckedChange = DxSound::setRowEnabled,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsChipRow(
++                title = "Mode",
++                description = "Dialogue boost lifts voices and softens booming lows. Night mode also evens out loud and quiet scenes.",
++                isTablet = isTablet,
++            ) {
++                DxSoundMode.values().forEach { option ->
++                    Chip(
++                        label = option.label,
++                        selected = mode == option,
++                        onClick = { DxSound.setMode(option) },
++                    )
++                }
++            }
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+index c8a990e2..9c0b03d0 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+@@ -642,6 +642,8 @@ private fun PlaybackSettingsSection(
+ 
+         PictureSoundSettingsSection(isTablet = isTablet) // Picture and sound hook
+ 
++        DxSoundSettingsSection(isTablet = isTablet) // dx.bi sound modes hook
++
+         ConnectionFitSettingsSection(isTablet = isTablet) // Nuvio fork: connection-speed fit
+ 
+         SubtitleFontSettingsSection(isTablet = isTablet) // Nuvio fork: custom subtitle font
