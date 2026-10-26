@@ -1,0 +1,874 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitles.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitles.kt
+index 6426f118..33c5c607 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitles.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/GeneratedSubtitles.kt
+@@ -73,6 +73,9 @@ object GeneratedSubtitles {
+     /** Set by a platform that can generate subtitles (Android). */
+     var supported: Boolean = false
+ 
++    /** False where only the online entry exists (iOS): the on-device entry is not offered. */
++    var onDeviceSupported: Boolean = true
++
+     /** Model download/delete, registered by the platform. */
+     var modelActions: GeneratedSubtitleModelActions? = null
+ 
+@@ -193,7 +196,7 @@ object GeneratedSubtitles {
+         if (!supported) return subtitles
+         val real = subtitles.filterNot { isGenerated(it.url) }
+         val online = if (_groqKey.value.isNotBlank()) listOf(onlineEntry) else emptyList()
+-        return real + online + entry
++        return real + online + if (onDeviceSupported) listOf(entry) else emptyList()
+     }
+ 
+     private const val KEY_AUTO = "auto_generate"
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AutoSyncPlaybackSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AutoSyncPlaybackSettings.kt
+index da2ae653..2d376098 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AutoSyncPlaybackSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AutoSyncPlaybackSettings.kt
+@@ -133,7 +133,7 @@ internal fun AutoSyncPlaybackSettingsRows(
+             AutoSyncPreferencesRepository.setSyncToleranceMs(next)
+         },
+     )
+-    if (!isIos) { // iOS: no debug report yet; audio sync and generated subtitles follow in a later patch
++    if (!isIos) { // iOS: no debug report yet
+         SettingsGroupDivider(isTablet = isTablet)
+         SettingsSwitchRow(
+             title = stringResource(Res.string.settings_playback_auto_sync_debug_logs),
+@@ -146,8 +146,8 @@ internal fun AutoSyncPlaybackSettingsRows(
+             onCheckedChange = AutoSyncPreferencesRepository::setDebugLogsEnabled,
+         )
+         AudioSyncFallbackSettingsRows(isTablet = isTablet, enabled = enabled && preferredSubtitleAutoSyncOnStart)
+-        GeneratedSubtitleSettingsRows(isTablet = isTablet) // Generated subtitles hook
+     }
++    GeneratedSubtitleSettingsRows(isTablet = isTablet) // Generated subtitles hook
+ }
+ 
+ /** The audio sync fallback: it runs only after AutoSync, so it follows AutoSync's switch. */
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/GeneratedSubtitleSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/GeneratedSubtitleSettings.kt
+index eab5b597..08bdf9e3 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/GeneratedSubtitleSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/GeneratedSubtitleSettings.kt
+@@ -53,12 +53,16 @@ internal fun GeneratedSubtitleSettingsRows(isTablet: Boolean) {
+     SettingsGroupDivider(isTablet = isTablet)
+     SettingsNavigationRow(
+         title = "Spoken language for generated subtitles",
+-        description = GeneratedSubtitles.spokenLanguageLabel(spokenLanguage) +
++        description = GeneratedSubtitles.spokenLanguageLabel(spokenLanguage) + if (GeneratedSubtitles.onDeviceSupported) {
+             ". Whisper small (375 MB) recognises and translates every language to English, and detects " +
+-            "the language when the audio track has no tag. English audio uses SenseVoice (237 MB).",
++                "the language when the audio track has no tag. English audio uses SenseVoice (237 MB)."
++        } else {
++            ". Told to Groq Whisper as a hint; Auto lets it detect the language."
++        },
+         isTablet = isTablet,
+         onClick = { pickLanguage = true },
+     )
++    if (GeneratedSubtitles.onDeviceSupported) {
+     SettingsGroupDivider(isTablet = isTablet)
+     SettingsSwitchRow(
+         title = "Higher-quality speech model",
+@@ -68,6 +72,7 @@ internal fun GeneratedSubtitleSettingsRows(isTablet: Boolean) {
+         isTablet = isTablet,
+         onCheckedChange = GeneratedSubtitles::setHighQuality,
+     )
++    }
+     SettingsGroupDivider(isTablet = isTablet)
+     SettingsNavigationRow(
+         title = "Translate with DeepL",
+@@ -94,6 +99,7 @@ internal fun GeneratedSubtitleSettingsRows(isTablet: Boolean) {
+         isTablet = isTablet,
+         onClick = { editGroqKey = true },
+     )
++    if (GeneratedSubtitles.onDeviceSupported) {
+     SettingsGroupDivider(isTablet = isTablet)
+     SettingsSwitchRow(
+         title = "Faster models (lower quality)",
+@@ -105,7 +111,8 @@ internal fun GeneratedSubtitleSettingsRows(isTablet: Boolean) {
+         isTablet = isTablet,
+         onCheckedChange = GeneratedSubtitles::setFastAsianModel,
+     )
+-    if (models.isNotEmpty()) {
++    }
++    if (GeneratedSubtitles.onDeviceSupported && models.isNotEmpty()) {
+         SettingsGroupDivider(isTablet = isTablet)
+         SettingsNavigationRow(
+             title = "Delete subtitle generation models",
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/autosync/AutoSyncLibmpvCoordinator.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/autosync/AutoSyncLibmpvCoordinator.ios.kt
+index 2efa493a..235a9a2e 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/autosync/AutoSyncLibmpvCoordinator.ios.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/autosync/AutoSyncLibmpvCoordinator.ios.kt
+@@ -46,6 +46,8 @@ internal fun rememberLibmpvAutoSyncCoordinator(
+     sourceHeaders: Map<String, String>,
+     externalSubtitles: List<StreamSubtitle>,
+     preferredSubtitleLanguage: String?,
++    getPositionMs: () -> Long = { 0L },
++    getDurationMs: () -> Long = { 0L },
+ ): LibmpvAutoSyncCoordinator {
+     val latestExternalSubtitles = rememberUpdatedState(externalSubtitles)
+     val latestPreferredLanguage = rememberUpdatedState(preferredSubtitleLanguage)
+@@ -58,6 +60,8 @@ internal fun rememberLibmpvAutoSyncCoordinator(
+                 latestExternalSubtitles.value.firstOrNull { it.url == subtitleUrl }?.headers.orEmpty()
+             },
+             getPreferredLanguage = { latestPreferredLanguage.value },
++            getPositionMs = getPositionMs,
++            getDurationMs = getDurationMs,
+         )
+     }
+     DisposableEffect(coordinator) {
+@@ -77,8 +81,11 @@ internal class LibmpvAutoSyncCoordinator(
+     private val sourceHeaders: Map<String, String>,
+     private val getSubtitleHeaders: (String) -> Map<String, String>,
+     private val getPreferredLanguage: () -> String?,
++    private val getPositionMs: () -> Long = { 0L },
++    private val getDurationMs: () -> Long = { 0L },
+ ) {
+     private var job: Job? = null
++    private var generated: GeneratedSubtitleSessionIos? = null
+     private var operationToken = 0L
+     private var candidates: List<AutoSyncSubtitleCandidate> = emptyList()
+     private var appliedListener: ((subtitleUrl: String, delayMs: Int) -> Unit)? = null
+@@ -97,7 +104,25 @@ internal class LibmpvAutoSyncCoordinator(
+         appliedListener = listener
+     }
+ 
++    fun startGenerated(
++        url: String,
++        replaceExternalSubtitle: (replacedUrl: String, path: String) -> Unit,
++    ) {
++        cancel()
++        generated = GeneratedSubtitleSessionIos(
++            scope = scope,
++            generatedUrl = url,
++            sourceUrl = sourceUrl,
++            headersJson = com.nuvio.app.features.player.encodePlaybackHeadersForBridge(sourceHeaders),
++            positionMs = getPositionMs,
++            durationMs = getDurationMs,
++            replaceExternalSubtitle = replaceExternalSubtitle,
++        ).also { it.start() }
++    }
++
+     fun cancel() {
++        generated?.stop()
++        generated = null
+         operationToken++
+         job?.cancel()
+         job = null
+@@ -252,7 +277,7 @@ internal class LibmpvAutoSyncCoordinator(
+     }
+ }
+ 
+-private fun srtTimestamp(ms: Long): String {
++internal fun srtTimestamp(ms: Long): String {
+     val safe = ms.coerceAtLeast(0L)
+     val h = safe / 3_600_000L
+     val m = (safe % 3_600_000L) / 60_000L
+@@ -264,7 +289,7 @@ private fun srtTimestamp(ms: Long): String {
+ 
+ /** Writes [text] as UTF-8 in the temp subtitles dir; older files with [prefix] are removed. */
+ @OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
+-private fun writeSubtitleFile(prefix: String, text: String, extension: String): String? {
++internal fun writeSubtitleFile(prefix: String, text: String, extension: String): String? {
+     val manager = NSFileManager.defaultManager
+     val dir = NSTemporaryDirectory().trimEnd('/') + "/subtitles"
+     manager.createDirectoryAtPath(dir, withIntermediateDirectories = true, attributes = null, error = null)
+@@ -312,7 +337,11 @@ private class AutoSyncLibmpvEngineController<T>(
+     ) = coordinator.setAppliedListener(listener)
+ 
+     private fun passthrough(url: String): Boolean {
+-        if (GeneratedSubtitles.isGenerated(url) || YouTubeCaptions.isCaptionUrl(url)) {
++        if (GeneratedSubtitles.isGenerated(url)) {
++            coordinator.startGenerated(url, replaceExternalSubtitle)
++            return true
++        }
++        if (YouTubeCaptions.isCaptionUrl(url)) {
+             coordinator.cancel()
+             base.setSubtitleUri(url)
+             return true
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/autosync/GeneratedSubtitleSession.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/autosync/GeneratedSubtitleSession.ios.kt
+new file mode 100644
+index 00000000..ada7da89
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/autosync/GeneratedSubtitleSession.ios.kt
+@@ -0,0 +1,533 @@
++package com.nuvio.app.features.autosync
++
++import co.touchlab.kermit.Logger
++import com.nuvio.app.features.addons.httpRequestRaw
++import com.nuvio.app.features.autosync.bubble.AutoSyncBubbleKind
++import com.nuvio.app.features.autosync.bubble.AutoSyncBubbleToasts
++import com.nuvio.app.features.player.GeneratedSubtitles
++import com.nuvio.app.features.player.GeneratedUsage
++import com.nuvio.app.features.player.NuvioPcmExtractorRegistry
++import com.nuvio.app.features.streams.epochMs
++import kotlinx.cinterop.BetaInteropApi
++import kotlinx.cinterop.ExperimentalForeignApi
++import kotlinx.cinterop.readBytes
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.Job
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.ensureActive
++import kotlinx.coroutines.isActive
++import kotlinx.coroutines.launch
++import kotlinx.coroutines.withContext
++import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.JsonArray
++import kotlinx.serialization.json.JsonObject
++import kotlinx.serialization.json.JsonPrimitive
++import kotlinx.serialization.json.buildJsonArray
++import kotlinx.serialization.json.buildJsonObject
++import kotlinx.serialization.json.contentOrNull
++import kotlinx.serialization.json.doubleOrNull
++import kotlinx.serialization.json.jsonArray
++import kotlinx.serialization.json.jsonObject
++import kotlinx.serialization.json.jsonPrimitive
++import platform.Foundation.NSData
++
++private const val TAG = "GeneratedSubs"
++
++/** A line Groq heard, in seconds from the start of the uploaded audio. */
++internal class GroqLine(val startSec: Double, val endSec: Double, val text: String, val language: String)
++
++internal class GeneratedFailure(message: String, val permanent: Boolean, val retryAfterMs: Long = 0L) : Exception(message)
++
++/** Whisper large-v3 on Groq (the user's own API key): a WAV of one window comes back as timed lines. */
++internal class GroqWhisperClientIos(private val key: String) {
++    suspend fun recognize(wav: ByteArray, seconds: Double, translate: Boolean, language: String): List<GroqLine> {
++        var attempt = 0
++        while (true) {
++            try {
++                return request(wav, seconds, translate, language)
++            } catch (failure: GeneratedFailure) {
++                if (failure.permanent || ++attempt >= RETRIES) throw failure
++                delay(maxOf(failure.retryAfterMs, RETRY_DELAY_MS * attempt))
++            }
++        }
++    }
++
++    private suspend fun request(wav: ByteArray, seconds: Double, translate: Boolean, language: String): List<GroqLine> {
++        val boundary = "nuvio-" + epochMs().toString(16) + wav.size.toString(16)
++        val chunks = ArrayList<ByteArray>()
++        fun field(name: String, value: String) {
++            chunks += "--$boundary\r\nContent-Disposition: form-data; name=\"$name\"\r\n\r\n$value\r\n".encodeToByteArray()
++        }
++        field("model", MODEL)
++        field("response_format", "verbose_json")
++        field("temperature", "0")
++        if (!translate && language.isNotBlank()) field("language", language)
++        chunks += (
++            "--$boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"speech.wav\"\r\n" +
++                "Content-Type: audio/wav\r\n\r\n"
++            ).encodeToByteArray()
++        chunks += wav
++        chunks += "\r\n--$boundary--\r\n".encodeToByteArray()
++        val body = ByteArray(chunks.sumOf { it.size })
++        var at = 0
++        for (chunk in chunks) {
++            chunk.copyInto(body, at)
++            at += chunk.size
++        }
++        val response = try {
++            httpRequestRaw(
++                method = "POST",
++                url = if (translate) TRANSLATIONS else TRANSCRIPTIONS,
++                headers = mapOf(
++                    "Authorization" to "Bearer $key",
++                    "Content-Type" to "multipart/form-data; boundary=$boundary",
++                ),
++                body = "",
++                followRedirects = true,
++                maxResponseBodyBytes = 8_000_000,
++                bodyBytes = body,
++            )
++        } catch (cancelled: CancellationException) {
++            throw cancelled
++        } catch (error: Exception) {
++            throw GeneratedFailure("Groq unreachable: ${error.message}", permanent = false)
++        }
++        GeneratedUsage.recordGroq(
++            epochMs(),
++            seconds,
++            response.headers["x-ratelimit-remaining-requests"]?.toIntOrNull(),
++            response.headers["x-ratelimit-limit-requests"]?.toIntOrNull(),
++            success = response.status == 200,
++        )
++        when (response.status) {
++            200 -> Unit
++            401, 403 -> throw GeneratedFailure("Groq key rejected", permanent = true)
++            413 -> throw GeneratedFailure("Groq refused the audio size", permanent = false)
++            429 -> {
++                val wait = response.headers["retry-after"]?.toDoubleOrNull()?.let { (it * 1_000).toLong() } ?: 20_000L
++                throw GeneratedFailure("Groq rate limit reached", permanent = false, retryAfterMs = wait.coerceAtMost(120_000L))
++            }
++            else -> throw GeneratedFailure("Groq HTTP ${response.status}", permanent = response.status in 400..499)
++        }
++        return try {
++            val json = Json.parseToJsonElement(response.body).jsonObject
++            val language = json["language"]?.jsonPrimitive?.contentOrNull.orEmpty().lowercase()
++            val segments = json["segments"] as? JsonArray ?: return emptyList()
++            segments.map { it.jsonObject }
++                .filter { (it["no_speech_prob"]?.jsonPrimitive?.doubleOrNull ?: 0.0) < NO_SPEECH_LIMIT }
++                .map {
++                    GroqLine(
++                        startSec = it["start"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
++                        endSec = it["end"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
++                        text = it["text"]?.jsonPrimitive?.contentOrNull.orEmpty().trim(),
++                        language = language,
++                    )
++                }
++                .filter { it.text.isNotEmpty() }
++        } catch (error: Exception) {
++            throw GeneratedFailure("Groq answered something unexpected", permanent = false)
++        }
++    }
++
++    private companion object {
++        const val MODEL = "whisper-large-v3"
++        const val TRANSLATIONS = "https://api.groq.com/openai/v1/audio/translations"
++        const val TRANSCRIPTIONS = "https://api.groq.com/openai/v1/audio/transcriptions"
++        const val RETRIES = 3
++        const val RETRY_DELAY_MS = 3_000L
++        const val NO_SPEECH_LIMIT = 0.6
++    }
++}
++
++/** Translates lines to English with DeepL (the user's own API key), a window of lines at a time. */
++internal class DeepLTranslatorIos(private val key: String) {
++    private val endpoint = if (key.endsWith(":fx")) "https://api-free.deepl.com/v2/translate" else "https://api.deepl.com/v2/translate"
++
++    suspend fun translate(lines: List<String>, source: String?, context: String?): List<String> {
++        var attempt = 0
++        while (true) {
++            try {
++                return request(lines, source, context)
++            } catch (failure: GeneratedFailure) {
++                if (failure.permanent || ++attempt >= 3) throw failure
++                delay(2_000L * attempt)
++            }
++        }
++    }
++
++    private suspend fun request(lines: List<String>, source: String?, context: String?): List<String> {
++        val payload = buildJsonObject {
++            put("text", buildJsonArray { lines.forEach { add(JsonPrimitive(it)) } })
++            put("target_lang", JsonPrimitive("EN-US"))
++            if (source != null) put("source_lang", JsonPrimitive(source))
++            if (!context.isNullOrBlank()) put("context", JsonPrimitive(context))
++            put("preserve_formatting", JsonPrimitive(true))
++        }
++        val response = try {
++            httpRequestRaw(
++                method = "POST",
++                url = endpoint,
++                headers = mapOf("Authorization" to "DeepL-Auth-Key $key", "Content-Type" to "application/json"),
++                body = payload.toString(),
++            )
++        } catch (cancelled: CancellationException) {
++            throw cancelled
++        } catch (error: Exception) {
++            throw GeneratedFailure("DeepL unreachable: ${error.message}", permanent = false)
++        }
++        when (val code = response.status) {
++            200 -> Unit
++            403 -> throw GeneratedFailure("DeepL key rejected", permanent = true)
++            456 -> throw GeneratedFailure("DeepL monthly character limit reached", permanent = true)
++            400 -> throw GeneratedFailure("DeepL refused the request (language?)", permanent = true)
++            else -> throw GeneratedFailure("DeepL HTTP $code", permanent = false)
++        }
++        val translations = try {
++            Json.parseToJsonElement(response.body).jsonObject["translations"]!!.jsonArray
++        } catch (error: Exception) {
++            throw GeneratedFailure("DeepL answered something unexpected", permanent = false)
++        }
++        if (translations.size != lines.size) {
++            throw GeneratedFailure("DeepL answered ${translations.size} of ${lines.size} lines", permanent = false)
++        }
++        return translations.map { (it as JsonObject)["text"]?.jsonPrimitive?.contentOrNull.orEmpty().trim() }
++    }
++
++    companion object {
++        fun sourceCode(language: String?): String? = when (val code = language?.lowercase()) {
++            null, "", "auto" -> null
++            "yue", "cmn" -> "ZH"
++            "fil" -> "TL"
++            "iw" -> "HE"
++            "in" -> "ID"
++            else -> code.substringBefore('-').uppercase()
++        }
++    }
++}
++
++private class Cue(val startMs: Long, var endMs: Long, val text: String)
++
++/**
++ * Generates English subtitles ahead of the playhead on iOS: a headless libmpv reads a window of the
++ * stream's audio as WAV, Groq Whisper large-v3 hears it (translating to English itself, or writing it
++ * down for DeepL), and the lines are loaded into libmpv as a subtitle file that is replaced as new
++ * lines arrive. Only the online variant exists on iOS.
++ */
++internal class GeneratedSubtitleSessionIos(
++    private val scope: CoroutineScope,
++    private val generatedUrl: String,
++    private val sourceUrl: String,
++    private val headersJson: String?,
++    private val positionMs: () -> Long,
++    private val durationMs: () -> Long,
++    private val replaceExternalSubtitle: (replacedUrl: String, path: String) -> Unit,
++) {
++    private var job: Job? = null
++    private val cues = ArrayList<Cue>()
++    private val covered = ArrayList<LongArray>()
++    private var lastRef = generatedUrl
++    private var statusText: String? = null
++    private var lastBubbleText: String? = null
++    private var deeplContext = ""
++    private var deeplOff = false
++
++    fun start() {
++        stop()
++        job = scope.launch { run() }
++    }
++
++    fun stop() {
++        job?.cancel()
++        job = null
++    }
++
++    private fun bubble(kind: AutoSyncBubbleKind, text: String) {
++        if (text == lastBubbleText && kind == AutoSyncBubbleKind.Working) return
++        lastBubbleText = text
++        runCatching { AutoSyncBubbleToasts.post(kind, "Generated subtitles • $text") }
++    }
++
++    private fun status(text: String, failed: Boolean = false) {
++        statusText = text
++        bubble(if (failed) AutoSyncBubbleKind.Failure else AutoSyncBubbleKind.Working, text)
++    }
++
++    private suspend fun run() {
++        val groqKey = GeneratedSubtitles.groqKey.value.trim()
++        if (groqKey.isEmpty() || generatedUrl != GeneratedSubtitles.ONLINE_URL) {
++            status("Add a Groq key in Settings to generate subtitles", failed = true)
++            commit(positionMs())
++            return
++        }
++        val extractor = NuvioPcmExtractorRegistry.extractor
++        if (extractor == null) {
++            status("Couldn't read this stream's audio for generated subtitles", failed = true)
++            commit(positionMs())
++            return
++        }
++        val groq = GroqWhisperClientIos(groqKey)
++        val deepl = GeneratedSubtitles.deeplKey.value.trim().takeIf { it.isNotEmpty() }?.let(::DeepLTranslatorIos)
++        val hint = GeneratedSubtitles.spokenLanguage.value.takeUnless { it == GeneratedSubtitles.AUTO }.orEmpty()
++        Logger.i(TAG) { "started, language=${hint.ifEmpty { "auto" }} translation=${if (deepl != null) "DeepL" else "Groq"}" }
++        bubble(AutoSyncBubbleKind.Working, "Starting subtitles · online (Groq Whisper large-v3)")
++        status("Generating subtitles from the audio…")
++        commit(positionMs())
++        var failures = 0
++        try {
++            while (scope.isActive) {
++                val position = positionMs()
++                val duration = durationMs()
++                val from = nextUncovered(position)
++                if (from >= position + LOOKAHEAD_MS || (duration > 0 && from >= duration)) {
++                    if (duration > 0 && isFullyCovered(duration) && statusText != null) {
++                        statusText = null
++                        commit(position)
++                        bubble(AutoSyncBubbleKind.Success, "Subtitles ready • ${cues.size} lines")
++                    }
++                    delay(500L)
++                    continue
++                }
++                val window = if (from - position < FIRST_WINDOW_MS) FIRST_WINDOW_MS else WINDOW_MS
++                val to = if (duration > 0) minOf(from + window, duration) else from + window
++                val wav = withContext(Dispatchers.Default) { extractor.extractWav(sourceUrl, headersJson, from, to - from) }
++                ensureActive()
++                if (wav == null) {
++                    if (++failures >= MAX_FAILURES) {
++                        status("Couldn't read this stream's audio for generated subtitles", failed = true)
++                        commit(positionMs())
++                        return
++                    }
++                    delay(2_000L)
++                    continue
++                }
++                val bytes = wav.toByteArray()
++                val seconds = (to - from) / 1_000.0
++                val added = try {
++                    generate(groq, deepl.takeUnless { deeplOff }, bytes, seconds, hint, from)
++                } catch (failure: GeneratedFailure) {
++                    if (failure.permanent) {
++                        status("${failure.message}: check the Groq key in Settings", failed = true)
++                        commit(positionMs())
++                        return
++                    }
++                    status("${failure.message}, retrying…")
++                    delay(maxOf(failure.retryAfterMs, 5_000L))
++                    continue
++                }
++                failures = 0
++                addCovered(from, to)
++                Logger.i(TAG) { "${from / 1_000}-${to / 1_000}s -> $added lines" }
++                if (added > 0 || statusText != null) {
++                    if (cues.isNotEmpty()) statusText = null
++                    commit(positionMs())
++                }
++                if (duration > 0 && isFullyCovered(duration)) {
++                    bubble(AutoSyncBubbleKind.Success, "Subtitles ready • ${cues.size} lines")
++                } else {
++                    bubble(AutoSyncBubbleKind.Working, "Generating subtitles · read ${clock(from)} to ${clock(to)} · ${cues.size} lines")
++                }
++            }
++        } catch (cancelled: CancellationException) {
++            throw cancelled
++        } catch (error: Throwable) {
++            Logger.w(TAG, error) { "generation stopped" }
++            status("Generated subtitles stopped: ${error.message ?: "unknown error"}", failed = true)
++            commit(positionMs())
++        }
++    }
++
++    private suspend fun generate(
++        groq: GroqWhisperClientIos,
++        deepl: DeepLTranslatorIos?,
++        wav: ByteArray,
++        seconds: Double,
++        hint: String,
++        windowStartMs: Long,
++    ): Int {
++        var heard = groq.recognize(wav, seconds, translate = deepl == null, language = hint)
++        var english: List<String>? = null
++        if (deepl != null) {
++            val texts = heard.map { cleanText(it.text) ?: "" }
++            try {
++                english = deepl.translate(texts, DeepLTranslatorIos.sourceCode(whisperCode(heard.firstOrNull()?.language.orEmpty()).ifEmpty { hint }), deeplContext)
++                deeplContext = texts.filter { it.isNotEmpty() }.takeLast(DEEPL_CONTEXT_LINES).joinToString("\n")
++            } catch (failure: GeneratedFailure) {
++                if (failure.permanent) {
++                    deeplOff = true
++                    status("${failure.message}: Groq translates instead")
++                }
++                heard = groq.recognize(wav, seconds, translate = true, language = hint)
++            }
++        }
++        var added = 0
++        heard.forEachIndexed { index, line ->
++            val text = (english?.getOrNull(index) ?: line.text).let(::cleanText) ?: return@forEachIndexed
++            if (isWhisperFiller(text) || !looksEnglish(text)) return@forEachIndexed
++            val startMs = windowStartMs + (line.startSec * 1_000).toLong()
++            val endMs = maxOf(windowStartMs + (line.endSec * 1_000).toLong(), startMs + MIN_CUE_MS)
++            addLine(startMs, endMs, text)
++            added++
++        }
++        return added
++    }
++
++    private fun addLine(startMs: Long, endMs: Long, text: String) {
++        val pieces = splitForScreen(text)
++        val totalChars = pieces.sumOf { it.length }.coerceAtLeast(1)
++        val span = (endMs - startMs).coerceAtLeast(MIN_CUE_MS)
++        var at = startMs
++        val added = pieces.mapIndexed { index, piece ->
++            val length = (span * piece.length / totalChars).coerceAtLeast(MIN_CUE_MS / pieces.size)
++            Cue(at, at + length + if (index == pieces.lastIndex) LINGER_MS else 0L, piece).also { at += length }
++        }
++        cues.removeAll { existing -> added.any { it.startMs == existing.startMs } }
++        cues += added
++        cues.sortBy { it.startMs }
++        for (index in 0 until cues.size - 1) {
++            val next = cues[index + 1].startMs
++            if (cues[index].endMs > next && next > cues[index].startMs) cues[index].endMs = next
++        }
++    }
++
++    /** Writes the lines (plus a status line at the playhead while nothing covers it) and swaps the track. */
++    private fun commit(positionMs: Long) {
++        val list = ArrayList<Cue>(cues)
++        val status = statusText
++        if (status != null && list.none { it.startMs - 1_500L < positionMs && it.endMs > positionMs }) {
++            list += Cue((positionMs - 200L).coerceAtLeast(0L), positionMs + STATUS_SHOW_MS, status)
++            list.sortBy { it.startMs }
++        }
++        if (list.isEmpty()) list += Cue(0L, 100L, "…")
++        val srt = buildString {
++            list.forEachIndexed { index, cue ->
++                append(index + 1).append('\n')
++                append(srtTimestamp(cue.startMs)).append(" --> ").append(srtTimestamp(maxOf(cue.endMs, cue.startMs + 1L))).append('\n')
++                append(cue.text).append("\n\n")
++            }
++        }
++        val path = writeSubtitleFile(prefix = "generated_", text = srt, extension = "srt") ?: return
++        if (path == lastRef) return
++        replaceExternalSubtitle(lastRef, path)
++        lastRef = path
++    }
++
++    private fun nextUncovered(positionMs: Long): Long {
++        var at = (positionMs - 2_000L).coerceAtLeast(0L)
++        var moved = true
++        while (moved) {
++            moved = false
++            for (range in covered) {
++                if (at >= range[0] && at < range[1]) {
++                    at = range[1]
++                    moved = true
++                }
++            }
++        }
++        return at
++    }
++
++    private fun addCovered(fromMs: Long, toMs: Long) {
++        covered += longArrayOf(fromMs, toMs)
++        covered.sortBy { it[0] }
++        val merged = ArrayList<LongArray>()
++        for (range in covered) {
++            val last = merged.lastOrNull()
++            if (last != null && range[0] <= last[1]) last[1] = maxOf(last[1], range[1]) else merged += range.copyOf()
++        }
++        covered.clear()
++        covered += merged
++    }
++
++    private fun isFullyCovered(durationMs: Long): Boolean = nextUncovered(0L + 2_000L) >= durationMs
++
++    private fun clock(ms: Long): String {
++        val total = ms / 1_000L
++        val h = total / 3_600L
++        val m = (total % 3_600L) / 60L
++        val s = total % 60L
++        return if (h > 0) "$h:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}" else "$m:${s.toString().padStart(2, '0')}"
++    }
++
++    private companion object {
++        const val LOOKAHEAD_MS = 120_000L
++        const val FIRST_WINDOW_MS = 20_000L
++        const val WINDOW_MS = 60_000L
++        const val MAX_FAILURES = 4
++        const val MIN_CUE_MS = 1_200L
++        const val LINGER_MS = 400L
++        const val MAX_LINE_CHARS = 42
++        const val STATUS_SHOW_MS = 2_500L
++        const val DEEPL_CONTEXT_LINES = 4
++
++        val WHISPER_FILLERS = setOf(
++            "thank you", "thanks", "thank you very much", "thanks for watching", "thank you for watching",
++            "you", "bye", "okay", "ok", "please subscribe", "subscribe", "music", "applause", "laughter",
++            "subtitles by the amara.org community", "so", "oh", "hmm", "uh", "um",
++            "ご視聴ありがとうございました", "ありがとうございました", "字幕", "谢谢观看", "謝謝觀看",
++            "感谢观看", "시청해주셔서 감사합니다", "구독과 좋아요", "धन्यवाद", "शुक्रिया",
++        )
++
++        fun isWhisperFiller(text: String): Boolean {
++            val plain = text.lowercase().filter { it.isLetterOrDigit() || it == ' ' }.trim()
++                .split(' ').filter { it.isNotEmpty() }.joinToString(" ")
++            val trimmed = text.trim()
++            return plain.isEmpty() || plain in WHISPER_FILLERS ||
++                (trimmed.startsWith("[") && trimmed.endsWith("]")) ||
++                (trimmed.startsWith("(") && trimmed.endsWith(")")) ||
++                text.contains('♪')
++        }
++
++        fun whisperCode(name: String): String = when (name.lowercase()) {
++            "japanese" -> "ja"; "chinese" -> "zh"; "cantonese" -> "yue"; "korean" -> "ko"; "hindi" -> "hi"
++            "urdu" -> "ur"; "bengali" -> "bn"; "tamil" -> "ta"; "telugu" -> "te"; "malayalam" -> "ml"
++            "kannada" -> "kn"; "marathi" -> "mr"; "gujarati" -> "gu"; "punjabi" -> "pa"; "thai" -> "th"
++            "indonesian" -> "id"; "malay" -> "ms"; "tagalog" -> "tl"; "vietnamese" -> "vi"; "turkish" -> "tr"
++            "arabic" -> "ar"; "persian" -> "fa"; "russian" -> "ru"; "ukrainian" -> "uk"; "polish" -> "pl"
++            "spanish" -> "es"; "portuguese" -> "pt"; "french" -> "fr"; "german" -> "de"; "italian" -> "it"
++            "dutch" -> "nl"; "swedish" -> "sv"; "greek" -> "el"; "hebrew" -> "he"; "english" -> "en"
++            else -> name.takeIf { it.length in 2..3 }.orEmpty()
++        }
++
++        fun looksEnglish(text: String): Boolean {
++            var letters = 0
++            var latin = 0
++            for (char in text) {
++                if (!char.isLetter()) continue
++                letters++
++                if (char.code < 0x250) latin++
++            }
++            return letters > 0 && latin * 10 >= letters * 8
++        }
++
++        fun cleanText(text: String): String? {
++            val trimmed = text.replace(Regex("<\\|[^|]*\\|>"), "").replace(Regex("<[A-Za-z_-]{1,12}>"), "").trim()
++            return trimmed.takeIf { value -> value.any { it.isLetterOrDigit() } }
++        }
++
++        fun splitForScreen(text: String): List<String> {
++            val words = text.split(Regex("\\s+")).filter { it.isNotEmpty() }
++            if (words.isEmpty()) return listOf(text)
++            val lines = ArrayList<String>()
++            val line = StringBuilder()
++            for (word in words) {
++                if (line.isNotEmpty() && line.length + 1 + word.length > MAX_LINE_CHARS) {
++                    lines += line.toString()
++                    line.setLength(0)
++                }
++                if (line.isNotEmpty()) line.append(' ')
++                line.append(word)
++            }
++            if (line.isNotEmpty()) lines += line.toString()
++            return lines.chunked(2) { it.joinToString("\n") }
++        }
++    }
++}
++
++@OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
++private fun NSData.toByteArray(): ByteArray {
++    val size = length.toInt()
++    if (size == 0) return ByteArray(0)
++    return bytes!!.readBytes(size)
++}
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/IosFeaturePersistence.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/IosFeaturePersistence.kt
+index 82ed7558..fc52c559 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/IosFeaturePersistence.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/IosFeaturePersistence.kt
+@@ -41,6 +41,12 @@ internal fun installIosFeaturePersistence() {
+         loadSyncToleranceMs = { if (defaults.objectForKey("nuvio_auto_sync_tolerance_ms") != null) defaults.integerForKey("nuvio_auto_sync_tolerance_ms").toInt() else null },
+         saveSyncToleranceMs = { defaults.setInteger(it.toLong(), forKey = "nuvio_auto_sync_tolerance_ms") },
+     )
++    GeneratedSubtitles.supported = true
++    GeneratedSubtitles.onDeviceSupported = false
++    GeneratedSubtitles.installPersistence(
++        load = { defaults.stringForKey("nuvio_generated_$it") },
++        save = { key, value -> defaults.setObject(value, forKey = "nuvio_generated_$key") },
++    )
+     SyncedSubtitles.installStore(
+         load = { name -> readSyncedSubtitleFile(name) },
+         save = { name, value -> writeSyncedSubtitleFile(name, value) },
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerBridge.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerBridge.kt
+index f64d1a9f..3f9f8193 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerBridge.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerBridge.kt
+@@ -125,3 +125,19 @@ object NuvioPlayerBridgeFactory {
+ interface NuvioPlayerBridgeCreator {
+     fun createBridge(): NuvioPlayerBridge
+ }
++
++/**
++ * Reads a stretch of a stream's audio without playing it. Swift implements this with a second,
++ * headless libmpv that writes 16 kHz mono 16-bit PCM.
++ */
++interface NuvioPcmExtractor {
++    /**
++     * Blocks until [durationMs] of audio from [startMs] of [url] is written; returns a WAV file
++     * (16 kHz, mono, signed 16-bit), or null when the audio could not be read.
++     */
++    fun extractWav(url: String, headersJson: String?, startMs: Long, durationMs: Long): NSData?
++}
++
++object NuvioPcmExtractorRegistry {
++    var extractor: NuvioPcmExtractor? = null
++}
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerEngine.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerEngine.ios.kt
+index aaab2b0b..c8f16234 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerEngine.ios.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerEngine.ios.kt
+@@ -102,6 +102,8 @@ actual fun PlatformPlayerSurface(
+         externalSubtitles = externalSubtitles,
+         preferredSubtitleLanguage = playerSettings.preferredSubtitleLanguage
+             .takeIf { it != SubtitleLanguageOption.NONE },
++        getPositionMs = { bridge.getPositionMs() },
++        getDurationMs = { bridge.getDurationMs() },
+     )
+ 
+     val controller = remember(bridge) {
+@@ -616,7 +618,7 @@ private fun encodeExternalSubtitlesForBridge(subtitles: List<com.nuvio.app.featu
+     }.getOrNull()
+ }
+ 
+-private fun encodePlaybackHeadersForBridge(headers: Map<String, String>): String? {
++internal fun encodePlaybackHeadersForBridge(headers: Map<String, String>): String? {
+     val sanitized = sanitizePlaybackHeaders(headers)
+     if (sanitized.isEmpty()) {
+         return null
+diff --git a/iosApp/iosApp/Player/MPVPlayerBridge.swift b/iosApp/iosApp/Player/MPVPlayerBridge.swift
+index d9c56d03..1d0ffd5c 100644
+--- a/iosApp/iosApp/Player/MPVPlayerBridge.swift
++++ b/iosApp/iosApp/Player/MPVPlayerBridge.swift
+@@ -1564,5 +1564,81 @@ final class MPVPlayerBridgeCreator: NSObject, NuvioPlayerBridgeCreator {
+ enum NuvioPlayerRegistration {
+     static func register() {
+         NuvioPlayerBridgeFactory.shared.registerFactory(creator: MPVPlayerBridgeCreator())
++        NuvioPcmExtractorRegistry.shared.extractor = MPVPcmExtractor()
++    }
++}
++
++// MARK: - Headless audio extractor (generated subtitles)
++
++/// Decodes a stretch of a stream's audio with a second libmpv that has no video output and writes
++/// 16 kHz mono signed 16-bit PCM (as a WAV file) through the `pcm` audio output, faster than real time.
++final class MPVPcmExtractor: NSObject, NuvioPcmExtractor {
++    private let timeoutSeconds: TimeInterval = 150
++
++    func extractWav(url: String, headersJson: String?, startMs: Int64, durationMs: Int64) -> Data? {
++        guard durationMs > 0, let ctx = mpv_create() else { return nil }
++        let path = NSTemporaryDirectory() + "pcm_\(UUID().uuidString).wav"
++        defer { try? FileManager.default.removeItem(atPath: path) }
++
++        func option(_ name: String, _ value: String) { _ = mpv_set_option_string(ctx, name, value) }
++        option("config", "no")
++        option("load-scripts", "no")
++        option("ytdl", "no")
++        option("vo", "null")
++        option("vid", "no")
++        option("sid", "no")
++        option("ao", "pcm")
++        option("ao-pcm-file", path)
++        option("ao-pcm-waveheader", "yes")
++        option("audio-format", "s16")
++        option("audio-samplerate", "16000")
++        option("audio-channels", "mono")
++        option("network-timeout", "20")
++        option("cache", "no")
++        option("start", String(format: "%.3f", Double(startMs) / 1000.0))
++        option("length", String(format: "%.3f", Double(durationMs) / 1000.0))
++        if let headers = Self.serializedHeaders(headersJson) { option("http-header-fields", headers) }
++        guard mpv_initialize(ctx) >= 0 else {
++            mpv_terminate_destroy(ctx)
++            return nil
++        }
++
++        var cargs: [UnsafePointer<CChar>?] = ["loadfile", url, "replace", nil as String?]
++            .map { $0.flatMap { UnsafePointer<CChar>(strdup($0)) } }
++        let started = mpv_command(ctx, &cargs) >= 0
++        for ptr in cargs where ptr != nil { free(UnsafeMutablePointer(mutating: ptr!)) }
++        if started {
++            let deadline = Date().addingTimeInterval(timeoutSeconds)
++            waiting: while Date() < deadline {
++                guard let event = mpv_wait_event(ctx, 1.0) else { continue }
++                switch event.pointee.event_id {
++                case MPV_EVENT_END_FILE, MPV_EVENT_SHUTDOWN:
++                    break waiting
++                default:
++                    break
++                }
++            }
++        }
++        mpv_terminate_destroy(ctx)
++
++        guard let data = FileManager.default.contents(atPath: path), data.count > 44 else { return nil }
++        return data
++    }
++
++    private static func serializedHeaders(_ headersJson: String?) -> String? {
++        guard
++            let headersJson,
++            let data = headersJson.data(using: .utf8),
++            let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
++        else { return nil }
++        let pairs = raw.compactMap { key, value -> String? in
++            guard let text = value as? String else { return nil }
++            let name = key.trimmingCharacters(in: .whitespacesAndNewlines)
++            let content = text.trimmingCharacters(in: .whitespacesAndNewlines)
++            guard !name.isEmpty, !content.isEmpty, name.caseInsensitiveCompare("Range") != .orderedSame else { return nil }
++            let escaped = content.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: ",", with: "\\,")
++            return "\(name): \(escaped)"
++        }
++        return pairs.isEmpty ? nil : pairs.sorted().joined(separator: ",")
+     }
+ }

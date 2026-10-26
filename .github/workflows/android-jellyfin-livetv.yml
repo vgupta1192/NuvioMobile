@@ -490,6 +490,7 @@ jobs:
           apply_required ios-runtime-features
           apply_required ios-player-extras
           apply_required ios-autosync
+          apply_required ios-audio-subs
           git diff --stat | tail -1
 
       - name: Create local.properties (self-hosted backend)
