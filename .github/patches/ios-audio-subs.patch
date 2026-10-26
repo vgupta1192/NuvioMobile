@@ -186,10 +186,10 @@ index 2efa493a..235a9a2e 100644
              return true
 diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/autosync/GeneratedSubtitleSession.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/autosync/GeneratedSubtitleSession.ios.kt
 new file mode 100644
-index 00000000..ada7da89
+index 00000000..9685db0b
 --- /dev/null
 +++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/autosync/GeneratedSubtitleSession.ios.kt
-@@ -0,0 +1,533 @@
+@@ -0,0 +1,534 @@
 +package com.nuvio.app.features.autosync
 +
 +import co.touchlab.kermit.Logger
@@ -207,6 +207,7 @@ index 00000000..ada7da89
 +import kotlinx.coroutines.CoroutineScope
 +import kotlinx.coroutines.Dispatchers
 +import kotlinx.coroutines.Job
++import kotlinx.coroutines.currentCoroutineContext
 +import kotlinx.coroutines.delay
 +import kotlinx.coroutines.ensureActive
 +import kotlinx.coroutines.isActive
@@ -484,7 +485,7 @@ index 00000000..ada7da89
 +                val window = if (from - position < FIRST_WINDOW_MS) FIRST_WINDOW_MS else WINDOW_MS
 +                val to = if (duration > 0) minOf(from + window, duration) else from + window
 +                val wav = withContext(Dispatchers.Default) { extractor.extractWav(sourceUrl, headersJson, from, to - from) }
-+                ensureActive()
++                currentCoroutineContext().ensureActive()
 +                if (wav == null) {
 +                    if (++failures >= MAX_FAILURES) {
 +                        status("Couldn't read this stream's audio for generated subtitles", failed = true)
