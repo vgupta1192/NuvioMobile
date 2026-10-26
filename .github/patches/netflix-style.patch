@@ -1,0 +1,152 @@
+diff --git a/composeApp/src/commonMain/composeResources/values/strings_netflix_style.xml b/composeApp/src/commonMain/composeResources/values/strings_netflix_style.xml
+new file mode 100644
+index 00000000..3101c0e3
+--- /dev/null
++++ b/composeApp/src/commonMain/composeResources/values/strings_netflix_style.xml
+@@ -0,0 +1,6 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <string name="settings_netflix_style_section">Netflix style</string>
++    <string name="settings_netflix_style_title">Netflix style</string>
++    <string name="settings_netflix_style_description">Wide Continue Watching cards with progress bars and a muted hero trailer on detail pages. Turn off to restore your previous settings.</string>
++</resources>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/HeroTrailerOptions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/HeroTrailerOptions.kt
+index 1a038c96..73756fab 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/HeroTrailerOptions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/HeroTrailerOptions.kt
+@@ -43,6 +43,10 @@ object HeroTrailerOptions {
+         update(current().copy(startUnmuted = enabled))
+     }
+ 
++    fun setStartDelaySeconds(seconds: Int) {
++        update(current().copy(startDelaySeconds = seconds.takeIf { it in delayChoicesSeconds } ?: 0))
++    }
++
+     fun cycleStartDelay() {
+         val now = current()
+         val next = delayChoicesSeconds[(delayChoicesSeconds.indexOf(now.startDelaySeconds) + 1) % delayChoicesSeconds.size]
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContinueWatchingSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContinueWatchingSettingsPage.kt
+index c8271dda..1fa1bdd2 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContinueWatchingSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContinueWatchingSettingsPage.kt
+@@ -36,6 +36,9 @@ import com.nuvio.app.features.watchprogress.ContinueWatchingPreferencesRepositor
+ import com.nuvio.app.features.watchprogress.ContinueWatchingSectionStyle
+ import com.nuvio.app.features.watchprogress.ContinueWatchingSortMode
+ import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.settings_netflix_style_description
++import nuvio.composeapp.generated.resources.settings_netflix_style_section
++import nuvio.composeapp.generated.resources.settings_netflix_style_title
+ import nuvio.composeapp.generated.resources.settings_continue_watching_resume_prompt_description
+ import nuvio.composeapp.generated.resources.settings_continue_watching_resume_prompt_title
+ import nuvio.composeapp.generated.resources.settings_continue_watching_blur_next_up_description
+@@ -80,6 +83,9 @@ internal fun LazyListScope.continueWatchingSettingsContent(
+     showResumePromptOnLaunch: Boolean,
+     sortMode: ContinueWatchingSortMode,
+ ) {
++    item {
++        NetflixStyleSection(isTablet = isTablet)
++    }
+     item {
+         SettingsSection(
+             title = stringResource(Res.string.settings_continue_watching_section_visibility),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NetflixStyle.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NetflixStyle.kt
+new file mode 100644
+index 00000000..6480dd81
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NetflixStyle.kt
+@@ -0,0 +1,95 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.core.storage.AppFileCache
++import com.nuvio.app.features.details.HeroTrailerOptions
++import com.nuvio.app.features.details.MetaScreenSettingsRepository
++import com.nuvio.app.features.watchprogress.ContinueWatchingPreferencesRepository
++import com.nuvio.app.features.watchprogress.ContinueWatchingSectionStyle
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.settings_netflix_style_description
++import nuvio.composeapp.generated.resources.settings_netflix_style_section
++import nuvio.composeapp.generated.resources.settings_netflix_style_title
++import org.jetbrains.compose.resources.stringResource
++
++/**
++ * Fork feature: one switch that applies a Netflix-like look (wide Continue Watching cards with
++ * progress bars, muted hero trailer with a short delay). Turning it on snapshots the previous
++ * values; turning it off restores exactly those values.
++ */
++object NetflixStyle {
++    private const val PATH = "settings/netflix_style"
++
++    private val _enabled = MutableStateFlow(false)
++    val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
++    private var loaded = false
++
++    // Snapshot format: 1|cwStyle|heroTrailer|startUnmuted|delaySeconds
++    private fun readParts(): List<String> =
++        runCatching { AppFileCache.read(PATH)?.trim()?.split('|').orEmpty() }.getOrDefault(emptyList())
++
++    fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        _enabled.value = readParts().firstOrNull() == "1"
++    }
++
++    fun setEnabled(on: Boolean) {
++        ensureLoaded()
++        if (on == _enabled.value) return
++        if (on) {
++            ContinueWatchingPreferencesRepository.ensureLoaded()
++            MetaScreenSettingsRepository.ensureLoaded()
++            val cwStyle = ContinueWatchingPreferencesRepository.uiState.value.style
++            val trailer = MetaScreenSettingsRepository.uiState.value.heroTrailerPlayback
++            val options = HeroTrailerOptions.current()
++            runCatching {
++                AppFileCache.write(
++                    PATH,
++                    "1|${cwStyle.name}|${if (trailer) 1 else 0}|${if (options.startUnmuted) 1 else 0}|${options.startDelaySeconds}",
++                )
++            }
++            ContinueWatchingPreferencesRepository.setStyle(ContinueWatchingSectionStyle.Wide)
++            MetaScreenSettingsRepository.setHeroTrailerPlayback(true)
++            HeroTrailerOptions.setStartUnmuted(false)
++            HeroTrailerOptions.setStartDelaySeconds(2)
++        } else {
++            val parts = readParts()
++            val cwStyle = parts.getOrNull(1)
++                ?.let { name -> ContinueWatchingSectionStyle.entries.firstOrNull { it.name == name } }
++                ?: ContinueWatchingSectionStyle.Card
++            ContinueWatchingPreferencesRepository.setStyle(cwStyle)
++            MetaScreenSettingsRepository.setHeroTrailerPlayback(parts.getOrNull(2) == "1")
++            HeroTrailerOptions.setStartUnmuted(parts.getOrNull(3) == "1")
++            HeroTrailerOptions.setStartDelaySeconds(parts.getOrNull(4)?.toIntOrNull() ?: 0)
++            runCatching { AppFileCache.write(PATH, "0") }
++        }
++        _enabled.value = on
++    }
++}
++
++@Composable
++internal fun NetflixStyleSection(isTablet: Boolean) {
++    LaunchedEffect(Unit) { NetflixStyle.ensureLoaded() }
++    val enabled by NetflixStyle.enabled.collectAsStateWithLifecycle()
++    SettingsSection(
++        title = stringResource(Res.string.settings_netflix_style_section),
++        isTablet = isTablet,
++    ) {
++        SettingsGroup(isTablet = isTablet) {
++            SettingsSwitchRow(
++                title = stringResource(Res.string.settings_netflix_style_title),
++                description = stringResource(Res.string.settings_netflix_style_description),
++                checked = enabled,
++                isTablet = isTablet,
++                onCheckedChange = NetflixStyle::setEnabled,
++            )
++        }
++    }
++}
