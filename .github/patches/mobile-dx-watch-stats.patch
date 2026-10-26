@@ -1,0 +1,597 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxWatchStats.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxWatchStats.kt
+new file mode 100644
+index 00000000..36a95e18
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxWatchStats.kt
+@@ -0,0 +1,279 @@
++package com.nuvio.app.features.player
++
++import com.nuvio.app.core.storage.AppFileCache
++import com.nuvio.app.core.time.EpisodeReleaseDatePlatform
++import com.nuvio.app.features.watchprogress.WatchProgressClock
++import com.nuvio.app.features.watchprogress.WatchProgressEntry
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import kotlinx.serialization.Serializable
++import kotlinx.serialization.json.Json
++
++@Serializable
++internal data class DxStatTitle(
++    val n: String = "",
++    val t: String = "",
++    val p: String? = null,
++    val s: Double = 0.0,
++    val y: Map<String, Double> = emptyMap(),
++)
++
++@Serializable
++internal data class DxStatData(
++    val since: Long = 0L,
++    val days: Map<String, Double> = emptyMap(),
++    val titles: Map<String, DxStatTitle> = emptyMap(),
++    val genres: Map<String, Map<String, Double>> = emptyMap(),
++)
++
++internal data class DxStatRow(val name: String, val type: String, val poster: String?, val seconds: Double)
++
++internal data class DxStatSummary(
++    val today: Double,
++    val week: Double,
++    val month: Double,
++    val year: Double,
++    val total: Double,
++    val currentStreak: Int,
++    val bestStreak: Int,
++    val last30: List<Pair<String, Double>>,
++    val topTitles: List<DxStatRow>,
++    val topGenres: List<Pair<String, Double>>,
++    val busiestWeekday: String?,
++    val yearLabel: String,
++    val since: String,
++    val estimated: Double,
++)
++
++/**
++ * dx.bi port: "Your stats". Counts the seconds a video is really playing (same rule as the plugin: wall-clock
++ * time between playback updates, gaps over 5 s do not count), per day, per title and per genre, on this device
++ * only. Time before tracking started is estimated from the watch progress already stored (position or full
++ * length per episode or film, on the day it was last updated), so the page is not empty on day one.
++ */
++internal object DxWatchStats {
++    private const val PATH = "settings/dx_watch_stats"
++    private const val ENABLED_PATH = "settings/dx_watch_stats_enabled"
++    private const val MAX_GAP_MS = 5_000L
++    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
++
++    private val _enabled = MutableStateFlow(true)
++    val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
++    private var data = DxStatData()
++    private var loaded = false
++    private var unsaved = 0.0
++    private var lastTickMs = 0L
++
++    fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        _enabled.value = runCatching { AppFileCache.read(ENABLED_PATH)?.trim() }.getOrNull() != "0"
++        data = runCatching {
++            AppFileCache.read(PATH)?.let { json.decodeFromString(DxStatData.serializer(), it) }
++        }.getOrNull() ?: DxStatData()
++        if (data.since == 0L) data = data.copy(since = WatchProgressClock.nowEpochMs())
++    }
++
++    fun setEnabled(on: Boolean) {
++        ensureLoaded()
++        _enabled.value = on
++        lastTickMs = 0L
++        runCatching { AppFileCache.write(ENABLED_PATH, if (on) "1" else "0") }
++    }
++
++    fun reset() {
++        ensureLoaded()
++        data = DxStatData(since = WatchProgressClock.nowEpochMs())
++        unsaved = 0.0
++        runCatching { AppFileCache.write(PATH, json.encodeToString(DxStatData.serializer(), data)) }
++    }
++
++    /** Called on every player position update. */
++    fun tick(
++        isPlaying: Boolean,
++        titleId: String,
++        titleType: String,
++        titleName: String,
++        poster: String?,
++        genres: List<String>,
++    ) {
++        ensureLoaded()
++        val now = WatchProgressClock.nowEpochMs()
++        if (!_enabled.value || !isPlaying || PrivateViewing.isEnabled()) {
++            lastTickMs = 0L
++            return
++        }
++        val previous = lastTickMs
++        lastTickMs = now
++        val gap = now - previous
++        if (previous == 0L || gap <= 0L || gap > MAX_GAP_MS) return
++        add(gap / 1000.0, now, titleId, titleType, titleName, poster, genres)
++    }
++
++    private fun add(
++        seconds: Double,
++        now: Long,
++        id: String,
++        type: String,
++        name: String,
++        poster: String?,
++        genres: List<String>,
++    ) {
++        val day = dayKey(now)
++        val year = day.take(4)
++        val days = data.days.toMutableMap()
++        days[day] = (days[day] ?: 0.0) + seconds
++        val titles = data.titles.toMutableMap()
++        if (id.isNotBlank()) {
++            val old = titles[id] ?: DxStatTitle()
++            val y = old.y.toMutableMap()
++            y[year] = (y[year] ?: 0.0) + seconds
++            titles[id] = old.copy(
++                n = name.ifBlank { old.n },
++                t = type.ifBlank { old.t },
++                p = poster ?: old.p,
++                s = old.s + seconds,
++                y = y,
++            )
++        }
++        val genreMap = data.genres.toMutableMap()
++        genres.take(3).forEach { genre ->
++            val entry = (genreMap[genre] ?: emptyMap()).toMutableMap()
++            entry[year] = (entry[year] ?: 0.0) + seconds
++            genreMap[genre] = entry
++        }
++        data = data.copy(days = days, titles = titles, genres = genreMap)
++        unsaved += seconds
++        if (unsaved >= 30.0) flush()
++    }
++
++    fun flush() {
++        if (!loaded || unsaved <= 0.0) return
++        unsaved = 0.0
++        // keep it compact: about two years of days and the 400 most watched titles
++        var d = data
++        if (d.days.size > 800) d = d.copy(days = d.days.entries.sortedBy { it.key }.takeLast(800).associate { it.key to it.value })
++        if (d.titles.size > 400) d = d.copy(titles = d.titles.entries.sortedByDescending { it.value.s }.take(400).associate { it.key to it.value })
++        data = d
++        runCatching { AppFileCache.write(PATH, json.encodeToString(DxStatData.serializer(), d)) }
++    }
++
++    fun summary(history: List<WatchProgressEntry>): DxStatSummary {
++        ensureLoaded()
++        flush()
++        val now = WatchProgressClock.nowEpochMs()
++        val todayKey = dayKey(now)
++        val year = todayKey.take(4)
++        val days = data.days.toMutableMap()
++        val titles = data.titles.mapValues { it.value.copy(y = it.value.y.toMutableMap()) }.toMutableMap()
++        // estimate from stored progress for everything that happened before tracking started
++        var estimated = 0.0
++        history.forEach { entry ->
++            if (entry.lastUpdatedEpochMs <= 0L || entry.lastUpdatedEpochMs >= data.since) return@forEach
++            val ms = if (entry.isEffectivelyCompleted && entry.durationMs > 0L) entry.durationMs else entry.lastPositionMs
++            val sec = ms / 1000.0
++            if (sec < 30.0) return@forEach
++            estimated += sec
++            val key = dayKey(entry.lastUpdatedEpochMs)
++            days[key] = (days[key] ?: 0.0) + sec
++            val y = key.take(4)
++            val old = titles[entry.parentMetaId] ?: DxStatTitle()
++            val ys = old.y.toMutableMap()
++            ys[y] = (ys[y] ?: 0.0) + sec
++            titles[entry.parentMetaId] = old.copy(
++                n = entry.title.ifBlank { old.n },
++                t = entry.parentMetaType.ifBlank { old.t },
++                p = entry.poster ?: old.p,
++                s = old.s + sec,
++                y = ys,
++            )
++        }
++        val todayEpochDay = epochDay(todayKey)
++        fun sumFrom(fromDay: Long): Double = days.entries.fold(0.0) { acc, e -> if (epochDay(e.key) in fromDay..todayEpochDay) acc + e.value else acc }
++        val weekStart = todayEpochDay - ((todayEpochDay + 3) % 7)
++        val monthStart = epochDay(todayKey.take(8) + "01")
++        val yearStart = epochDay("$year-01-01")
++        val active = days.filter { it.value >= 60.0 }.keys.map { epochDay(it) }.toSet()
++        var best = 0
++        var run = 0
++        var prev = Long.MIN_VALUE
++        active.sorted().forEach { d ->
++            run = if (prev != Long.MIN_VALUE && d - prev == 1L) run + 1 else 1
++            best = maxOf(best, run)
++            prev = d
++        }
++        var current = 0
++        var cursor = todayEpochDay
++        if (cursor !in active) cursor -= 1
++        while (cursor in active) {
++            current++
++            cursor -= 1
++        }
++        val last30 = (29 downTo 0).map { i ->
++            val k = dayKeyOfEpochDay(todayEpochDay - i)
++            k to (days[k] ?: 0.0)
++        }
++        val top = titles.entries
++            .map { (_, t) -> DxStatRow(t.n.ifBlank { "Untitled" }, t.t, t.p, t.y[year] ?: 0.0) }
++            .filter { it.seconds > 0.0 }
++            .sortedByDescending { it.seconds }
++            .take(6)
++        val genres = data.genres.entries
++            .map { it.key to (it.value[year] ?: 0.0) }
++            .filter { it.second > 0.0 }
++            .sortedByDescending { it.second }
++            .take(6)
++        val weekdayNames = listOf("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
++        val byWeekday = DoubleArray(7)
++        days.forEach { (k, v) -> if (k.startsWith(year)) byWeekday[((epochDay(k) + 3) % 7).toInt()] += v }
++        val busiest = byWeekday.withIndex().maxByOrNull { it.value }?.takeIf { it.value > 0.0 }?.let { weekdayNames[it.index] }
++        return DxStatSummary(
++            today = days[todayKey] ?: 0.0,
++            week = sumFrom(weekStart),
++            month = sumFrom(monthStart),
++            year = sumFrom(yearStart),
++            total = days.values.sum(),
++            currentStreak = current,
++            bestStreak = best,
++            last30 = last30,
++            topTitles = top,
++            topGenres = genres,
++            busiestWeekday = busiest,
++            yearLabel = year,
++            since = dayKey(data.since),
++            estimated = estimated,
++        )
++    }
++
++    private fun dayKey(epochMs: Long): String =
++        EpisodeReleaseDatePlatform.localIsoDateAtEpochMs(epochMs) ?: dayKeyOfEpochDay(floorDivMs(epochMs))
++
++    private fun floorDivMs(a: Long): Long = if (a >= 0) a / 86_400_000L else -((-a + 86_400_000L - 1) / 86_400_000L)
++
++    private fun epochDay(key: String): Long {
++        val y = key.substring(0, 4).toInt()
++        val m = key.substring(5, 7).toInt()
++        val d = key.substring(8, 10).toInt()
++        val yy = if (m <= 2) y - 1 else y
++        val era = (if (yy >= 0) yy else yy - 399) / 400
++        val yoe = yy - era * 400
++        val doy = (153 * (m + (if (m > 2) -3 else 9)) + 2) / 5 + d - 1
++        val doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
++        return era * 146097L + doe - 719468L
++    }
++
++    private fun dayKeyOfEpochDay(epochDay: Long): String {
++        val z = epochDay + 719468L
++        val era = (if (z >= 0) z else z - 146096L) / 146097L
++        val doe = z - era * 146097L
++        val yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
++        val y = yoe + era * 400
++        val doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
++        val mp = (5 * doy + 2) / 153
++        val d = (doy - (153 * mp + 2) / 5 + 1).toInt()
++        val m = (if (mp < 10) mp + 3 else mp - 9).toInt()
++        val year = (if (m <= 2) y + 1 else y).toInt()
++        return "${year.toString().padStart(4, '0')}-${m.toString().padStart(2, '0')}-${d.toString().padStart(2, '0')}"
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
+index c2f18b24..06d106ca 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
+@@ -437,6 +437,14 @@ private fun PlayerScreenRuntime.BindPlayerUiVisibilityEffects() {
+         playbackSnapshot.isEnded,
+         playbackSnapshot.durationMs,
+     ) {
++        DxWatchStats.tick(
++            isPlaying = playbackSnapshot.isPlaying && !playbackSnapshot.isLoading && !playbackSnapshot.isEnded,
++            titleId = parentMetaId,
++            titleType = parentMetaType,
++            titleName = title,
++            poster = poster,
++            genres = (metaUiState.meta ?: playerMeta)?.takeIf { it.id == parentMetaId }?.genres.orEmpty(),
++        ) // dx.bi watch stats hook
+         ServerPlayback.onPlaybackSnapshot(
+             url = activeSourceUrl,
+             positionMs = playbackSnapshot.positionMs,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxWatchStatsSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxWatchStatsSettings.kt
+new file mode 100644
+index 00000000..147fa09a
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxWatchStatsSettings.kt
+@@ -0,0 +1,273 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.foundation.background
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.ExperimentalLayoutApi
++import androidx.compose.foundation.layout.FlowRow
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.fillMaxHeight
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.foundation.verticalScroll
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.material3.TextButton
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.DisposableEffect
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.layout.ContentScale
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.window.Dialog
++import androidx.compose.ui.window.DialogProperties
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import coil3.compose.AsyncImage
++import com.nuvio.app.features.player.DxStatRow
++import com.nuvio.app.features.player.DxStatSummary
++import com.nuvio.app.features.player.DxWatchStats
++import com.nuvio.app.features.watched.WatchedRepository
++import com.nuvio.app.features.watchprogress.WatchProgressRepository
++import kotlin.math.roundToInt
++
++/** dx.bi port: "Your stats" page (hours watched, streaks, top titles and genres). Count switch and reset live here. */
++@Composable
++internal fun DxWatchStatsSettingsSection(isTablet: Boolean) {
++    LaunchedEffect(Unit) { DxWatchStats.ensureLoaded() }
++    val enabled by DxWatchStats.enabled.collectAsStateWithLifecycle()
++    var open by remember { mutableStateOf(false) }
++    SettingsSection(title = "Your stats", isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            SettingsNavigationRow(
++                title = "Your stats",
++                description = "Hours watched, streaks, your most watched titles and top genres.",
++                isTablet = isTablet,
++                onClick = { open = true },
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Count watch time",
++                description = "Counts the time a video is really playing, on this device only. Off stops counting; what is already counted stays.",
++                checked = enabled,
++                isTablet = isTablet,
++                onCheckedChange = DxWatchStats::setEnabled,
++            )
++        }
++    }
++    if (open) DxWatchStatsDialog(onDismiss = { open = false })
++}
++
++private fun hoursText(seconds: Double): String {
++    val s = seconds.roundToInt()
++    if (s < 60) return if (s > 0) "<1m" else "0m"
++    val h = s / 3600
++    val m = (s % 3600) / 60
++    return if (h > 0) "${h}h ${m.toString().padStart(2, '0')}m" else "${m}m"
++}
++
++@Composable
++private fun DxWatchStatsDialog(onDismiss: () -> Unit) {
++    val progress by WatchProgressRepository.uiState.collectAsStateWithLifecycle()
++    val watched by remember {
++        WatchedRepository.ensureLoaded()
++        WatchedRepository.uiState
++    }.collectAsStateWithLifecycle()
++    var refresh by remember { mutableStateOf(0) }
++    DisposableEffect(Unit) { onDispose { DxWatchStats.flush() } }
++    val summary = remember(progress.entries, refresh) { DxWatchStats.summary(progress.entries) }
++    val films = remember(watched.items) { watched.items.count { it.season == null && it.type.equals("movie", true) } }
++    val series = remember(watched.items) { watched.items.filter { it.season != null || !it.type.equals("movie", true) }.map { it.id }.toSet().size }
++
++    Dialog(
++        onDismissRequest = onDismiss,
++        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
++    ) {
++        Box(
++            modifier = Modifier
++                .fillMaxSize()
++                .background(MaterialTheme.colorScheme.background),
++        ) {
++            Column(modifier = Modifier.fillMaxSize()) {
++                Row(
++                    modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 28.dp, bottom = 8.dp),
++                    verticalAlignment = Alignment.CenterVertically,
++                ) {
++                    Column(modifier = Modifier.weight(1f)) {
++                        Text("Your stats", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onBackground)
++                        Text(
++                            "${hoursText(summary.total)} in total, counted since ${summary.since}",
++                            style = MaterialTheme.typography.bodySmall,
++                            color = MaterialTheme.colorScheme.onSurfaceVariant,
++                        )
++                    }
++                    TextButton(onClick = onDismiss) { Text("Close") }
++                }
++                DxWatchStatsBody(summary = summary, films = films, series = series, onReset = {
++                    DxWatchStats.reset()
++                    refresh++
++                })
++            }
++        }
++    }
++}
++
++@OptIn(ExperimentalLayoutApi::class)
++@Composable
++private fun DxWatchStatsBody(summary: DxStatSummary, films: Int, series: Int, onReset: () -> Unit) {
++    val muted = MaterialTheme.colorScheme.onSurfaceVariant
++    val primary = MaterialTheme.colorScheme.primary
++    Column(
++        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
++        verticalArrangement = Arrangement.spacedBy(18.dp),
++    ) {
++        FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
++            StatTile("Today", hoursText(summary.today))
++            StatTile("This week", hoursText(summary.week))
++            StatTile("This month", hoursText(summary.month))
++            StatTile(summary.yearLabel, hoursText(summary.year))
++            StatTile(
++                "Streak",
++                "${summary.currentStreak} day${if (summary.currentStreak == 1) "" else "s"}",
++                "best ${summary.bestStreak}",
++            )
++        }
++
++        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
++            SectionLabel("Last 30 days")
++            val peak = summary.last30.maxOfOrNull { it.second }?.coerceAtLeast(1.0) ?: 1.0
++            Row(
++                modifier = Modifier.fillMaxWidth().height(72.dp),
++                horizontalArrangement = Arrangement.spacedBy(2.dp),
++                verticalAlignment = Alignment.Bottom,
++            ) {
++                summary.last30.forEach { (_, sec) ->
++                    val fraction = if (sec <= 0.0) 0.04f else (sec / peak).toFloat().coerceIn(0.06f, 1f)
++                    Box(
++                        modifier = Modifier
++                            .weight(1f)
++                            .fillMaxHeight(fraction)
++                            .clip(RoundedCornerShape(topStart = 2.dp, topEnd = 2.dp))
++                            .background(if (sec <= 0.0) muted.copy(alpha = 0.25f) else primary),
++                    )
++                }
++            }
++        }
++
++        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
++            SectionLabel("Most watched in ${summary.yearLabel}")
++            if (summary.topTitles.isEmpty()) {
++                Text("Nothing yet this year. Start watching and it shows up here.", style = MaterialTheme.typography.bodyMedium, color = muted)
++            } else {
++                summary.topTitles.forEachIndexed { index, row -> TopTitleRow(index + 1, row) }
++            }
++        }
++
++        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
++            SectionLabel("Top genres in ${summary.yearLabel}")
++            if (summary.topGenres.isEmpty()) {
++                Text("Genres appear once you have watched a few titles with the counter on.", style = MaterialTheme.typography.bodyMedium, color = muted)
++            } else {
++                val genreTotal = summary.topGenres.sumOf { it.second }.coerceAtLeast(1.0)
++                summary.topGenres.forEach { (genre, sec) ->
++                    val percent = ((sec / genreTotal) * 100).roundToInt()
++                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
++                        Text(genre, modifier = Modifier.width(96.dp), style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onBackground)
++                        Box(modifier = Modifier.weight(1f).height(8.dp).clip(RoundedCornerShape(4.dp)).background(muted.copy(alpha = 0.25f))) {
++                            Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(percent / 100f).background(primary))
++                        }
++                        Text("$percent%", style = MaterialTheme.typography.labelMedium, color = muted)
++                    }
++                }
++            }
++        }
++
++        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
++            SectionLabel("Habits")
++            FactRow("Busiest day", summary.busiestWeekday ?: "-")
++            FactRow("Marked as watched", "$films film${if (films == 1) "" else "s"} and $series series")
++            if (summary.estimated > 0.0) {
++                FactRow("Estimated from your history", hoursText(summary.estimated))
++            }
++        }
++
++        Text(
++            "Stats stay on this device. Only time spent actually playing counts; watching before the counter started is estimated from your saved progress, and genres only count from now on.",
++            style = MaterialTheme.typography.bodySmall,
++            color = muted,
++        )
++        TextButton(onClick = onReset) { Text("Reset my stats") }
++        Box(modifier = Modifier.height(24.dp))
++    }
++}
++
++@Composable
++private fun SectionLabel(text: String) {
++    Text(
++        text.uppercase(),
++        style = MaterialTheme.typography.labelMedium,
++        color = MaterialTheme.colorScheme.onSurfaceVariant,
++        fontWeight = FontWeight.SemiBold,
++    )
++}
++
++@Composable
++private fun StatTile(label: String, value: String, note: String? = null) {
++    Column(
++        modifier = Modifier
++            .width(104.dp)
++            .clip(RoundedCornerShape(12.dp))
++            .background(MaterialTheme.colorScheme.surface)
++            .padding(12.dp),
++        verticalArrangement = Arrangement.spacedBy(2.dp),
++    ) {
++        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
++        Text(value, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold, maxLines = 1)
++        if (note != null) Text(note, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
++    }
++}
++
++@Composable
++private fun FactRow(label: String, value: String) {
++    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
++        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
++        Text(value, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground, fontWeight = FontWeight.Medium)
++    }
++}
++
++@Composable
++private fun TopTitleRow(rank: Int, row: DxStatRow) {
++    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
++        Text("$rank", modifier = Modifier.width(18.dp), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
++        Box(
++            modifier = Modifier
++                .width(36.dp)
++                .height(54.dp)
++                .clip(RoundedCornerShape(6.dp))
++                .background(MaterialTheme.colorScheme.surface),
++        ) {
++            if (!row.poster.isNullOrBlank()) {
++                AsyncImage(model = row.poster, contentDescription = row.name, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
++            }
++        }
++        Column(modifier = Modifier.weight(1f)) {
++            Text(row.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onBackground)
++            val kind = if (row.type.equals("movie", true)) "Film" else "Series"
++            Text("$kind - ${hoursText(row.seconds)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt
+index eb5cb770..6cd73f75 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt
+@@ -93,6 +93,9 @@ internal fun LazyListScope.settingsRootContent(
+     showAdvancedSection: Boolean = true,
+     showSupportersContributorsPage: Boolean = true,
+ ) {
++    item {
++        DxWatchStatsSettingsSection(isTablet = isTablet) // dx.bi watch stats hook
++    }
+     if (showAccountSection) {
+         item {
+             SettingsSection(

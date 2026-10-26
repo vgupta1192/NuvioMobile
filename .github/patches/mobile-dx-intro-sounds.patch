@@ -1,0 +1,383 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/core/sound/DxSoundPlatform.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/core/sound/DxSoundPlatform.android.kt
+new file mode 100644
+index 00000000..1b3210c3
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/core/sound/DxSoundPlatform.android.kt
+@@ -0,0 +1,112 @@
++package com.nuvio.app.core.sound
++
++import android.media.AudioAttributes
++import android.media.AudioFormat
++import android.media.AudioTrack
++import kotlin.math.PI
++import kotlin.math.exp
++import kotlin.math.min
++import kotlin.math.sin
++
++/** Synthesized PCM played through AudioTrack: no audio assets. Volume follows the system media volume. */
++internal actual object DxSoundPlatform {
++    private const val SAMPLE_RATE = 22050
++    private val lock = Any()
++    private var introTrack: AudioTrack? = null
++
++    private val introPcm: ShortArray by lazy { synthIntro() }
++    private val clickPcm: ShortArray by lazy { synthClick() }
++
++    actual fun playIntro() {
++        Thread {
++            runCatching {
++                val track = buildTrack(introPcm, AudioAttributes.USAGE_MEDIA)
++                synchronized(lock) {
++                    introTrack?.let { runCatching { it.stop(); it.release() } }
++                    introTrack = track
++                }
++                track.play()
++                Thread.sleep(introPcm.size * 1000L / SAMPLE_RATE + 200L)
++                synchronized(lock) {
++                    if (introTrack === track) introTrack = null
++                }
++                runCatching { track.stop() }
++                track.release()
++            }
++        }.start()
++    }
++
++    actual fun stopIntro() {
++        synchronized(lock) {
++            introTrack?.let { runCatching { it.stop(); it.release() } }
++            introTrack = null
++        }
++    }
++
++    actual fun playClick() {
++        Thread {
++            runCatching {
++                val track = buildTrack(clickPcm, AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
++                track.play()
++                Thread.sleep(clickPcm.size * 1000L / SAMPLE_RATE + 120L)
++                runCatching { track.stop() }
++                track.release()
++            }
++        }.start()
++    }
++
++    private fun buildTrack(pcm: ShortArray, usage: Int): AudioTrack {
++        val attributes = AudioAttributes.Builder()
++            .setUsage(usage)
++            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
++            .build()
++        val format = AudioFormat.Builder()
++            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
++            .setSampleRate(SAMPLE_RATE)
++            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
++            .build()
++        val track = AudioTrack.Builder()
++            .setAudioAttributes(attributes)
++            .setAudioFormat(format)
++            .setBufferSizeInBytes(pcm.size * 2)
++            .setTransferMode(AudioTrack.MODE_STATIC)
++            .build()
++        track.write(pcm, 0, pcm.size)
++        return track
++    }
++
++    private fun synthClick(): ShortArray {
++        val n = SAMPLE_RATE * 45 / 1000
++        return ShortArray(n) { i ->
++            val t = i.toDouble() / SAMPLE_RATE
++            val envelope = exp(-t * 90.0) * min(1.0, t * 800.0)
++            val tone = sin(2 * PI * 1900.0 * t) * 0.7 + sin(2 * PI * 3800.0 * t) * 0.15
++            (tone * envelope * 0.22 * Short.MAX_VALUE).toInt().toShort()
++        }
++    }
++
++    /** About 2.4 s: low thump, then a rising soft chord swell that fades out. */
++    private fun synthIntro(): ShortArray {
++        val seconds = 2.4
++        val n = (SAMPLE_RATE * seconds).toInt()
++        val chord = doubleArrayOf(174.61, 220.0, 261.63, 349.23)
++        return ShortArray(n) { i ->
++            val t = i.toDouble() / SAMPLE_RATE
++            val thump = sin(2 * PI * (62.0 - 20.0 * t) * t) * exp(-t * 4.0) * 0.8
++            val swellIn = (t / 1.4).coerceIn(0.0, 1.0)
++            val fadeOut = ((seconds - t) / 0.9).coerceIn(0.0, 1.0)
++            val swell = swellIn * swellIn * fadeOut
++            var pad = 0.0
++            for (f in chord) {
++                val glide = f * (0.94 + 0.06 * swellIn)
++                pad += sin(2 * PI * glide * t) + 0.25 * sin(2 * PI * glide * 2.0 * t)
++            }
++            pad = pad / chord.size * swell * 0.55
++            val sparkleT = t - 1.35
++            val sparkle = if (sparkleT > 0.0) sin(2 * PI * 1396.9 * t) * exp(-sparkleT * 5.0) * 0.18 else 0.0
++            val start = min(1.0, t * 200.0)
++            ((thump + pad + sparkle) * start * 0.6 * Short.MAX_VALUE).toInt()
++                .coerceIn(-32768, 32767).toShort()
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/App.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/App.kt
+index 9fb9b577..81ea4f33 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/App.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/App.kt
+@@ -12,6 +12,7 @@ import coil3.request.CachePolicy
+ import coil3.request.crossfade
+ import coil3.svg.SvgDecoder
+ import com.nuvio.app.core.poster.CustomPosterFallbackInterceptor
++import com.nuvio.app.core.sound.DxIntroHost
+ import com.nuvio.app.core.ui.NativeProfileSwitcherController
+ import com.nuvio.app.core.ui.NuvioTheme
+ import com.nuvio.app.core.ui.configurePlatformImageLoader
+@@ -45,6 +46,7 @@ fun App(
+     appGateController: AppGateController? = null,
+ ) {
+     AppEnvironment {
++        DxIntroHost { // dx.bi intro hook
+         AppGate(
+             initialTab = initialTab,
+             initialRoute = initialRoute,
+@@ -65,6 +67,7 @@ fun App(
+             nativeProfileSwitcherController = nativeProfileSwitcherController,
+             appGateController = appGateController,
+         )
++        }
+     }
+ }
+ 
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+index cc3e89b3..af47702d 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+@@ -433,6 +433,7 @@ internal fun MainAppContent(
+     }
+ 
+     fun handleRootTabClick(tab: AppScreenTab) {
++        com.nuvio.app.core.sound.DxSounds.click() // dx.bi ui sounds hook
+         if (selectedTab != tab) {
+             activateTab(tab)
+             return
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/sound/DxSoundPlatform.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/sound/DxSoundPlatform.kt
+new file mode 100644
+index 00000000..ea654fa6
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/sound/DxSoundPlatform.kt
+@@ -0,0 +1,8 @@
++package com.nuvio.app.core.sound
++
++/** Platform sound output for the dx.bi intro and soft interface sounds. Follows the system media volume. */
++internal expect object DxSoundPlatform {
++    fun playIntro()
++    fun stopIntro()
++    fun playClick()
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/sound/DxSounds.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/sound/DxSounds.kt
+new file mode 100644
+index 00000000..93c797f2
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/sound/DxSounds.kt
+@@ -0,0 +1,135 @@
++package com.nuvio.app.core.sound
++
++import androidx.compose.animation.core.Animatable
++import androidx.compose.animation.core.FastOutSlowInEasing
++import androidx.compose.animation.core.tween
++import androidx.compose.foundation.background
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.interaction.MutableInteractionSource
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.alpha
++import androidx.compose.ui.draw.scale
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.unit.sp
++import com.nuvio.app.core.storage.AppFileCache
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++
++/** dx.bi port: startup cinematic intro and soft interface sounds. Both are OFF by default. */
++internal object DxSounds {
++    private const val INTRO_PATH = "settings/dx_intro_enabled"
++    private const val SOUNDS_PATH = "settings/dx_ui_sounds_enabled"
++    const val INTRO_MS = 2600L
++
++    private var loaded = false
++    private var introShownThisLaunch = false
++
++    private val _introEnabled = MutableStateFlow(false)
++    val introEnabled: StateFlow<Boolean> = _introEnabled.asStateFlow()
++    private val _uiSoundsEnabled = MutableStateFlow(false)
++    val uiSoundsEnabled: StateFlow<Boolean> = _uiSoundsEnabled.asStateFlow()
++
++    fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        _introEnabled.value = runCatching { AppFileCache.read(INTRO_PATH)?.trim() }.getOrNull() == "1"
++        _uiSoundsEnabled.value = runCatching { AppFileCache.read(SOUNDS_PATH)?.trim() }.getOrNull() == "1"
++    }
++
++    fun setIntroEnabled(value: Boolean) {
++        ensureLoaded()
++        _introEnabled.value = value
++        runCatching { AppFileCache.write(INTRO_PATH, if (value) "1" else "0") }
++    }
++
++    fun setUiSoundsEnabled(value: Boolean) {
++        ensureLoaded()
++        _uiSoundsEnabled.value = value
++        runCatching { AppFileCache.write(SOUNDS_PATH, if (value) "1" else "0") }
++    }
++
++    /** True once per app launch, and only when the intro is switched on. */
++    fun shouldShowIntro(): Boolean {
++        ensureLoaded()
++        if (introShownThisLaunch || !_introEnabled.value) return false
++        introShownThisLaunch = true
++        return true
++    }
++
++    fun click() {
++        ensureLoaded()
++        if (_uiSoundsEnabled.value) runCatching { DxSoundPlatform.playClick() }
++    }
++
++    /** Preview from Settings: plays the intro sound without the overlay. */
++    fun previewIntroSound() {
++        runCatching { DxSoundPlatform.playIntro() }
++    }
++}
++
++/** Full-screen intro on top of the app. Plays once per launch, tap to skip. */
++@Composable
++internal fun DxIntroHost(content: @Composable () -> Unit) {
++    val show = remember { DxSounds.shouldShowIntro() }
++    var visible by remember { mutableStateOf(true) }
++    content()
++    if (show && visible) {
++        DxIntroOverlay(onFinished = { visible = false })
++    }
++}
++
++@Composable
++private fun DxIntroOverlay(onFinished: () -> Unit) {
++    val fade = remember { Animatable(0f) }
++    val grow = remember { Animatable(0.82f) }
++    val out = remember { Animatable(1f) }
++    LaunchedEffect(Unit) {
++        runCatching { DxSoundPlatform.playIntro() }
++        fade.animateTo(1f, tween(900, easing = FastOutSlowInEasing))
++    }
++    LaunchedEffect(Unit) {
++        grow.animateTo(1.08f, tween(DxSounds.INTRO_MS.toInt(), easing = FastOutSlowInEasing))
++    }
++    LaunchedEffect(Unit) {
++        delay(DxSounds.INTRO_MS - 500L)
++        out.animateTo(0f, tween(500))
++        onFinished()
++    }
++    Box(
++        modifier = Modifier
++            .fillMaxSize()
++            .alpha(out.value)
++            .background(Color.Black)
++            .clickable(
++                interactionSource = remember { MutableInteractionSource() },
++                indication = null,
++            ) {
++                runCatching { DxSoundPlatform.stopIntro() }
++                onFinished()
++            },
++        contentAlignment = Alignment.Center,
++    ) {
++        Text(
++            text = "NUVIO",
++            color = MaterialTheme.colorScheme.primary,
++            fontSize = 44.sp,
++            fontWeight = FontWeight.Black,
++            letterSpacing = 10.sp,
++            modifier = Modifier.alpha(fade.value).scale(grow.value),
++        )
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxSoundsSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxSoundsSettings.kt
+new file mode 100644
+index 00000000..57387b20
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxSoundsSettings.kt
+@@ -0,0 +1,37 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.core.sound.DxSounds
++
++/** dx.bi port: startup intro and soft interface sounds. Both off by default. */
++@Composable
++internal fun DxSoundsSettingsSection(isTablet: Boolean) {
++    LaunchedEffect(Unit) { DxSounds.ensureLoaded() }
++    val intro by DxSounds.introEnabled.collectAsStateWithLifecycle()
++    val sounds by DxSounds.uiSoundsEnabled.collectAsStateWithLifecycle()
++    SettingsSection(title = "Intro and sounds", isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            SettingsSwitchRow(
++                title = "Startup intro",
++                description = "Plays a short cinematic intro with a sound when the app opens, once per launch. Tap to skip. It covers the first 2.6 seconds, so the app opens a little later. Sound follows the media volume.",
++                checked = intro,
++                isTablet = isTablet,
++                onCheckedChange = { enabled ->
++                    DxSounds.setIntroEnabled(enabled)
++                    if (enabled) DxSounds.previewIntroSound()
++                },
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Interface sounds",
++                description = "A soft tick when you tap a tab in the bottom bar. Follows the media volume.",
++                checked = sounds,
++                isTablet = isTablet,
++                onCheckedChange = DxSounds::setUiSoundsEnabled,
++            )
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt
+index 6cd73f75..30ee142b 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt
+@@ -96,6 +96,9 @@ internal fun LazyListScope.settingsRootContent(
+     item {
+         DxWatchStatsSettingsSection(isTablet = isTablet) // dx.bi watch stats hook
+     }
++    item {
++        DxSoundsSettingsSection(isTablet = isTablet) // dx.bi sounds hook
++    }
+     if (showAccountSection) {
+         item {
+             SettingsSection(
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/core/sound/DxSoundPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/core/sound/DxSoundPlatform.ios.kt
+new file mode 100644
+index 00000000..9675864e
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/core/sound/DxSoundPlatform.ios.kt
+@@ -0,0 +1,7 @@
++package com.nuvio.app.core.sound
++
++internal actual object DxSoundPlatform {
++    actual fun playIntro() = Unit
++    actual fun stopIntro() = Unit
++    actual fun playClick() = Unit
++}

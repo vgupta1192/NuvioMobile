@@ -1,0 +1,383 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/catalog/CatalogScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/catalog/CatalogScreen.kt
+index f5db18d9..d9b04a59 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/catalog/CatalogScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/catalog/CatalogScreen.kt
+@@ -58,7 +58,10 @@ import com.nuvio.app.core.ui.nuvioSafeBottomPadding
+ import com.nuvio.app.core.ui.posterCardClickable
+ import com.nuvio.app.core.ui.rememberPosterCardStyleUiState
+ import com.nuvio.app.core.ui.withDuplicateSafeLazyKeys
++import com.nuvio.app.features.home.DxWatchedTitles
+ import com.nuvio.app.features.home.MetaPreview
++import com.nuvio.app.features.home.dxWatchedDim
++import com.nuvio.app.features.home.rememberDxWatchedMode
+ import com.nuvio.app.features.home.HomeCatalogSettingsRepository
+ import com.nuvio.app.features.home.PosterShape
+ import com.nuvio.app.features.home.components.HomeEmptyStateCard
+@@ -91,6 +94,7 @@ fun CatalogScreen(
+         WatchedRepository.uiState
+     }.collectAsStateWithLifecycle()
+     val fullyWatchedSeriesKeys by WatchedRepository.fullyWatchedSeriesKeys.collectAsStateWithLifecycle()
++    val watchedMode = rememberDxWatchedMode()
+     val initialScrollPosition = remember(
+         target,
+         homeCatalogSettingsUiState.hideUnreleasedContent,
+@@ -205,22 +209,30 @@ fun CatalogScreen(
+                     }
+                 } else {
+                     items(
+-                        items = uiState.items.withDuplicateSafeLazyKeys { item -> item.stableKey() },
++                        items = DxWatchedTitles.filterHidden(
++                            uiState.items,
++                            watchedMode,
++                            watchedUiState.watchedKeys,
++                            fullyWatchedSeriesKeys,
++                        ).withDuplicateSafeLazyKeys { item -> item.stableKey() },
+                         key = { item -> item.lazyKey },
+                     ) { keyedItem ->
+                         val item = keyedItem.value
++                        val itemWatched = WatchingState.isPosterWatched(
++                            watchedKeys = watchedUiState.watchedKeys,
++                            item = item,
++                            fullyWatchedSeriesKeys = fullyWatchedSeriesKeys,
++                        )
++                        Box(modifier = Modifier.dxWatchedDim(itemWatched, watchedMode)) {
+                         CatalogPosterTile(
+                             item = item,
+                             cornerRadiusDp = posterCardStyle.cornerRadiusDp,
+                             hideLabels = posterCardStyle.hideLabelsEnabled,
+-                            isWatched = WatchingState.isPosterWatched(
+-                                watchedKeys = watchedUiState.watchedKeys,
+-                                item = item,
+-                                fullyWatchedSeriesKeys = fullyWatchedSeriesKeys,
+-                            ),
++                            isWatched = itemWatched,
+                             onClick = onPosterClick?.let { { it(item) } },
+                             onLongClick = onPosterLongClick?.let { { it(item) } },
+                         )
++                        }
+                     }
+                     if (uiState.isLoading) {
+                         item(span = { GridItemSpan(maxLineSpan) }) {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/DxWatchedTitles.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/DxWatchedTitles.kt
+new file mode 100644
+index 00000000..dbf1ef01
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/DxWatchedTitles.kt
+@@ -0,0 +1,69 @@
++package com.nuvio.app.features.home
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.alpha
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.core.storage.AppFileCache
++import com.nuvio.app.features.watching.application.WatchingState
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++
++enum class DxWatchedMode(val label: String) { Show("Show"), Dim("Dim"), Hide("Hide") }
++
++/**
++ * dx.bi port: watched titles in Discover, Search results, Home rows and "see all" catalogs can be shown
++ * (default), dimmed or hidden. Uses the same watched marks as the check badge on posters (local, Trakt,
++ * Simkl, Nuvio sync). Library and details screens are never affected.
++ */
++object DxWatchedTitles {
++    private const val PATH = "settings/dx_watched_titles"
++    private val _mode = MutableStateFlow(DxWatchedMode.Show)
++    val mode: StateFlow<DxWatchedMode> = _mode.asStateFlow()
++    private var loaded = false
++
++    fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        val saved = runCatching { AppFileCache.read(PATH)?.trim() }.getOrNull()
++        _mode.value = DxWatchedMode.entries.firstOrNull { it.name == saved } ?: DxWatchedMode.Show
++    }
++
++    fun setMode(mode: DxWatchedMode) {
++        ensureLoaded()
++        _mode.value = mode
++        runCatching { AppFileCache.write(PATH, mode.name) }
++    }
++
++    /** Current mode for non-composable list building. */
++    fun currentMode(): DxWatchedMode {
++        ensureLoaded()
++        return _mode.value
++    }
++
++    fun filterHidden(
++        items: List<MetaPreview>,
++        mode: DxWatchedMode,
++        watchedKeys: Set<String>,
++        fullyWatchedSeriesKeys: Set<String>,
++    ): List<MetaPreview> =
++        if (mode != DxWatchedMode.Hide || watchedKeys.isEmpty() && fullyWatchedSeriesKeys.isEmpty()) {
++            items
++        } else {
++            items.filterNot { WatchingState.isPosterWatched(watchedKeys, it, fullyWatchedSeriesKeys) }
++        }
++}
++
++@Composable
++fun rememberDxWatchedMode(enabled: Boolean = true): DxWatchedMode {
++    if (!enabled) return DxWatchedMode.Show
++    LaunchedEffect(Unit) { DxWatchedTitles.ensureLoaded() }
++    val mode by DxWatchedTitles.mode.collectAsStateWithLifecycle()
++    return mode
++}
++
++fun Modifier.dxWatchedDim(isWatched: Boolean, mode: DxWatchedMode): Modifier =
++    if (isWatched && mode == DxWatchedMode.Dim) alpha(0.35f) else this
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt
+index 8211f2ed..35be12ce 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt
+@@ -1197,6 +1197,7 @@ fun HomeScreen(
+                                         },
+                                         watchedKeys = watchedUiState.watchedKeys,
+                                         fullyWatchedSeriesKeys = fullyWatchedSeriesKeys,
++                                        applyWatchedMode = true,
+                                         onPosterClick = onPosterClick,
+                                         onPosterLongClick = onPosterLongClick,
+                                     )
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/components/HomeCatalogSection.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/components/HomeCatalogSection.kt
+index f4c907bb..2b03dc2b 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/components/HomeCatalogSection.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/components/HomeCatalogSection.kt
+@@ -9,8 +9,11 @@ import androidx.compose.ui.unit.Dp
+ import com.nuvio.app.core.ui.NuvioShelfSection
+ import com.nuvio.app.core.ui.NuvioViewAllPillSize
+ import com.nuvio.app.core.ui.rememberPosterCardStyleUiState
++import com.nuvio.app.features.home.DxWatchedTitles
+ import com.nuvio.app.features.home.HomeCatalogSection
+ import com.nuvio.app.features.home.MetaPreview
++import com.nuvio.app.features.home.dxWatchedDim
++import com.nuvio.app.features.home.rememberDxWatchedMode
+ import com.nuvio.app.features.home.stableKey
+ import com.nuvio.app.features.watching.application.WatchingState
+ 
+@@ -21,6 +24,7 @@ fun HomeCatalogRowSection(
+     entries: List<MetaPreview> = section.items,
+     watchedKeys: Set<String> = emptySet(),
+     fullyWatchedSeriesKeys: Set<String> = emptySet(),
++    applyWatchedMode: Boolean = false,
+     sectionPadding: Dp? = null,
+     onViewAllClick: (() -> Unit)? = null,
+     onPosterClick: ((MetaPreview) -> Unit)? = null,
+@@ -32,6 +36,7 @@ fun HomeCatalogRowSection(
+             entries = entries,
+             watchedKeys = watchedKeys,
+             fullyWatchedSeriesKeys = fullyWatchedSeriesKeys,
++            applyWatchedMode = applyWatchedMode,
+             modifier = modifier.fillMaxWidth(),
+             sectionPadding = sectionPadding,
+             onViewAllClick = onViewAllClick,
+@@ -45,6 +50,7 @@ fun HomeCatalogRowSection(
+                 entries = entries,
+                 watchedKeys = watchedKeys,
+                 fullyWatchedSeriesKeys = fullyWatchedSeriesKeys,
++                applyWatchedMode = applyWatchedMode,
+                 modifier = Modifier.fillMaxWidth(),
+                 sectionPadding = homeSectionHorizontalPaddingForWidth(maxWidth.value),
+                 onViewAllClick = onViewAllClick,
+@@ -61,6 +67,7 @@ private fun HomeCatalogRowSectionContent(
+     entries: List<MetaPreview>,
+     watchedKeys: Set<String>,
+     fullyWatchedSeriesKeys: Set<String>,
++    applyWatchedMode: Boolean,
+     modifier: Modifier,
+     sectionPadding: Dp,
+     onViewAllClick: (() -> Unit)?,
+@@ -68,10 +75,13 @@ private fun HomeCatalogRowSectionContent(
+     onPosterLongClick: ((MetaPreview) -> Unit)?,
+ ) {
+     val posterCardStyle = rememberPosterCardStyleUiState()
++    val watchedMode = rememberDxWatchedMode(applyWatchedMode)
++    val shownEntries = DxWatchedTitles.filterHidden(entries, watchedMode, watchedKeys, fullyWatchedSeriesKeys)
++    if (shownEntries.isEmpty() && entries.isNotEmpty()) return
+ 
+     NuvioShelfSection(
+         title = section.title,
+-        entries = entries,
++        entries = shownEntries,
+         modifier = modifier,
+         headerHorizontalPadding = sectionPadding,
+         rowContentPadding = PaddingValues(horizontal = sectionPadding),
+@@ -79,14 +89,16 @@ private fun HomeCatalogRowSectionContent(
+         viewAllPillSize = NuvioViewAllPillSize.Compact,
+         key = { item -> item.stableKey() },
+     ) { item ->
++        val itemWatched = WatchingState.isPosterWatched(
++            watchedKeys = watchedKeys,
++            item = item,
++            fullyWatchedSeriesKeys = fullyWatchedSeriesKeys,
++        )
+         HomePosterCard(
+             item = item,
++            modifier = Modifier.dxWatchedDim(itemWatched, watchedMode),
+             useLandscapeBackdropMode = posterCardStyle.catalogLandscapeModeEnabled,
+-            isWatched = WatchingState.isPosterWatched(
+-                watchedKeys = watchedKeys,
+-                item = item,
+-                fullyWatchedSeriesKeys = fullyWatchedSeriesKeys,
+-            ),
++            isWatched = itemWatched,
+             onClick = onPosterClick?.let { { it(item) } },
+             onLongClick = onPosterLongClick?.let { { it(item) } },
+         )
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/components/PosterGrid.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/components/PosterGrid.kt
+index b324b075..734cb0ac 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/components/PosterGrid.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/components/PosterGrid.kt
+@@ -28,6 +28,8 @@ import coil3.compose.AsyncImage
+ import com.nuvio.app.core.format.formatReleaseDateForDisplay
+ import com.nuvio.app.core.ui.NuvioCardDepthSurface
+ import com.nuvio.app.core.ui.NuvioPosterWatchedOverlay
++import com.nuvio.app.features.home.dxWatchedDim
++import com.nuvio.app.features.home.rememberDxWatchedMode
+ import com.nuvio.app.core.ui.SkeletonPoster
+ import com.nuvio.app.core.ui.nuvioCardDepth
+ import com.nuvio.app.core.ui.posterCardClickable
+@@ -52,10 +54,12 @@ internal fun PosterGridRow(
+     modifier: Modifier = Modifier,
+     watchedKeys: Set<String> = emptySet(),
+     fullyWatchedSeriesKeys: Set<String> = emptySet(),
++    applyWatchedMode: Boolean = false,
+     onPosterClick: ((MetaPreview) -> Unit)? = null,
+     onPosterLongClick: ((MetaPreview) -> Unit)? = null,
+ ) {
+     val posterCardStyle = rememberPosterCardStyleUiState()
++    val watchedMode = rememberDxWatchedMode(applyWatchedMode)
+ 
+     Row(
+         modifier = modifier.fillMaxWidth(),
+@@ -63,16 +67,17 @@ internal fun PosterGridRow(
+         verticalAlignment = Alignment.Top,
+     ) {
+         items.forEach { item ->
++            val itemWatched = WatchingState.isPosterWatched(
++                watchedKeys = watchedKeys,
++                item = item,
++                fullyWatchedSeriesKeys = fullyWatchedSeriesKeys,
++            )
+             PosterGridTile(
+                 item = item,
+                 cornerRadiusDp = posterCardStyle.cornerRadiusDp,
+                 hideLabels = posterCardStyle.hideLabelsEnabled,
+-                modifier = Modifier.weight(1f),
+-                isWatched = WatchingState.isPosterWatched(
+-                    watchedKeys = watchedKeys,
+-                    item = item,
+-                    fullyWatchedSeriesKeys = fullyWatchedSeriesKeys,
+-                ),
++                modifier = Modifier.weight(1f).dxWatchedDim(itemWatched, watchedMode),
++                isWatched = itemWatched,
+                 onClick = onPosterClick?.let { { it(item) } },
+                 onLongClick = onPosterLongClick?.let { { it(item) } },
+             )
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/search/SearchDiscoverContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/search/SearchDiscoverContent.kt
+index c3d57e41..3bb4f952 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/search/SearchDiscoverContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/search/SearchDiscoverContent.kt
+@@ -23,6 +23,7 @@ import com.nuvio.app.core.ui.NuvioDropdownChip
+ import com.nuvio.app.core.ui.NuvioDropdownOption
+ import com.nuvio.app.core.ui.NuvioNetworkOfflineCard
+ import com.nuvio.app.features.home.MetaPreview
++import com.nuvio.app.features.home.DxWatchedTitles
+ import com.nuvio.app.features.home.components.PosterGridRow
+ import com.nuvio.app.features.home.components.PosterGridSkeletonRow
+ import com.nuvio.app.features.home.components.HomeEmptyStateCard
+@@ -96,14 +97,21 @@ internal fun LazyListScope.discoverContent(
+         }
+ 
+         else -> {
+-            items(count = (state.items.size + columns - 1) / columns) { rowIndex ->
++            val discoverItems = DxWatchedTitles.filterHidden(
++                state.items,
++                DxWatchedTitles.currentMode(),
++                watchedKeys,
++                fullyWatchedSeriesKeys,
++            )
++            items(count = (discoverItems.size + columns - 1) / columns) { rowIndex ->
+                 val firstIndex = rowIndex * columns
+                 PosterGridRow(
+-                    items = state.items.subList(firstIndex, minOf(firstIndex + columns, state.items.size)),
++                    items = discoverItems.subList(firstIndex, minOf(firstIndex + columns, discoverItems.size)),
+                     columns = columns,
+                     modifier = Modifier.padding(horizontal = 16.dp),
+                     watchedKeys = watchedKeys,
+                     fullyWatchedSeriesKeys = fullyWatchedSeriesKeys,
++                    applyWatchedMode = true,
+                     onPosterClick = onPosterClick,
+                     onPosterLongClick = onPosterLongClick,
+                 )
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/search/SearchScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/search/SearchScreen.kt
+index 19205703..3fcba966 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/search/SearchScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/search/SearchScreen.kt
+@@ -382,6 +382,7 @@ fun SearchScreen(
+                                 modifier = Modifier.padding(bottom = 12.dp),
+                                 watchedKeys = watchedUiState.watchedKeys,
+                                 fullyWatchedSeriesKeys = fullyWatchedSeriesKeys,
++                                applyWatchedMode = true,
+                                 onPosterClick = onPosterClick,
+                                 onPosterLongClick = onPosterLongClick,
+                             )
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContentDiscoverySettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContentDiscoverySettingsPage.kt
+index 910f3381..53b7b33e 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContentDiscoverySettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContentDiscoverySettingsPage.kt
+@@ -30,6 +30,9 @@ internal fun LazyListScope.contentDiscoveryContent(
+     onMediaServersClick: () -> Unit,
+     onLiveTvClick: () -> Unit = {},
+ ) {
++    item {
++        DxWatchedTitlesSettingsSection(isTablet = isTablet) // dx.bi watched titles hook
++    }
+     item {
+         val recentSearchesEnabled by remember {
+             SearchHistoryRepository.ensureLoaded()
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxWatchedTitlesSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxWatchedTitlesSettings.kt
+new file mode 100644
+index 00000000..e93884ac
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxWatchedTitlesSettings.kt
+@@ -0,0 +1,33 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.core.ui.Chip
++import com.nuvio.app.features.home.DxWatchedMode
++import com.nuvio.app.features.home.DxWatchedTitles
++
++/** dx.bi port: watched titles show, dim or hide in Discover, Search and Home. */
++@Composable
++internal fun DxWatchedTitlesSettingsSection(isTablet: Boolean) {
++    LaunchedEffect(Unit) { DxWatchedTitles.ensureLoaded() }
++    val mode by DxWatchedTitles.mode.collectAsStateWithLifecycle()
++    SettingsSection(title = "Watched titles", isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            SettingsChipRow(
++                title = "Watched titles in Discover, Search and Home",
++                description = "Show keeps them as they are, Dim fades them, Hide removes them from Discover, Search results and Home rows. Your Library is never changed.",
++                isTablet = isTablet,
++            ) {
++                DxWatchedMode.entries.forEach { option ->
++                    Chip(
++                        label = option.label,
++                        selected = mode == option,
++                        onClick = { DxWatchedTitles.setMode(option) },
++                    )
++                }
++            }
++        }
++    }
++}

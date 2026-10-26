@@ -1,0 +1,192 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/AddonsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/AddonsScreen.kt
+index ac6fb8f8..03834eec 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/AddonsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/AddonsScreen.kt
+@@ -140,6 +140,8 @@ internal fun AddonsSettingsPageContent(
+             },
+         )
+ 
++        DxAddonBackupCard() // dx.bi addon backup hook
++
+         SectionHeader(stringResource(Res.string.addons_section_installed))
+         if (uiState.addons.isEmpty()) {
+             EmptyStateCard(usePersonalMediaCopy = usePersonalMediaCopy)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/DxAddonBackup.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/DxAddonBackup.kt
+new file mode 100644
+index 00000000..bce69ab0
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/DxAddonBackup.kt
+@@ -0,0 +1,173 @@
++package com.nuvio.app.features.addons
++
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.height
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.material3.TextButton
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.rememberCoroutineScope
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.platform.LocalClipboardManager
++import androidx.compose.ui.text.AnnotatedString
++import androidx.compose.ui.unit.dp
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.core.ui.NuvioInputField
++import com.nuvio.app.core.ui.NuvioPrimaryButton
++import com.nuvio.app.core.ui.NuvioSectionLabel
++import com.nuvio.app.core.ui.NuvioSurfaceCard
++import kotlinx.coroutines.launch
++import kotlinx.serialization.json.JsonArray
++import kotlinx.serialization.json.JsonObject
++import kotlinx.serialization.json.JsonPrimitive
++import kotlinx.serialization.json.booleanOrNull
++import kotlinx.serialization.json.buildJsonArray
++import kotlinx.serialization.json.buildJsonObject
++import kotlinx.serialization.json.contentOrNull
++import kotlinx.serialization.json.put
++import kotlinx.serialization.json.Json
++
++internal data class DxBackupEntry(val url: String, val enabled: Boolean)
++
++private val dxBackupJson = Json { prettyPrint = true }
++
++/** JSON of installed addon manifest URLs, in order, with their on/off state. */
++internal fun dxExportAddons(addons: List<ManagedAddon>): String {
++    val root = buildJsonObject {
++        put("app", "nuvio")
++        put("type", "addons")
++        put("version", 1)
++        put(
++            "addons",
++            buildJsonArray {
++                addons.forEach { addon ->
++                    add(
++                        buildJsonObject {
++                            put("url", addon.manifestUrl)
++                            put("enabled", addon.enabled)
++                        },
++                    )
++                }
++            },
++        )
++    }
++    return dxBackupJson.encodeToString(JsonObject.serializer(), root)
++}
++
++/** Accepts the export format, a plain JSON array of URLs, or objects with url, manifestUrl or transportUrl. */
++internal fun dxParseAddonBackup(text: String): List<DxBackupEntry>? {
++    val root = runCatching { Json.parseToJsonElement(text.trim()) }.getOrNull() ?: return null
++    val array = when (root) {
++        is JsonArray -> root
++        is JsonObject -> root["addons"] as? JsonArray ?: return null
++        else -> return null
++    }
++    val entries = array.mapNotNull { element ->
++        when (element) {
++            is JsonPrimitive -> element.contentOrNull?.trim()?.takeIf { it.isNotBlank() }?.let { DxBackupEntry(it, true) }
++            is JsonObject -> {
++                val url = listOf("url", "manifestUrl", "transportUrl")
++                    .firstNotNullOfOrNull { key -> (element[key] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotBlank() } }
++                url?.let { DxBackupEntry(it, (element["enabled"] as? JsonPrimitive)?.booleanOrNull ?: true) }
++            }
++            else -> null
++        }
++    }
++    return entries.distinctBy { it.url }.takeIf { it.isNotEmpty() }
++}
++
++/** dx.bi port: addon backup. Copy the list, paste it back later to re-add in the same order. */
++@Composable
++internal fun DxAddonBackupCard() {
++    val uiState by AddonRepository.uiState.collectAsStateWithLifecycle()
++    val clipboard = LocalClipboardManager.current
++    val scope = rememberCoroutineScope()
++    var text by remember { mutableStateOf("") }
++    var message by remember { mutableStateOf<String?>(null) }
++    var busy by remember { mutableStateOf(false) }
++
++    NuvioSectionLabel("Backup and restore")
++    NuvioSurfaceCard {
++        Text(
++            text = "Copy your addon list as JSON, or paste one to install those addons again in the same order. Addons you already have are skipped.",
++            style = MaterialTheme.typography.bodyMedium,
++            color = MaterialTheme.colorScheme.onSurfaceVariant,
++        )
++        Spacer(modifier = Modifier.height(12.dp))
++        NuvioPrimaryButton(
++            text = "Copy backup (${uiState.addons.size})",
++            enabled = uiState.addons.isNotEmpty() && !busy,
++            onClick = {
++                clipboard.setText(AnnotatedString(dxExportAddons(uiState.addons)))
++                message = "Copied ${uiState.addons.size} addons to the clipboard."
++            },
++        )
++        Spacer(modifier = Modifier.height(12.dp))
++        NuvioInputField(
++            value = text,
++            onValueChange = {
++                text = it
++                message = null
++            },
++            placeholder = "Paste backup JSON here",
++        )
++        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
++            TextButton(
++                enabled = !busy,
++                onClick = {
++                    text = clipboard.getText()?.text.orEmpty()
++                    message = null
++                },
++            ) { Text("Paste from clipboard") }
++            TextButton(
++                enabled = !busy && text.isNotBlank(),
++                onClick = { text = ""; message = null },
++            ) { Text("Clear") }
++        }
++        NuvioPrimaryButton(
++            text = if (busy) "Importing..." else "Import",
++            enabled = text.isNotBlank() && !busy,
++            onClick = {
++                val entries = dxParseAddonBackup(text)
++                if (entries == null) {
++                    message = "That is not a valid addon backup."
++                    return@NuvioPrimaryButton
++                }
++                busy = true
++                scope.launch {
++                    var added = 0
++                    var skipped = 0
++                    var failed = 0
++                    for (entry in entries) {
++                        when (val result = AddonRepository.addAddon(entry.url)) {
++                            is AddAddonResult.Success -> {
++                                added++
++                                if (!entry.enabled) {
++                                    AddonRepository.uiState.value.addons.lastOrNull()?.manifestUrl
++                                        ?.let { AddonRepository.setAddonEnabled(it, false) }
++                                }
++                            }
++                            is AddAddonResult.Error -> {
++                                if (result.message.contains("already", ignoreCase = true)) skipped++ else failed++
++                            }
++                        }
++                    }
++                    busy = false
++                    text = ""
++                    message = "Added $added, already installed $skipped, failed $failed."
++                }
++            },
++        )
++        message?.let {
++            Spacer(modifier = Modifier.height(10.dp))
++            Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
++        }
++    }
++}
