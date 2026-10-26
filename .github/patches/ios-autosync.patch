@@ -1368,7 +1368,7 @@ index 00000000..64a72376
 +                }
 +                alternatives.forEach { candidate ->
 +                    prefetchedAlternativeLoads[candidate.url]?.let { job ->
-+                        pendingSeedLoads.putIfAbsent(candidate.url, job)
++                        if (candidate.url !in pendingSeedLoads) pendingSeedLoads[candidate.url] = job
 +                    }
 +                }
 +
