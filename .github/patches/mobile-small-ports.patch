@@ -1,0 +1,487 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/core/network/IPv4FirstDns.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/core/network/IPv4FirstDns.kt
+index f2ca0e9a..1576e568 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/core/network/IPv4FirstDns.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/core/network/IPv4FirstDns.kt
+@@ -1,16 +1,62 @@
+ package com.nuvio.app.core.network
+ 
+ import okhttp3.Dns
++import java.net.HttpURLConnection
+ import java.net.Inet4Address
+ import java.net.InetAddress
++import java.net.URL
++import java.net.URLEncoder
++import java.util.concurrent.ConcurrentHashMap
+ 
+ /**
+  * Reorders DNS results to prefer IPv4 first. This helps avoid broken IPv6 routes
+- * on some emulator and network setups.
++ * on some emulator and network setups. When the user picks a DNS over HTTPS provider
++ * in Advanced settings, names are resolved there first and fall back to the system.
+  */
+ class IPv4FirstDns(private val delegate: Dns = Dns.SYSTEM) : Dns {
+     override fun lookup(hostname: String): List<InetAddress> {
+-        val addresses = delegate.lookup(hostname)
++        val addresses = resolveWithDoh(hostname) ?: delegate.lookup(hostname)
+         return addresses.sortedBy { if (it is Inet4Address) 0 else 1 }
+     }
+-}
+\ No newline at end of file
++
++    private fun resolveWithDoh(hostname: String): List<InetAddress>? {
++        val provider = DohSetting.current()
++        val endpoint = provider.endpoint ?: return null
++        if (hostname == "localhost" || hostname.all { it.isDigit() || it == '.' || it == ':' }) return null
++        val key = provider.id + "|" + hostname
++        val now = System.currentTimeMillis()
++        cache[key]?.let { (expires, list) -> if (expires > now) return list }
++        val result = runCatching { query(endpoint, hostname) }.getOrNull()
++        if (result.isNullOrEmpty()) return null
++        cache[key] = (now + CACHE_MS) to result
++        return result
++    }
++
++    private fun query(endpoint: String, hostname: String): List<InetAddress> {
++        val url = URL("$endpoint?name=${URLEncoder.encode(hostname, "UTF-8")}&type=A")
++        val connection = (url.openConnection() as HttpURLConnection).apply {
++            connectTimeout = 3_000
++            readTimeout = 3_000
++            setRequestProperty("accept", "application/dns-json")
++        }
++        try {
++            if (connection.responseCode != 200) return emptyList()
++            val body = connection.inputStream.bufferedReader().use { it.readText() }
++            val out = ArrayList<InetAddress>()
++            ANSWER_REGEX.findAll(body).forEach { match ->
++                val type = match.groupValues[1].toInt()
++                val data = match.groupValues[2]
++                if (type == 1) out += InetAddress.getByName(data)
++            }
++            return out
++        } finally {
++            connection.disconnect()
++        }
++    }
++
++    private companion object {
++        const val CACHE_MS = 5 * 60_000L
++        val cache = ConcurrentHashMap<String, Pair<Long, List<InetAddress>>>()
++        val ANSWER_REGEX = Regex("\"type\"\\s*:\\s*(\\d+)[^}]*?\"data\"\\s*:\\s*\"([^\"]+)\"")
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/network/DohSetting.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/network/DohSetting.kt
+new file mode 100644
+index 00000000..18dcdef1
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/network/DohSetting.kt
+@@ -0,0 +1,38 @@
++package com.nuvio.app.core.network
++
++import com.nuvio.app.core.storage.AppFileCache
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++
++/** Fork feature: resolve host names through DNS over HTTPS instead of the system resolver. */
++enum class DohProvider(val id: String, val label: String, val description: String, val endpoint: String?) {
++    OFF("off", "System DNS", "Use the DNS your network gives you.", null),
++    CLOUDFLARE("cloudflare", "Cloudflare", "1.1.1.1, fast and private.", "https://1.1.1.1/dns-query"),
++    GOOGLE("google", "Google", "8.8.8.8, works on most networks.", "https://8.8.8.8/resolve"),
++}
++
++object DohSetting {
++    private const val PATH = "settings/doh_provider"
++    private val _provider = MutableStateFlow(DohProvider.OFF)
++    val provider: StateFlow<DohProvider> = _provider.asStateFlow()
++    private var loaded = false
++
++    fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        val id = runCatching { AppFileCache.read(PATH)?.trim() }.getOrNull()
++        _provider.value = DohProvider.entries.firstOrNull { it.id == id } ?: DohProvider.OFF
++    }
++
++    fun current(): DohProvider {
++        ensureLoaded()
++        return _provider.value
++    }
++
++    fun set(provider: DohProvider) {
++        ensureLoaded()
++        _provider.value = provider
++        runCatching { AppFileCache.write(PATH, provider.id) }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryCalendar.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryCalendar.kt
+index e48524b5..cb532ec5 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryCalendar.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryCalendar.kt
+@@ -491,13 +491,13 @@ private fun LibraryCalendarCard(
+ @Composable
+ private fun LibraryCalendarWeekdayHeader() {
+     val labels = listOf(
+-        stringResource(Res.string.library_calendar_weekday_sun),
+         stringResource(Res.string.library_calendar_weekday_mon),
+         stringResource(Res.string.library_calendar_weekday_tue),
+         stringResource(Res.string.library_calendar_weekday_wed),
+         stringResource(Res.string.library_calendar_weekday_thu),
+         stringResource(Res.string.library_calendar_weekday_fri),
+         stringResource(Res.string.library_calendar_weekday_sat),
++        stringResource(Res.string.library_calendar_weekday_sun),
+     )
+     Row(
+         modifier = Modifier.fillMaxWidth(),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryCalendarData.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryCalendarData.kt
+index d2901ecd..c4e7e88e 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryCalendarData.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryCalendarData.kt
+@@ -119,7 +119,8 @@ internal fun libraryCalendarCells(month: LibraryCalendarMonth): List<LibraryCale
+ internal fun firstLibraryCalendarWeekdayOffset(year: Int, month: Int): Int {
+     val epochDay = isoEpochDay(LibraryCalendarDate(year, month, 1).iso)
+     val raw = (epochDay + 4L) % 7L
+-    return if (raw < 0L) (raw + 7L).toInt() else raw.toInt()
++    val sundayFirst = if (raw < 0L) (raw + 7L).toInt() else raw.toInt()
++    return (sundayFirst + 6) % 7
+ }
+ 
+ internal fun daysInLibraryCalendarMonth(year: Int, month: Int): Int =
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryCalendarHooks.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryCalendarHooks.kt
+index b1c9c412..18849c24 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryCalendarHooks.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryCalendarHooks.kt
+@@ -2,6 +2,7 @@ package com.nuvio.app.features.library
+ 
+ import androidx.compose.material.icons.Icons
+ import androidx.compose.material.icons.rounded.CalendarMonth
++import androidx.compose.material.icons.rounded.Shuffle
+ import androidx.compose.material3.Icon
+ import androidx.compose.material3.IconButton
+ import androidx.compose.material3.MaterialTheme
+@@ -44,3 +45,16 @@ internal fun LibraryCalendarHost(items: List<LibraryItem>, onPosterClick: ((Libr
+         onPosterClick = onPosterClick,
+     )
+ }
++
++/** Random pick button for the Library top bar: opens a random saved title. */
++@Composable
++internal fun LibraryRandomPickButton(items: List<LibraryItem>, onPosterClick: ((LibraryItem) -> Unit)?) {
++    if (onPosterClick == null || items.isEmpty()) return
++    IconButton(onClick = { onPosterClick(items.random()) }) {
++        Icon(
++            imageVector = Icons.Rounded.Shuffle,
++            contentDescription = "Pick a random title",
++            tint = MaterialTheme.colorScheme.onSurfaceVariant,
++        )
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryScreen.kt
+index 529d8f3d..fd254ce9 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryScreen.kt
+@@ -336,6 +336,7 @@ fun LibraryScreen(
+                             actions = {
+                                 if (sourceMode == LibraryViewMode.Saved) {
+                                     LibraryCalendarButton() // Nuvio fork: library calendar
++                                    LibraryRandomPickButton(uiState.items, onPosterClick) // Nuvio fork: random pick
+                                     LibraryListManagementButton()
+                                     val targetLayout = if (displaySettings.layoutMode == LibraryLayoutMode.HORIZONTAL) {
+                                         LibraryLayoutMode.VERTICAL
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEffectsPanels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEffectsPanels.kt
+index b326c20e..91589cb9 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEffectsPanels.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEffectsPanels.kt
+@@ -142,6 +142,7 @@ private fun ColumnScope.AudioEffectPanel() {
+                 )
+             }
+             DxSoundModeRow() // dx.bi sound modes hook
++            SleepTimerRow() // sleep timer hook
+             VolumeBoosterRow()
+         } else {
+             EqualizerTab(state)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeTrackActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeTrackActions.kt
+index 47bac957..0570ad21 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeTrackActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeTrackActions.kt
+@@ -204,6 +204,7 @@ private fun PlayerScreenRuntime.tryAutoSelectPreferredSubtitleFromAvailableTrack
+     preferredAudioTargets: List<String>,
+ ) {
+     if (isUserExplicitSubtitleSelection) return
++    if (com.nuvio.app.features.settings.ForkPrefs.subtitlesStartOff.current()) return
+ 
+     val preferredSubtitleLanguage = normalizeLanguageCode(
+         playerSettingsUiState.preferredSubtitleLanguage,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+index c1e0fabd..a7ef7b05 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+@@ -338,6 +338,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+         SmartEnhance.available.value = controller?.supportsSmartEnhance() == true
+         controller?.applyPicture(pictureState.copy(smartEnhance = smartEnhanceOn))
+     }
++    SleepTimerEffect(playerController) // sleep timer hook
+     val dxSoundMode by DxSound.mode.collectAsStateWithLifecycle() // dx.bi sound modes hook
+     val dxSoundRow by DxSound.rowEnabled.collectAsStateWithLifecycle()
+     LaunchedEffect(playerController, audioState, dxSoundMode, dxSoundRow) {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSurfaceGestures.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSurfaceGestures.kt
+index e1ff6722..816d2279 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSurfaceGestures.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSurfaceGestures.kt
+@@ -127,6 +127,7 @@ internal fun Modifier.playerSurfaceDragGestures(
+                     )
+                     val horizontalDominant =
+                         !holdToSpeedActive &&
++                            com.nuvio.app.features.settings.ForkPrefs.swipeToSeek.current() &&
+                             abs(totalDx) > viewConfiguration.touchSlop &&
+                             abs(totalDx) > abs(totalDy)
+                     val verticalDominant =
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SleepTimer.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SleepTimer.kt
+new file mode 100644
+index 00000000..6b6688b8
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SleepTimer.kt
+@@ -0,0 +1,76 @@
++package com.nuvio.app.features.player
++
++import androidx.compose.foundation.horizontalScroll
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++
++/** Fork feature: pause playback after a chosen number of minutes. */
++internal object SleepTimer {
++    val choices: List<Int> = listOf(0, 15, 30, 45, 60, 90)
++
++    private val _minutes = MutableStateFlow(0)
++    val minutes: StateFlow<Int> = _minutes.asStateFlow()
++    private val _token = MutableStateFlow(0)
++    val token: StateFlow<Int> = _token.asStateFlow()
++
++    fun set(minutes: Int) {
++        _minutes.value = minutes
++        _token.value = _token.value + 1
++    }
++
++    fun label(minutes: Int): String = if (minutes <= 0) "Off" else "$minutes min"
++}
++
++@Composable
++internal fun SleepTimerEffect(controller: PlayerEngineController?) {
++    val minutes by SleepTimer.minutes.collectAsStateWithLifecycle()
++    val token by SleepTimer.token.collectAsStateWithLifecycle()
++    LaunchedEffect(controller, token) {
++        if (controller == null || minutes <= 0) return@LaunchedEffect
++        delay(minutes * 60_000L)
++        controller.pause()
++        SleepTimer.set(0)
++    }
++}
++
++@Composable
++internal fun SleepTimerRow() {
++    val minutes by SleepTimer.minutes.collectAsStateWithLifecycle()
++    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
++        Text("Sleep timer", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
++        Row(
++            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
++            horizontalArrangement = Arrangement.spacedBy(8.dp),
++        ) {
++            SleepTimer.choices.forEach { option ->
++                com.nuvio.app.core.ui.Chip(
++                    label = SleepTimer.label(option),
++                    selected = minutes == option,
++                    onClick = { SleepTimer.set(option) },
++                )
++            }
++        }
++        Text(
++            text = if (minutes <= 0) "Playback keeps going." else "Playback pauses in $minutes minutes.",
++            color = Color.White.copy(alpha = 0.7f),
++            fontSize = 13.sp,
++        )
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AdvancedSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AdvancedSettingsPage.kt
+index 6418963d..05e91bbf 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AdvancedSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AdvancedSettingsPage.kt
+@@ -109,6 +109,13 @@ internal fun LazyListScope.advancedSettingsContent(
+             }
+         }
+     }
++    item {
++        SettingsSection(title = "Network", isTablet = isTablet) {
++            SettingsGroup(isTablet = isTablet) {
++                DohSettingsRow(isTablet = isTablet) // DNS over HTTPS hook
++            }
++        }
++    }
+     item {
+         SettingsSection(
+             title = stringResource(Res.string.settings_advanced_section_cache),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DohSettingsRow.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DohSettingsRow.kt
+new file mode 100644
+index 00000000..4f1666cd
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DohSettingsRow.kt
+@@ -0,0 +1,49 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.core.network.DohProvider
++import com.nuvio.app.core.network.DohSetting
++import com.nuvio.app.core.ui.DialogButton
++import com.nuvio.app.core.ui.DialogButtons
++import com.nuvio.app.core.ui.DialogOption
++import com.nuvio.app.core.ui.DialogSurface
++
++@Composable
++internal fun DohSettingsRow(isTablet: Boolean) {
++    LaunchedEffect(Unit) { DohSetting.ensureLoaded() }
++    val provider by DohSetting.provider.collectAsStateWithLifecycle()
++    var show by remember { mutableStateOf(false) }
++    SettingsNavigationRow(
++        title = "DNS over HTTPS",
++        description = provider.label + if (provider == DohProvider.OFF) "" else " (applies to new connections)",
++        isTablet = isTablet,
++        onClick = { show = true },
++    )
++    if (show) {
++        DialogSurface(onDismissRequest = { show = false }, title = "DNS over HTTPS") {
++            DohProvider.entries.forEach { option ->
++                DialogOption(
++                    text = option.label,
++                    description = option.description,
++                    selected = provider == option,
++                    onClick = {
++                        DohSetting.set(option)
++                        show = false
++                    },
++                    modifier = Modifier.fillMaxWidth(),
++                )
++            }
++            DialogButtons {
++                DialogButton(text = "Done", onClick = { show = false })
++            }
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPlayerPrefsSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPlayerPrefsSettings.kt
+new file mode 100644
+index 00000000..0e935e02
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPlayerPrefsSettings.kt
+@@ -0,0 +1,35 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++
++@Composable
++internal fun ForkPlayerPrefsSettingsSection(isTablet: Boolean) {
++    LaunchedEffect(Unit) {
++        ForkPrefs.swipeToSeek.ensureLoaded()
++        ForkPrefs.subtitlesStartOff.ensureLoaded()
++    }
++    val swipe by ForkPrefs.swipeToSeek.value.collectAsStateWithLifecycle()
++    val subsOff by ForkPrefs.subtitlesStartOff.value.collectAsStateWithLifecycle()
++    SettingsSection(title = "Player gestures and subtitles", isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            SettingsSwitchRow(
++                title = "Swipe to seek",
++                description = "Swipe left or right on the video to jump back or forward. Turn off to avoid accidental seeks.",
++                checked = swipe,
++                isTablet = isTablet,
++                onCheckedChange = ForkPrefs.swipeToSeek::set,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Subtitles start off",
++                description = "Never turn subtitles on by themselves. You can still pick a track in the player.",
++                checked = subsOff,
++                isTablet = isTablet,
++                onCheckedChange = ForkPrefs.subtitlesStartOff::set,
++            )
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
+new file mode 100644
+index 00000000..7bff417c
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
+@@ -0,0 +1,36 @@
++package com.nuvio.app.features.settings
++
++import com.nuvio.app.core.storage.AppFileCache
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++
++/** Small on/off setting kept in the app file cache, shared by several fork features. */
++class ForkBoolPref(private val path: String, private val default: Boolean) {
++    private val _value = MutableStateFlow(default)
++    val value: StateFlow<Boolean> = _value.asStateFlow()
++    private var loaded = false
++
++    fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        val stored = runCatching { AppFileCache.read(path)?.trim() }.getOrNull()
++        if (stored == "1") _value.value = true else if (stored == "0") _value.value = false
++    }
++
++    fun current(): Boolean {
++        ensureLoaded()
++        return _value.value
++    }
++
++    fun set(enabled: Boolean) {
++        ensureLoaded()
++        _value.value = enabled
++        runCatching { AppFileCache.write(path, if (enabled) "1" else "0") }
++    }
++}
++
++object ForkPrefs {
++    val swipeToSeek = ForkBoolPref("settings/swipe_to_seek", true)
++    val subtitlesStartOff = ForkBoolPref("settings/subtitles_start_off", false)
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+index 69c3b040..eafdfae8 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+@@ -647,6 +647,7 @@ private fun PlaybackSettingsSection(
+         DxRememberSettingsSection(isTablet = isTablet) // dx.bi remember hook
+         DxSecondSubtitleSettingsSection(isTablet = isTablet) // dx.bi second subtitle hook
+         DxStatsSettingsSection(isTablet = isTablet) // dx.bi stream stats hook
++        ForkPlayerPrefsSettingsSection(isTablet = isTablet) // fork player prefs hook
+ 
+         ConnectionFitSettingsSection(isTablet = isTablet) // Nuvio fork: connection-speed fit
+ 
