@@ -1,0 +1,802 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ProfileInsightsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ProfileInsightsPage.kt
+new file mode 100644
+index 00000000..037afcde
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ProfileInsightsPage.kt
+@@ -0,0 +1,766 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.foundation.BorderStroke
++import androidx.compose.foundation.Canvas
++import androidx.compose.foundation.background
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.horizontalScroll
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.ExperimentalLayoutApi
++import androidx.compose.foundation.layout.FlowRow
++import androidx.compose.foundation.layout.PaddingValues
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.aspectRatio
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.navigationBarsPadding
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.layout.statusBarsPadding
++import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.lazy.grid.GridCells
++import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
++import androidx.compose.foundation.lazy.grid.items
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.shape.CircleShape
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.foundation.verticalScroll
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.automirrored.rounded.ArrowBack
++import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
++import androidx.compose.material.icons.rounded.Edit
++import androidx.compose.material.icons.rounded.People
++import androidx.compose.material.icons.rounded.Refresh
++import androidx.compose.material3.CircularProgressIndicator
++import androidx.compose.material3.ExperimentalMaterial3Api
++import androidx.compose.material3.Icon
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Surface
++import androidx.compose.material3.Text
++import androidx.compose.material3.rememberModalBottomSheetState
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.geometry.Offset
++import androidx.compose.ui.geometry.Size
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.graphics.StrokeCap
++import androidx.compose.ui.graphics.drawscope.Stroke
++import androidx.compose.ui.layout.ContentScale
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.style.TextAlign
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import androidx.compose.ui.window.Dialog
++import androidx.compose.ui.window.DialogProperties
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import coil3.compose.AsyncImage
++import com.nuvio.app.core.ui.NuvioModalBottomSheet
++import com.nuvio.app.features.details.MetaDetailsRepository
++import com.nuvio.app.features.library.LibraryRepository
++import com.nuvio.app.features.player.DxWatchStats
++import com.nuvio.app.features.profiles.AvatarRepository
++import com.nuvio.app.features.profiles.NuvioProfile
++import com.nuvio.app.features.profiles.ProfileEditScreen
++import com.nuvio.app.features.profiles.ProfileRepository
++import com.nuvio.app.features.profiles.parseHexColor
++import com.nuvio.app.features.profiles.profileAvatarImageUrl
++import com.nuvio.app.features.watched.WatchedRepository
++import com.nuvio.app.features.watchprogress.CurrentDateProvider
++import com.nuvio.app.features.watchprogress.WatchProgressClock
++import com.nuvio.app.features.watchprogress.WatchProgressRepository
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.withContext
++import kotlin.math.roundToInt
++
++/**
++ * Enhanced-style profile card + insights page for the settings root. Replaces the old "Your stats" list.
++ * Data comes from the fork's own repositories (progress, watched, library) and is enriched with title
++ * details (genres, runtime, episode dates) fetched in the background and kept in memory.
++ */
++
++private data class InsightsPoster(
++    val key: String,
++    val title: String,
++    val subtitle: String?,
++    val poster: String?,
++)
++
++private enum class InsightsKind(val label: String) {
++    Watching("Watching"),
++    Saved("Saved"),
++    Upcoming("Upcoming"),
++    Completed("Completed"),
++    Ongoing("Ongoing"),
++    Episodes("Episodes"),
++    Watched("Watched"),
++}
++
++private data class InsightsTitleFacts(
++    val genres: List<String>,
++    val runtimeMinutes: Int,
++    val upcoming: List<InsightsUpcoming>,
++)
++
++private data class InsightsUpcoming(
++    val date: String,
++    val label: String?,
++    val image: String?,
++)
++
++private val insightsFactsCache = HashMap<String, InsightsTitleFacts>()
++private var insightsFactsUpdatedAt: Long = 0L
++
++private val DonutPalette = listOf(
++    Color(0xFFFF6384), Color(0xFFFF9F40), Color(0xFFFFCD56), Color(0xFF4BC0C0),
++    Color(0xFF36A2EB), Color(0xFF9966FF), Color(0xFFE879F9),
++)
++private val DonutOthers = Color(0xFF8A8A96)
++
++private fun parseRuntimeMinutes(raw: String?): Int {
++    if (raw.isNullOrBlank()) return 0
++    val hours = Regex("(\\d+)\\s*h").find(raw)?.groupValues?.get(1)?.toIntOrNull() ?: 0
++    val mins = Regex("(\\d+)\\s*m").find(raw)?.groupValues?.get(1)?.toIntOrNull()
++    if (hours > 0 || mins != null) return hours * 60 + (mins ?: 0)
++    return Regex("(\\d+)").find(raw)?.groupValues?.get(1)?.toIntOrNull() ?: 0
++}
++
++private fun isSeriesType(type: String): Boolean =
++    !type.equals("movie", ignoreCase = true)
++
++private fun formatWatchTime(seconds: Double): String {
++    val totalMinutes = (seconds / 60.0).roundToInt()
++    val days = totalMinutes / (60 * 24)
++    val hours = (totalMinutes % (60 * 24)) / 60
++    val minutes = totalMinutes % 60
++    return when {
++        days > 0 -> "~${days}d ${hours}h"
++        hours > 0 -> "~${hours}h ${minutes}m"
++        else -> "~${minutes}m"
++    }
++}
++
++private fun agoText(updatedAt: Long): String {
++    if (updatedAt <= 0L) return "Not updated yet"
++    val minutes = ((WatchProgressClock.nowEpochMs() - updatedAt) / 60_000L).coerceAtLeast(0)
++    return when {
++        minutes < 1 -> "Updated just now"
++        minutes < 60 -> "Updated $minutes min ago"
++        minutes < 60 * 24 -> "Updated ${minutes / 60} h ago"
++        else -> "Updated ${minutes / (60 * 24)} d ago"
++    }
++}
++
++@Composable
++internal fun ProfileInsightsRootCard(
++    isTablet: Boolean,
++    onSwitchProfile: (() -> Unit)?,
++) {
++    val profileState by ProfileRepository.state.collectAsStateWithLifecycle()
++    val avatars by AvatarRepository.avatars.collectAsStateWithLifecycle()
++    var open by remember { mutableStateOf(false) }
++    val profile = profileState.activeProfile
++    val avatar = avatars.firstOrNull { it.id == profile?.avatarId }
++    Surface(
++        modifier = Modifier
++            .fillMaxWidth()
++            .padding(bottom = if (isTablet) 20.dp else 16.dp),
++        shape = RoundedCornerShape(24.dp),
++        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
++        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)),
++        onClick = { open = true },
++    ) {
++        Row(
++            modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
++            verticalAlignment = Alignment.CenterVertically,
++        ) {
++            InsightsAvatar(profile = profile, imageUrl = profile?.let { profileAvatarImageUrl(it, avatar) }, size = 64)
++            Column(modifier = Modifier.weight(1f).padding(horizontal = 14.dp)) {
++                Text(
++                    text = profile?.name?.takeIf { it.isNotBlank() } ?: "Profile",
++                    style = MaterialTheme.typography.titleLarge,
++                    fontWeight = FontWeight.Bold,
++                    maxLines = 1,
++                    overflow = TextOverflow.Ellipsis,
++                )
++                Text(
++                    text = "View activity, library, and taste insights for the active profile",
++                    style = MaterialTheme.typography.bodySmall,
++                    color = MaterialTheme.colorScheme.onSurfaceVariant,
++                    maxLines = 2,
++                    overflow = TextOverflow.Ellipsis,
++                )
++            }
++            Icon(
++                imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
++                contentDescription = null,
++                tint = MaterialTheme.colorScheme.onSurfaceVariant,
++            )
++        }
++    }
++    if (open) {
++        ProfileInsightsDialog(
++            profile = profile,
++            avatarUrl = profile?.let { profileAvatarImageUrl(it, avatar) },
++            onSwitchProfile = onSwitchProfile?.let { switch -> { open = false; switch() } },
++            onDismiss = { open = false },
++        )
++    }
++}
++
++@Composable
++private fun InsightsAvatar(profile: NuvioProfile?, imageUrl: String?, size: Int) {
++    val base = profile?.let { runCatching { parseHexColor(it.avatarColorHex) }.getOrNull() }
++        ?: MaterialTheme.colorScheme.primary
++    Box(
++        modifier = Modifier.size(size.dp).clip(CircleShape).background(base),
++        contentAlignment = Alignment.Center,
++    ) {
++        if (imageUrl != null) {
++            AsyncImage(
++                model = imageUrl,
++                contentDescription = null,
++                contentScale = ContentScale.Crop,
++                modifier = Modifier.fillMaxSize(),
++            )
++        } else {
++            Text(
++                text = profile?.name?.firstOrNull()?.uppercase() ?: "?",
++                fontSize = (size / 2.4f).sp,
++                fontWeight = FontWeight.Bold,
++                color = Color.White,
++            )
++        }
++    }
++}
++
++@Composable
++private fun InsightsRoundButton(icon: androidx.compose.ui.graphics.vector.ImageVector, description: String, onClick: () -> Unit) {
++    Surface(
++        onClick = onClick,
++        shape = CircleShape,
++        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
++        modifier = Modifier.size(44.dp),
++    ) {
++        Box(contentAlignment = Alignment.Center) {
++            Icon(imageVector = icon, contentDescription = description, modifier = Modifier.size(22.dp))
++        }
++    }
++}
++
++@OptIn(ExperimentalMaterial3Api::class)
++@Composable
++private fun ProfileInsightsDialog(
++    profile: NuvioProfile?,
++    avatarUrl: String?,
++    onSwitchProfile: (() -> Unit)?,
++    onDismiss: () -> Unit,
++) {
++    LaunchedEffect(Unit) {
++        DxWatchStats.ensureLoaded()
++        WatchedRepository.ensureLoaded()
++        LibraryRepository.ensureLoaded()
++        WatchProgressRepository.ensureLoaded()
++    }
++    val progress by WatchProgressRepository.uiState.collectAsStateWithLifecycle()
++    val watched by WatchedRepository.uiState.collectAsStateWithLifecycle()
++    val fullySeries by WatchedRepository.fullyWatchedSeriesKeys.collectAsStateWithLifecycle()
++    val library by LibraryRepository.uiState.collectAsStateWithLifecycle()
++    val statsEnabled by DxWatchStats.enabled.collectAsStateWithLifecycle()
++
++    var editing by remember { mutableStateOf(false) }
++    var sheetKind by remember { mutableStateOf<InsightsKind?>(null) }
++    var factsVersion by remember { mutableStateOf(0) }
++    var loaded by remember { mutableStateOf(0) }
++    var total by remember { mutableStateOf(0) }
++    var refreshTick by remember { mutableStateOf(0) }
++
++    val activeProgress = remember(progress.entries) {
++        progress.entries
++            .filter { !it.isEffectivelyCompleted }
++            .sortedByDescending { it.lastUpdatedEpochMs }
++            .distinctBy { it.parentMetaId }
++    }
++    val watchedTitles = remember(watched.items) {
++        watched.items.sortedByDescending { it.markedAtEpochMs }.distinctBy { it.id }
++    }
++    val summary = remember(progress.entries, refreshTick, statsEnabled) { DxWatchStats.summary(progress.entries) }
++
++    // title ids whose details we want: library + watching + watched, newest first, capped
++    val wanted = remember(library.items, activeProgress, watchedTitles) {
++        buildList {
++            library.items.forEach { add(it.type to it.id) }
++            activeProgress.forEach { add(it.parentMetaType to it.parentMetaId) }
++            watchedTitles.forEach { add(it.type to it.id) }
++        }.distinct().take(90)
++    }
++    LaunchedEffect(wanted, refreshTick) {
++        total = wanted.size
++        loaded = wanted.count { insightsFactsCache.containsKey("${it.first}:${it.second}") }
++        for ((type, id) in wanted) {
++            val key = "$type:$id"
++            if (insightsFactsCache.containsKey(key)) continue
++            val facts = withContext(Dispatchers.Default) {
++                runCatching { MetaDetailsRepository.fetch(type, id) }.getOrNull()?.let { meta ->
++                    val today = CurrentDateProvider.todayIsoDate()
++                    InsightsTitleFacts(
++                        genres = meta.genres,
++                        runtimeMinutes = parseRuntimeMinutes(meta.runtime),
++                        upcoming = meta.videos.mapNotNull { v ->
++                            val date = v.released?.take(10)?.takeIf { it.length == 10 && it >= today } ?: return@mapNotNull null
++                            val ep = if (v.season != null && v.episode != null) "S${v.season}E${v.episode}" else null
++                            InsightsUpcoming(date = date, label = ep, image = v.thumbnail)
++                        }.sortedBy { it.date }.take(3),
++                    )
++                }
++            }
++            if (facts != null) insightsFactsCache[key] = facts
++            loaded += 1
++            factsVersion += 1
++        }
++        insightsFactsUpdatedAt = WatchProgressClock.nowEpochMs()
++        factsVersion += 1
++    }
++
++    val genreCounts = remember(factsVersion, watchedTitles, library.items) {
++        val counts = HashMap<String, Int>()
++        (watchedTitles.map { it.type to it.id } + library.items.map { it.type to it.id }).distinct().forEach { (t, i) ->
++            insightsFactsCache["$t:$i"]?.genres?.forEach { g -> counts[g] = (counts[g] ?: 0) + 1 }
++        }
++        counts.entries.sortedByDescending { it.value }.map { it.key to it.value }
++    }
++    val upcoming = remember(factsVersion, library.items, activeProgress) {
++        val seen = HashSet<String>()
++        val out = ArrayList<InsightsPoster>()
++        val sources = library.items.map { Triple(it.type, it.id, it) } .map { (t, i, x) -> Triple(t, i, x.name to x.poster) } +
++            activeProgress.map { Triple(it.parentMetaType, it.parentMetaId, it.title to it.poster) }
++        sources.forEach { (t, i, np) ->
++            if (!seen.add("$t:$i")) return@forEach
++            insightsFactsCache["$t:$i"]?.upcoming?.firstOrNull()?.let { up ->
++                out.add(InsightsPoster("$t:$i", np.first, listOfNotNull(up.date, up.label).joinToString(" • "), np.second))
++            }
++        }
++        out.sortedBy { it.subtitle }
++    }
++    val watchedMinutes = remember(factsVersion, watchedTitles) {
++        watchedTitles.sumOf { insightsFactsCache["${it.type}:${it.id}"]?.runtimeMinutes ?: 0 }
++    }
++    val movies = remember(watchedTitles) { watchedTitles.count { !isSeriesType(it.type) } }
++    val seriesCount = remember(watchedTitles) { watchedTitles.count { isSeriesType(it.type) } }
++    val episodes = remember(watched.items) { watched.items.count { it.season != null } }
++    val ongoing = remember(activeProgress) { activeProgress.count { isSeriesType(it.parentMetaType) } }
++    val completed = remember(watchedTitles, fullySeries) { watchedTitles.count { !isSeriesType(it.type) } + fullySeries.size }
++
++    fun postersFor(kind: InsightsKind): List<InsightsPoster> = when (kind) {
++        InsightsKind.Watching -> activeProgress.map {
++            InsightsPoster(it.parentMetaId, it.title, if (it.seasonNumber != null && it.episodeNumber != null) "S${it.seasonNumber}E${it.episodeNumber}" else null, it.poster)
++        }
++        InsightsKind.Ongoing -> activeProgress.filter { isSeriesType(it.parentMetaType) }.map {
++            InsightsPoster(it.parentMetaId, it.title, if (it.seasonNumber != null && it.episodeNumber != null) "S${it.seasonNumber}E${it.episodeNumber}" else null, it.poster)
++        }
++        InsightsKind.Saved -> library.items.map { InsightsPoster(it.id, it.name, it.releaseInfo, it.poster) }
++        InsightsKind.Upcoming -> upcoming
++        InsightsKind.Completed -> watchedTitles.filter { !isSeriesType(it.type) }.map { InsightsPoster(it.id, it.name, it.releaseInfo, it.poster) }
++        InsightsKind.Episodes -> watched.items.filter { it.season != null }.sortedByDescending { it.markedAtEpochMs }.take(60).map {
++            InsightsPoster(it.videoId ?: it.id, it.name, "S${it.season}E${it.episode}", it.poster)
++        }
++        InsightsKind.Watched -> watchedTitles.map { InsightsPoster(it.id, it.name, it.releaseInfo, it.poster) }
++    }
++
++    val counts = mapOf(
++        InsightsKind.Watching to activeProgress.size,
++        InsightsKind.Saved to library.items.size,
++        InsightsKind.Upcoming to upcoming.size,
++        InsightsKind.Completed to completed,
++        InsightsKind.Ongoing to ongoing,
++        InsightsKind.Episodes to episodes,
++        InsightsKind.Watched to watchedTitles.size,
++    )
++
++    Dialog(
++        onDismissRequest = onDismiss,
++        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
++    ) {
++        Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
++            Column(
++                modifier = Modifier
++                    .fillMaxSize()
++                    .verticalScroll(rememberScrollState())
++                    .statusBarsPadding()
++                    .navigationBarsPadding()
++                    .padding(bottom = 32.dp),
++                horizontalAlignment = Alignment.CenterHorizontally,
++            ) {
++                Row(
++                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
++                    verticalAlignment = Alignment.CenterVertically,
++                ) {
++                    InsightsRoundButton(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onDismiss)
++                    Text(
++                        text = "Profile",
++                        modifier = Modifier.weight(1f),
++                        textAlign = TextAlign.Center,
++                        style = MaterialTheme.typography.titleMedium,
++                        fontWeight = FontWeight.SemiBold,
++                    )
++                    Spacer(Modifier.size(44.dp))
++                }
++                Row(
++                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
++                    verticalAlignment = Alignment.CenterVertically,
++                    horizontalArrangement = Arrangement.SpaceBetween,
++                ) {
++                    if (onSwitchProfile != null) {
++                        InsightsRoundButton(Icons.Rounded.People, "Switch profile", onSwitchProfile)
++                    } else {
++                        Spacer(Modifier.size(44.dp))
++                    }
++                    InsightsAvatar(profile = profile, imageUrl = avatarUrl, size = 112)
++                    InsightsRoundButton(Icons.Rounded.Edit, "Edit profile") { editing = true }
++                }
++                Text(
++                    text = profile?.name?.takeIf { it.isNotBlank() } ?: "Profile",
++                    style = MaterialTheme.typography.headlineSmall,
++                    fontWeight = FontWeight.Bold,
++                    modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
++                )
++
++                Row(
++                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp),
++                    horizontalArrangement = Arrangement.spacedBy(10.dp),
++                ) {
++                    InsightsKind.entries.forEach { kind ->
++                        val n = counts[kind] ?: 0
++                        val tileEnabled = kind != InsightsKind.Ongoing || n > 0
++                        Surface(
++                            onClick = { if (tileEnabled) sheetKind = kind },
++                            shape = RoundedCornerShape(18.dp),
++                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
++                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)),
++                        ) {
++                            Column(
++                                modifier = Modifier.width(92.dp).padding(vertical = 12.dp),
++                                horizontalAlignment = Alignment.CenterHorizontally,
++                            ) {
++                                Text(n.toString(), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
++                                Text(kind.label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
++                            }
++                        }
++                    }
++                }
++
++                Row(
++                    modifier = Modifier.padding(top = 14.dp, start = 20.dp, end = 20.dp).fillMaxWidth(),
++                    verticalAlignment = Alignment.CenterVertically,
++                    horizontalArrangement = Arrangement.Center,
++                ) {
++                    Text(
++                        text = agoText(insightsFactsUpdatedAt),
++                        style = MaterialTheme.typography.bodySmall,
++                        color = MaterialTheme.colorScheme.onSurfaceVariant,
++                    )
++                    Icon(
++                        imageVector = Icons.Rounded.Refresh,
++                        contentDescription = "Refresh",
++                        modifier = Modifier
++                            .padding(start = 8.dp)
++                            .size(22.dp)
++                            .clip(CircleShape)
++                            .clickable {
++                                insightsFactsCache.clear()
++                                refreshTick += 1
++                                factsVersion += 1
++                            },
++                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
++                    )
++                }
++                if (total > 0 && loaded < total) {
++                    Row(
++                        modifier = Modifier.padding(top = 6.dp),
++                        verticalAlignment = Alignment.CenterVertically,
++                    ) {
++                        CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp)
++                        Text(
++                            text = "  Loading title details · $loaded of $total",
++                            style = MaterialTheme.typography.labelSmall,
++                            color = MaterialTheme.colorScheme.onSurfaceVariant,
++                        )
++                    }
++                }
++
++                // Watch time card
++                Surface(
++                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp),
++                    shape = RoundedCornerShape(24.dp),
++                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
++                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
++                ) {
++                    Column(modifier = Modifier.padding(20.dp)) {
++                        Text("WATCH TIME", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
++                        val seconds = if (summary.total > 0.0) summary.total else watchedMinutes * 60.0
++                        Text(
++                            text = if (seconds > 0.0) formatWatchTime(seconds) else "No watch time yet",
++                            style = MaterialTheme.typography.displaySmall,
++                            fontWeight = FontWeight.Bold,
++                            modifier = Modifier.padding(top = 4.dp),
++                        )
++                        Text(
++                            text = if (summary.total > 0.0) {
++                                "${formatWatchTime(summary.week)} this week • ${summary.currentStreak} day streak"
++                            } else {
++                                "Estimated from runtime of everything you marked as watched"
++                            },
++                            style = MaterialTheme.typography.bodySmall,
++                            color = MaterialTheme.colorScheme.onSurfaceVariant,
++                            modifier = Modifier.padding(top = 4.dp),
++                        )
++                    }
++                }
++
++                // Taste
++                Text(
++                    text = "Taste",
++                    style = MaterialTheme.typography.titleLarge,
++                    fontWeight = FontWeight.Bold,
++                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
++                )
++                Surface(
++                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
++                    shape = RoundedCornerShape(24.dp),
++                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
++                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)),
++                ) {
++                    Column(modifier = Modifier.padding(20.dp)) {
++                        Text("Taste DNA", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
++                        if (genreCounts.isEmpty()) {
++                            Text(
++                                text = if (total > 0 && loaded < total) "Reading your titles, one moment..." else "Watch or save a few titles and your taste shows up here.",
++                                style = MaterialTheme.typography.bodySmall,
++                                color = MaterialTheme.colorScheme.onSurfaceVariant,
++                                modifier = Modifier.padding(vertical = 18.dp),
++                            )
++                        } else {
++                            InsightsGenreDonut(genreCounts)
++                            if (movies + seriesCount > 0) {
++                                InsightsBalanceBar(movies = movies, series = seriesCount)
++                            }
++                            InsightsChips(genreCounts.take(6).map { it.first })
++                        }
++                    }
++                }
++
++                if (statsEnabled || summary.total > 0.0) {
++                    TextRowAction(
++                        text = if (statsEnabled) "Counting watch time is on" else "Counting watch time is off",
++                        onClick = { DxWatchStats.setEnabled(!statsEnabled) },
++                    )
++                    TextRowAction(
++                        text = "Reset counted watch time",
++                        onClick = { DxWatchStats.reset(); refreshTick += 1 },
++                    )
++                }
++            }
++        }
++
++        sheetKind?.let { kind ->
++            val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
++            val sheetItems = postersFor(kind)
++            NuvioModalBottomSheet(
++                onDismissRequest = { sheetKind = null },
++                sheetState = sheetState,
++                fullHeight = true,
++            ) {
++                Text(
++                    text = kind.label,
++                    style = MaterialTheme.typography.titleLarge,
++                    fontWeight = FontWeight.Bold,
++                    modifier = Modifier.padding(horizontal = 20.dp),
++                )
++                Text(
++                    text = "${sheetItems.size} titles",
++                    style = MaterialTheme.typography.bodySmall,
++                    color = MaterialTheme.colorScheme.onSurfaceVariant,
++                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
++                )
++                if (sheetItems.isEmpty()) {
++                    Text(
++                        text = "Nothing here yet",
++                        modifier = Modifier.fillMaxWidth().padding(40.dp),
++                        textAlign = TextAlign.Center,
++                        color = MaterialTheme.colorScheme.onSurfaceVariant,
++                    )
++                } else {
++                    LazyVerticalGrid(
++                        columns = GridCells.Fixed(2),
++                        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 32.dp),
++                        horizontalArrangement = Arrangement.spacedBy(12.dp),
++                        verticalArrangement = Arrangement.spacedBy(14.dp),
++                        modifier = Modifier.fillMaxSize(),
++                    ) {
++                        items(sheetItems, key = { it.key + it.subtitle }) { poster ->
++                            Column {
++                                Box(
++                                    modifier = Modifier
++                                        .fillMaxWidth()
++                                        .aspectRatio(2f / 3f)
++                                        .clip(RoundedCornerShape(14.dp))
++                                        .background(MaterialTheme.colorScheme.surfaceVariant),
++                                ) {
++                                    if (poster.poster != null) {
++                                        AsyncImage(
++                                            model = poster.poster,
++                                            contentDescription = poster.title,
++                                            contentScale = ContentScale.Crop,
++                                            modifier = Modifier.fillMaxSize(),
++                                        )
++                                    }
++                                }
++                                Text(
++                                    text = poster.title,
++                                    style = MaterialTheme.typography.bodyMedium,
++                                    fontWeight = FontWeight.SemiBold,
++                                    maxLines = 1,
++                                    overflow = TextOverflow.Ellipsis,
++                                    modifier = Modifier.padding(top = 6.dp),
++                                )
++                                poster.subtitle?.let {
++                                    Text(
++                                        text = it,
++                                        style = MaterialTheme.typography.labelSmall,
++                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
++                                        maxLines = 1,
++                                        overflow = TextOverflow.Ellipsis,
++                                    )
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++        }
++    }
++
++    if (editing && profile != null) {
++        Dialog(
++            onDismissRequest = { editing = false },
++            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
++        ) {
++            Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
++                ProfileEditScreen(
++                    profile = profile,
++                    onBack = { editing = false },
++                    onSaved = { editing = false },
++                )
++            }
++        }
++    }
++}
++
++@Composable
++private fun TextRowAction(text: String, onClick: () -> Unit) {
++    Text(
++        text = text,
++        style = MaterialTheme.typography.bodyMedium,
++        color = MaterialTheme.colorScheme.primary,
++        modifier = Modifier
++            .padding(top = 8.dp)
++            .clip(RoundedCornerShape(12.dp))
++            .clickable(onClick = onClick)
++            .padding(horizontal = 16.dp, vertical = 8.dp),
++    )
++}
++
++@Composable
++private fun InsightsGenreDonut(genres: List<Pair<String, Int>>) {
++    val top = genres.take(7)
++    val others = genres.drop(7).sumOf { it.second }
++    val slices = top.mapIndexed { i, g -> Triple(g.first, g.second, DonutPalette[i % DonutPalette.size]) } +
++        (if (others > 0) listOf(Triple("Others", others, DonutOthers)) else emptyList())
++    val sum = slices.sumOf { it.second }.coerceAtLeast(1)
++    Row(
++        modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        Canvas(modifier = Modifier.size(132.dp)) {
++            val stroke = 26.dp.toPx()
++            val inset = stroke / 2f
++            var start = -90f
++            slices.forEach { (_, count, color) ->
++                val sweep = 360f * count / sum
++                drawArc(
++                    color = color,
++                    startAngle = start,
++                    sweepAngle = (sweep - 2f).coerceAtLeast(0.5f),
++                    useCenter = false,
++                    topLeft = Offset(inset, inset),
++                    size = Size(size.width - stroke, size.height - stroke),
++                    style = Stroke(width = stroke, cap = StrokeCap.Butt),
++                )
++                start += sweep
++            }
++        }
++        Column(modifier = Modifier.padding(start = 18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
++            slices.forEach { (name, count, color) ->
++                Row(verticalAlignment = Alignment.CenterVertically) {
++                    Box(Modifier.size(10.dp).clip(CircleShape).background(color))
++                    Text(
++                        text = "  $name  ${(100f * count / sum).roundToInt()}%",
++                        style = MaterialTheme.typography.bodySmall,
++                        maxLines = 1,
++                        overflow = TextOverflow.Ellipsis,
++                    )
++                }
++            }
++        }
++    }
++}
++
++@Composable
++private fun InsightsBalanceBar(movies: Int, series: Int) {
++    val total = (movies + series).coerceAtLeast(1)
++    val moviePct = (100f * movies / total).roundToInt()
++    Column(modifier = Modifier.fillMaxWidth().padding(top = 20.dp)) {
++        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
++            Text("Movies $moviePct%", style = MaterialTheme.typography.labelMedium)
++            Text("Series ${100 - moviePct}%", style = MaterialTheme.typography.labelMedium)
++        }
++        Row(
++            modifier = Modifier.fillMaxWidth().padding(top = 6.dp).height(10.dp).clip(RoundedCornerShape(5.dp)),
++        ) {
++            if (movies > 0) Box(Modifier.weight(movies.toFloat()).height(10.dp).background(Color(0xFFFF6384)))
++            if (series > 0) Box(Modifier.weight(series.toFloat()).height(10.dp).background(Color(0xFF36A2EB)))
++        }
++    }
++}
++
++@OptIn(ExperimentalLayoutApi::class)
++@Composable
++private fun InsightsChips(labels: List<String>) {
++    FlowRow(
++        modifier = Modifier.fillMaxWidth().padding(top = 18.dp),
++        horizontalArrangement = Arrangement.spacedBy(8.dp),
++        verticalArrangement = Arrangement.spacedBy(8.dp),
++    ) {
++        labels.forEach { label ->
++            Text(
++                text = label,
++                style = MaterialTheme.typography.labelMedium,
++                modifier = Modifier
++                    .clip(RoundedCornerShape(50))
++                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
++                    .padding(horizontal = 12.dp, vertical = 6.dp),
++            )
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt
+index 30ee142b..328d7adc 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt
+@@ -94,7 +94,7 @@ internal fun LazyListScope.settingsRootContent(
+     showSupportersContributorsPage: Boolean = true,
+ ) {
+     item {
+-        DxWatchStatsSettingsSection(isTablet = isTablet) // dx.bi watch stats hook
++        ProfileInsightsRootCard(isTablet = isTablet, onSwitchProfile = onSwitchProfileClick) // profile insights hook
+     }
+     item {
+         DxSoundsSettingsSection(isTablet = isTablet) // dx.bi sounds hook
+@@ -106,16 +106,6 @@ internal fun LazyListScope.settingsRootContent(
+                 isTablet = isTablet,
+             ) {
+                 SettingsGroup(isTablet = isTablet) {
+-                    if (onSwitchProfileClick != null) {
+-                        SettingsNavigationRow(
+-                            title = stringResource(Res.string.compose_settings_root_switch_profile_title),
+-                            description = stringResource(Res.string.compose_settings_root_switch_profile_description),
+-                            icon = Icons.Rounded.People,
+-                            isTablet = isTablet,
+-                            onClick = onSwitchProfileClick,
+-                        )
+-                        SettingsGroupDivider(isTablet = isTablet)
+-                    }
+                     SettingsNavigationRow(
+                         title = stringResource(Res.string.compose_settings_page_account),
+                         description = stringResource(Res.string.compose_settings_root_account_description),
