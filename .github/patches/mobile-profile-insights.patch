@@ -1,9 +1,9 @@
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ProfileInsightsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ProfileInsightsPage.kt
 new file mode 100644
-index 00000000..037afcde
+index 00000000..ed6e5568
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ProfileInsightsPage.kt
-@@ -0,0 +1,766 @@
+@@ -0,0 +1,776 @@
 +package com.nuvio.app.features.settings
 +
 +import androidx.compose.foundation.BorderStroke
@@ -73,6 +73,7 @@ index 00000000..037afcde
 +import androidx.lifecycle.compose.collectAsStateWithLifecycle
 +import coil3.compose.AsyncImage
 +import com.nuvio.app.core.ui.NuvioModalBottomSheet
++import com.nuvio.app.core.ui.nuvio
 +import com.nuvio.app.features.details.MetaDetailsRepository
 +import com.nuvio.app.features.library.LibraryRepository
 +import com.nuvio.app.features.player.DxWatchStats
@@ -194,6 +195,7 @@ index 00000000..037afcde
 +            InsightsAvatar(profile = profile, imageUrl = profile?.let { profileAvatarImageUrl(it, avatar) }, size = 64)
 +            Column(modifier = Modifier.weight(1f).padding(horizontal = 14.dp)) {
 +                Text(
++                    color = MaterialTheme.nuvio.colors.textPrimary,
 +                    text = profile?.name?.takeIf { it.isNotBlank() } ?: "Profile",
 +                    style = MaterialTheme.typography.titleLarge,
 +                    fontWeight = FontWeight.Bold,
@@ -203,7 +205,7 @@ index 00000000..037afcde
 +                Text(
 +                    text = "View activity, library, and taste insights for the active profile",
 +                    style = MaterialTheme.typography.bodySmall,
-+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
++                    color = MaterialTheme.nuvio.colors.textSecondary,
 +                    maxLines = 2,
 +                    overflow = TextOverflow.Ellipsis,
 +                )
@@ -211,7 +213,7 @@ index 00000000..037afcde
 +            Icon(
 +                imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
 +                contentDescription = null,
-+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
++                tint = MaterialTheme.nuvio.colors.textSecondary,
 +            )
 +        }
 +    }
@@ -260,7 +262,7 @@ index 00000000..037afcde
 +        modifier = Modifier.size(44.dp),
 +    ) {
 +        Box(contentAlignment = Alignment.Center) {
-+            Icon(imageVector = icon, contentDescription = description, modifier = Modifier.size(22.dp))
++            Icon(imageVector = icon, contentDescription = description, modifier = Modifier.size(22.dp), tint = MaterialTheme.nuvio.colors.textPrimary)
 +        }
 +    }
 +}
@@ -414,6 +416,7 @@ index 00000000..037afcde
 +                ) {
 +                    InsightsRoundButton(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onDismiss)
 +                    Text(
++                        color = MaterialTheme.nuvio.colors.textPrimary,
 +                        text = "Profile",
 +                        modifier = Modifier.weight(1f),
 +                        textAlign = TextAlign.Center,
@@ -436,6 +439,7 @@ index 00000000..037afcde
 +                    InsightsRoundButton(Icons.Rounded.Edit, "Edit profile") { editing = true }
 +                }
 +                Text(
++                    color = MaterialTheme.nuvio.colors.textPrimary,
 +                    text = profile?.name?.takeIf { it.isNotBlank() } ?: "Profile",
 +                    style = MaterialTheme.typography.headlineSmall,
 +                    fontWeight = FontWeight.Bold,
@@ -459,8 +463,8 @@ index 00000000..037afcde
 +                                modifier = Modifier.width(92.dp).padding(vertical = 12.dp),
 +                                horizontalAlignment = Alignment.CenterHorizontally,
 +                            ) {
-+                                Text(n.toString(), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-+                                Text(kind.label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
++                                Text(n.toString(), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.nuvio.colors.textPrimary)
++                                Text(kind.label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.nuvio.colors.textSecondary)
 +                            }
 +                        }
 +                    }
@@ -474,7 +478,7 @@ index 00000000..037afcde
 +                    Text(
 +                        text = agoText(insightsFactsUpdatedAt),
 +                        style = MaterialTheme.typography.bodySmall,
-+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
++                        color = MaterialTheme.nuvio.colors.textSecondary,
 +                    )
 +                    Icon(
 +                        imageVector = Icons.Rounded.Refresh,
@@ -488,7 +492,7 @@ index 00000000..037afcde
 +                                refreshTick += 1
 +                                factsVersion += 1
 +                            },
-+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
++                        tint = MaterialTheme.nuvio.colors.textSecondary,
 +                    )
 +                }
 +                if (total > 0 && loaded < total) {
@@ -500,7 +504,7 @@ index 00000000..037afcde
 +                        Text(
 +                            text = "  Loading title details · $loaded of $total",
 +                            style = MaterialTheme.typography.labelSmall,
-+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
++                            color = MaterialTheme.nuvio.colors.textSecondary,
 +                        )
 +                    }
 +                }
@@ -513,9 +517,10 @@ index 00000000..037afcde
 +                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
 +                ) {
 +                    Column(modifier = Modifier.padding(20.dp)) {
-+                        Text("WATCH TIME", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
++                        Text("WATCH TIME", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.nuvio.colors.textSecondary)
 +                        val seconds = if (summary.total > 0.0) summary.total else watchedMinutes * 60.0
 +                        Text(
++                            color = MaterialTheme.nuvio.colors.textPrimary,
 +                            text = if (seconds > 0.0) formatWatchTime(seconds) else "No watch time yet",
 +                            style = MaterialTheme.typography.displaySmall,
 +                            fontWeight = FontWeight.Bold,
@@ -528,7 +533,7 @@ index 00000000..037afcde
 +                                "Estimated from runtime of everything you marked as watched"
 +                            },
 +                            style = MaterialTheme.typography.bodySmall,
-+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
++                            color = MaterialTheme.nuvio.colors.textSecondary,
 +                            modifier = Modifier.padding(top = 4.dp),
 +                        )
 +                    }
@@ -536,6 +541,7 @@ index 00000000..037afcde
 +
 +                // Taste
 +                Text(
++                    color = MaterialTheme.nuvio.colors.textPrimary,
 +                    text = "Taste",
 +                    style = MaterialTheme.typography.titleLarge,
 +                    fontWeight = FontWeight.Bold,
@@ -548,12 +554,12 @@ index 00000000..037afcde
 +                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)),
 +                ) {
 +                    Column(modifier = Modifier.padding(20.dp)) {
-+                        Text("Taste DNA", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
++                        Text("Taste DNA", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.nuvio.colors.textPrimary)
 +                        if (genreCounts.isEmpty()) {
 +                            Text(
 +                                text = if (total > 0 && loaded < total) "Reading your titles, one moment..." else "Watch or save a few titles and your taste shows up here.",
 +                                style = MaterialTheme.typography.bodySmall,
-+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
++                                color = MaterialTheme.nuvio.colors.textSecondary,
 +                                modifier = Modifier.padding(vertical = 18.dp),
 +                            )
 +                        } else {
@@ -588,6 +594,7 @@ index 00000000..037afcde
 +                fullHeight = true,
 +            ) {
 +                Text(
++                    color = MaterialTheme.nuvio.colors.textPrimary,
 +                    text = kind.label,
 +                    style = MaterialTheme.typography.titleLarge,
 +                    fontWeight = FontWeight.Bold,
@@ -596,7 +603,7 @@ index 00000000..037afcde
 +                Text(
 +                    text = "${sheetItems.size} titles",
 +                    style = MaterialTheme.typography.bodySmall,
-+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
++                    color = MaterialTheme.nuvio.colors.textSecondary,
 +                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
 +                )
 +                if (sheetItems.isEmpty()) {
@@ -604,7 +611,7 @@ index 00000000..037afcde
 +                        text = "Nothing here yet",
 +                        modifier = Modifier.fillMaxWidth().padding(40.dp),
 +                        textAlign = TextAlign.Center,
-+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
++                        color = MaterialTheme.nuvio.colors.textSecondary,
 +                    )
 +                } else {
 +                    LazyVerticalGrid(
@@ -633,6 +640,7 @@ index 00000000..037afcde
 +                                    }
 +                                }
 +                                Text(
++                                    color = MaterialTheme.nuvio.colors.textPrimary,
 +                                    text = poster.title,
 +                                    style = MaterialTheme.typography.bodyMedium,
 +                                    fontWeight = FontWeight.SemiBold,
@@ -644,7 +652,7 @@ index 00000000..037afcde
 +                                    Text(
 +                                        text = it,
 +                                        style = MaterialTheme.typography.labelSmall,
-+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
++                                        color = MaterialTheme.nuvio.colors.textSecondary,
 +                                        maxLines = 1,
 +                                        overflow = TextOverflow.Ellipsis,
 +                                    )
@@ -721,6 +729,7 @@ index 00000000..037afcde
 +                Row(verticalAlignment = Alignment.CenterVertically) {
 +                    Box(Modifier.size(10.dp).clip(CircleShape).background(color))
 +                    Text(
++                        color = MaterialTheme.nuvio.colors.textPrimary,
 +                        text = "  $name  ${(100f * count / sum).roundToInt()}%",
 +                        style = MaterialTheme.typography.bodySmall,
 +                        maxLines = 1,
@@ -738,8 +747,8 @@ index 00000000..037afcde
 +    val moviePct = (100f * movies / total).roundToInt()
 +    Column(modifier = Modifier.fillMaxWidth().padding(top = 20.dp)) {
 +        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-+            Text("Movies $moviePct%", style = MaterialTheme.typography.labelMedium)
-+            Text("Series ${100 - moviePct}%", style = MaterialTheme.typography.labelMedium)
++            Text("Movies $moviePct%", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.nuvio.colors.textPrimary)
++            Text("Series ${100 - moviePct}%", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.nuvio.colors.textPrimary)
 +        }
 +        Row(
 +            modifier = Modifier.fillMaxWidth().padding(top = 6.dp).height(10.dp).clip(RoundedCornerShape(5.dp)),
@@ -760,6 +769,7 @@ index 00000000..037afcde
 +    ) {
 +        labels.forEach { label ->
 +            Text(
++                color = MaterialTheme.nuvio.colors.textPrimary,
 +                text = label,
 +                style = MaterialTheme.typography.labelMedium,
 +                modifier = Modifier
