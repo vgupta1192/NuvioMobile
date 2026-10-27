@@ -501,8 +501,263 @@ index 00000000..18dcdef1
 +        runCatching { AppFileCache.write(PATH, provider.id) }
 +    }
 +}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/cloud/CloudLibraryCache.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/cloud/CloudLibraryCache.kt
+new file mode 100644
+index 00000000..92110979
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/cloud/CloudLibraryCache.kt
+@@ -0,0 +1,125 @@
++package com.nuvio.app.features.cloud
++
++import com.nuvio.app.core.storage.AppFileCache
++import com.nuvio.app.core.storage.ProfileScopedKey
++import com.nuvio.app.features.debrid.DebridProvider
++import com.nuvio.app.features.debrid.DebridProviders
++import kotlinx.serialization.Serializable
++import kotlinx.serialization.decodeFromString
++import kotlinx.serialization.encodeToString
++import kotlinx.serialization.json.Json
++
++private val cloudLibraryCacheJson = Json {
++    ignoreUnknownKeys = true
++}
++
++@Serializable
++private data class CachedCloudLibraryFile(
++    val id: String? = null,
++    val name: String,
++    val sizeBytes: Long? = null,
++    val mimeType: String? = null,
++    val playable: Boolean = true,
++)
++
++@Serializable
++private data class CachedCloudLibraryItem(
++    val id: String,
++    val type: String,
++    val name: String,
++    val status: String? = null,
++    val sizeBytes: Long? = null,
++    val progressFraction: Float? = null,
++    val files: List<CachedCloudLibraryFile> = emptyList(),
++)
++
++@Serializable
++private data class CachedCloudLibraryProvider(
++    val providerId: String,
++    val items: List<CachedCloudLibraryItem> = emptyList(),
++)
++
++@Serializable
++private data class CachedCloudLibraryPayload(
++    val signature: List<String>,
++    val providers: List<CachedCloudLibraryProvider> = emptyList(),
++)
++
++internal object CloudLibraryCacheStore {
++    private fun path(): String = "cloud_library/${ProfileScopedKey.of("items")}.json"
++
++    fun load(signature: List<String>): List<CloudLibraryProviderState>? = runCatching {
++        if (signature.isEmpty()) return null
++        val payload = AppFileCache.read(path())?.takeIf(String::isNotBlank) ?: return null
++        val decoded = cloudLibraryCacheJson.decodeFromString<CachedCloudLibraryPayload>(payload)
++        if (decoded.signature != signature) return null
++        decoded.providers.mapNotNull { cachedProvider ->
++            val provider = DebridProviders.byId(cachedProvider.providerId) ?: return@mapNotNull null
++            CloudLibraryProviderState(
++                provider = provider,
++                items = cachedProvider.items.mapNotNull { it.toCloudLibraryItem(provider) },
++            )
++        }
++    }.getOrNull()
++
++    fun save(signature: List<String>, providers: List<CloudLibraryProviderState>) {
++        runCatching {
++            if (signature.isEmpty()) {
++                AppFileCache.write(path(), "")
++                return
++            }
++            val payload = CachedCloudLibraryPayload(
++                signature = signature,
++                providers = providers.map { providerState ->
++                    CachedCloudLibraryProvider(
++                        providerId = providerState.providerId,
++                        items = providerState.items.map { it.toCachedCloudLibraryItem() },
++                    )
++                },
++            )
++            AppFileCache.write(path(), cloudLibraryCacheJson.encodeToString(payload))
++        }
++    }
++}
++
++private fun CloudLibraryItem.toCachedCloudLibraryItem(): CachedCloudLibraryItem =
++    CachedCloudLibraryItem(
++        id = id,
++        type = type.name,
++        name = name,
++        status = status,
++        sizeBytes = sizeBytes,
++        progressFraction = progressFraction,
++        files = files.map { file ->
++            CachedCloudLibraryFile(
++                id = file.id,
++                name = file.name,
++                sizeBytes = file.sizeBytes,
++                mimeType = file.mimeType,
++                playable = file.playable,
++            )
++        },
++    )
++
++private fun CachedCloudLibraryItem.toCloudLibraryItem(provider: DebridProvider): CloudLibraryItem? {
++    val itemType = CloudLibraryItemType.entries.firstOrNull { it.name == type } ?: return null
++    return CloudLibraryItem(
++        providerId = provider.id,
++        providerName = provider.displayName,
++        id = id,
++        type = itemType,
++        name = name,
++        status = status,
++        sizeBytes = sizeBytes,
++        progressFraction = progressFraction,
++        files = files.map { file ->
++            CloudLibraryFile(
++                id = file.id,
++                name = file.name,
++                sizeBytes = file.sizeBytes,
++                mimeType = file.mimeType,
++                playable = file.playable,
++            )
++        },
++    )
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/cloud/CloudLibraryRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/cloud/CloudLibraryRepository.kt
+index 72c7e97a..317c5532 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/cloud/CloudLibraryRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/cloud/CloudLibraryRepository.kt
+@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
+ import kotlinx.coroutines.flow.asStateFlow
+ import kotlinx.coroutines.flow.update
+ import kotlinx.coroutines.launch
++import kotlinx.coroutines.withContext
+ import nuvio.composeapp.generated.resources.Res
+ import nuvio.composeapp.generated.resources.cloud_library_playback_disabled
+ import nuvio.composeapp.generated.resources.cloud_library_provider_unavailable
+@@ -97,6 +98,7 @@ object CloudLibraryRepository {
+     )
+     private val _uiState = MutableStateFlow(CloudLibraryUiState())
+     private var loadedConnectionKeys: List<CloudConnectionKey> = emptyList()
++    private var restoredConnectionKeys: List<CloudConnectionKey> = emptyList()
+     val uiState = _uiState.asStateFlow()
+ 
+     fun ensureLoaded() {
+@@ -110,11 +112,15 @@ object CloudLibraryRepository {
+         if (current.isRefreshing) return
+         val connectedKeys = connectedCloudConnectionKeys()
+         if (!current.isLoaded || connectedKeys != loadedConnectionKeys) {
+-            refresh()
++            refreshInternal(cachedKeys = connectedKeys)
+         }
+     }
+ 
+     fun refresh() {
++        refreshInternal(cachedKeys = null)
++    }
++
++    private fun refreshInternal(cachedKeys: List<CloudConnectionKey>?) {
+         DebridSettingsRepository.ensureLoaded()
+         if (!DebridSettingsRepository.snapshot().cloudLibraryEnabled) {
+             loadedConnectionKeys = emptyList()
+@@ -129,9 +135,14 @@ object CloudLibraryRepository {
+             )
+         }
+         scope.launch {
+-            val refreshed = store.refresh()
++            if (cachedKeys != null) {
++                restoreCachedState(cachedKeys)
++            }
++            val previous = _uiState.value
++            val refreshed = store.refresh().keepingItemsOnFailure(previous)
+             loadedConnectionKeys = connectedCloudConnectionKeys()
+             _uiState.value = refreshed
++            CloudLibraryCacheStore.save(loadedConnectionKeys.cacheSignature(), refreshed.providers)
+         }
+     }
+ 
+@@ -175,6 +186,11 @@ object CloudLibraryRepository {
+             )
+         }
+ 
++        val connectedKeys = connectedCloudConnectionKeys()
++        if (connectedKeys != loadedConnectionKeys && connectedKeys != restoredConnectionKeys) {
++            restoreCachedState(connectedKeys)
++        }
++
+         _uiState.value.findPlaybackTargetForProgress(
+             contentId = contentId,
+             videoId = videoId,
+@@ -245,18 +261,57 @@ object CloudLibraryRepository {
+                 providers = current.providers.map { it.copy(isLoading = true, errorMessage = null) },
+             )
+         }
+-        val refreshed = store.refresh()
++        val previous = _uiState.value
++        val refreshed = store.refresh().keepingItemsOnFailure(previous)
+         loadedConnectionKeys = connectedCloudConnectionKeys()
+         _uiState.value = refreshed
++        CloudLibraryCacheStore.save(loadedConnectionKeys.cacheSignature(), refreshed.providers)
+         return refreshed
+     }
+ 
++    private suspend fun restoreCachedState(keys: List<CloudConnectionKey>) {
++        if (keys.isEmpty()) return
++        val cachedProviders = withContext(Dispatchers.Default) {
++            CloudLibraryCacheStore.load(keys.cacheSignature())
++        } ?: return
++        if (connectedCloudConnectionKeys() != keys) return
++        restoredConnectionKeys = keys
++        _uiState.update { current ->
++            current.copy(
++                isLoaded = true,
++                isEnabled = true,
++                providers = cachedProviders.map { providerState ->
++                    providerState.copy(isLoading = current.isRefreshing)
++                },
++            )
++        }
++    }
++
++    private fun List<CloudConnectionKey>.cacheSignature(): List<String> =
++        map { key -> "${key.providerId}:${key.apiKeyHash}" }
++
+     private data class CloudConnectionKey(
+         val providerId: String,
+         val apiKeyHash: Int,
+     )
+ }
+ 
++internal fun CloudLibraryUiState.keepingItemsOnFailure(
++    previous: CloudLibraryUiState,
++): CloudLibraryUiState =
++    copy(
++        providers = providers.map { providerState ->
++            if (providerState.errorMessage.isNullOrBlank() || providerState.items.isNotEmpty()) {
++                return@map providerState
++            }
++            val previousItems = previous.providers
++                .firstOrNull { it.providerId == providerState.providerId }
++                ?.items
++                .orEmpty()
++            if (previousItems.isEmpty()) providerState else providerState.copy(items = previousItems)
++        },
++    )
++
+ internal fun CloudLibraryUiState.findPlaybackTargetForProgress(
+     contentId: String,
+     videoId: String,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
-index 73553976..e42b5afa 100644
+index 73553976..82aecfd4 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
 @@ -105,6 +105,10 @@ import com.nuvio.app.features.details.components.CommentDetailSheet
@@ -516,7 +771,28 @@ index 73553976..e42b5afa 100644
  import com.nuvio.app.features.details.components.DetailFloatingHeader
  import com.nuvio.app.features.details.components.DetailHero
  import com.nuvio.app.features.details.components.DetailMetaInfo
-@@ -1110,6 +1114,8 @@ fun MetaDetailsScreen(
+@@ -397,10 +401,19 @@ fun MetaDetailsScreen(
+             return@LaunchedEffect
+         }
+ 
+-        episodeImdbRatings = ImdbEpisodeRatingsRepository.getEpisodeRatings(
++        val baseRatings = ImdbEpisodeRatingsRepository.getEpisodeRatings(
+             imdbId = imdbId,
+             tmdbId = tmdbId,
+         )
++        episodeImdbRatings = baseRatings
++        if (imdbId != null && OmdbEpisodeRatings.savedKey().isNotBlank()) {
++            val seasonList = metaForRatings.videos.mapNotNull { it.season }.filter { it > 0 }.distinct()
++            val missing = seasonList.filter { s -> baseRatings.keys.none { it.first == s } }
++            if (missing.isNotEmpty()) {
++                val extra = OmdbEpisodeRatings.load(imdbId, missing)
++                if (extra.isNotEmpty()) episodeImdbRatings = baseRatings + extra
++            }
++        }
+     }
+ 
+     LaunchedEffect(type, id, displayedMeta, uiState.isLoading, autoLoadAttempted) {
+@@ -1110,6 +1123,8 @@ fun MetaDetailsScreen(
                      val isTablet = useTabletLayout || maxWidth >= 720.dp
                      val contentHorizontalPadding = if (isTablet) 32.dp else 18.dp
                      val contentMaxWidth = detailTabletContentMaxWidth(maxWidth, isTablet)
@@ -525,7 +801,7 @@ index 73553976..e42b5afa 100644
                      val backdropUrl = meta.background ?: meta.poster
                      val backgroundMode = metaScreenSettingsUiState.backgroundMode
                      val dominantColorEnabled = backgroundMode == MetaScreenBackgroundMode.DominantColor &&
-@@ -1387,6 +1393,54 @@ fun MetaDetailsScreen(
+@@ -1387,6 +1402,54 @@ fun MetaDetailsScreen(
                                      animatedVisibilityScope = animatedVisibilityScope,
                                  )
  
@@ -580,6 +856,62 @@ index 73553976..e42b5afa 100644
                                  item(key = "detail-bottom-spacer") {
                                      Spacer(modifier = Modifier.height(nuvioSafeBottomPadding(32.dp)))
                                  }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/OmdbEpisodeRatings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/OmdbEpisodeRatings.kt
+new file mode 100644
+index 00000000..022d0d2d
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/OmdbEpisodeRatings.kt
+@@ -0,0 +1,50 @@
++package com.nuvio.app.features.details
++
++import com.nuvio.app.core.storage.AppFileCache
++import com.nuvio.app.features.addons.httpGetText
++import kotlinx.coroutines.CancellationException
++import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.doubleOrNull
++import kotlinx.serialization.json.intOrNull
++import kotlinx.serialization.json.jsonArray
++import kotlinx.serialization.json.jsonObject
++import kotlinx.serialization.json.jsonPrimitive
++
++/** Fallback episode ratings from OMDb, used only when the user saved an OMDb key in settings. */
++object OmdbEpisodeRatings {
++    private const val KEY_PATH = "settings/omdb_key"
++    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
++    private val cache = mutableMapOf<String, Map<Pair<Int, Int>, Double>>()
++
++    fun savedKey(): String = runCatching { AppFileCache.read(KEY_PATH)?.trim() }.getOrNull().orEmpty()
++
++    fun saveKey(key: String) {
++        runCatching { AppFileCache.write(KEY_PATH, key.trim()) }
++    }
++
++    suspend fun load(imdbId: String, seasons: List<Int>): Map<Pair<Int, Int>, Double> {
++        val key = savedKey()
++        if (key.isBlank() || seasons.isEmpty()) return emptyMap()
++        val cacheKey = "$imdbId:${seasons.sorted().joinToString(",")}"
++        cache[cacheKey]?.let { return it }
++        val out = mutableMapOf<Pair<Int, Int>, Double>()
++        for (season in seasons.distinct().sorted().take(40)) {
++            try {
++                val root = json.parseToJsonElement(
++                    httpGetText("https://www.omdbapi.com/?i=$imdbId&Season=$season&apikey=$key"),
++                ).jsonObject
++                root["Episodes"]?.jsonArray?.forEach { element ->
++                    val ep = element.jsonObject
++                    val number = ep["Episode"]?.jsonPrimitive?.intOrNull ?: return@forEach
++                    val rating = ep["imdbRating"]?.jsonPrimitive?.doubleOrNull ?: return@forEach
++                    if (rating > 0.0) out[season to number] = rating
++                }
++            } catch (cancelled: CancellationException) {
++                throw cancelled
++            } catch (_: Exception) {
++            }
++        }
++        if (out.isNotEmpty()) cache[cacheKey] = out
++        return out
++    }
++}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailEpisodeRatingMap.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailEpisodeRatingMap.kt
 new file mode 100644
 index 00000000..6a772d5b
@@ -4235,15 +4567,19 @@ index 00000000..80078a4c
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHomeRowsSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHomeRowsSettings.kt
 new file mode 100644
-index 00000000..3e842a5e
+index 00000000..41ed8e74
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHomeRowsSettings.kt
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,94 @@
 +package com.nuvio.app.features.settings
 +
 +import androidx.compose.runtime.Composable
 +import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
 +import androidx.compose.runtime.getValue
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.unit.dp
 +import androidx.lifecycle.compose.collectAsStateWithLifecycle
 +
 +@Composable
@@ -4294,6 +4630,21 @@ index 00000000..3e842a5e
 +                checked = ratingMap,
 +                isTablet = isTablet,
 +                onCheckedChange = ForkPrefs.ratingMap::set,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            var omdbKey by androidx.compose.runtime.remember {
++                androidx.compose.runtime.mutableStateOf(com.nuvio.app.features.details.OmdbEpisodeRatings.savedKey())
++            }
++            androidx.compose.material3.OutlinedTextField(
++                value = omdbKey,
++                onValueChange = {
++                    omdbKey = it
++                    com.nuvio.app.features.details.OmdbEpisodeRatings.saveKey(it)
++                },
++                label = { androidx.compose.material3.Text("OMDb API key (optional)") },
++                supportingText = { androidx.compose.material3.Text("Fills in episode ratings the default source lacks. Get a free key at omdbapi.com.") },
++                singleLine = true,
++                modifier = androidx.compose.ui.Modifier.fillMaxWidth().padding(16.dp),
 +            )
 +            SettingsGroupDivider(isTablet = isTablet)
 +            SettingsSwitchRow(
