@@ -1,0 +1,148 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxSecondSubtitle.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxSecondSubtitle.kt
+index 79b66949..92600913 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxSecondSubtitle.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxSecondSubtitle.kt
+@@ -102,14 +102,22 @@ internal fun DxSecondSubtitlePicker(addonSubtitles: List<AddonSubtitle>) {
+     val codes = remember(addonSubtitles.size) {
+         addonSubtitles.mapNotNull { normalizeLanguageCode(it.language) }.distinct()
+     }
+-    if (codes.isEmpty() && chosen == null) return
+     Text(
+-        text = "Second subtitle on top",
++        text = "Second subtitle",
+         color = Color.White,
+         fontSize = 14.sp,
+         fontWeight = FontWeight.Medium,
+         modifier = Modifier.padding(top = 10.dp, bottom = 6.dp),
+     )
++    if (codes.isEmpty() && chosen == null) {
++        Text(
++            text = "No subtitles loaded yet",
++            color = Color.White.copy(alpha = 0.6f),
++            fontSize = 12.sp,
++            modifier = Modifier.padding(bottom = 6.dp),
++        )
++        return
++    }
+     Row(
+         modifier = Modifier.horizontalScroll(rememberScrollState()),
+         horizontalArrangement = Arrangement.spacedBy(8.dp),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt
+index 197fcae1..408b3457 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt
+@@ -285,6 +285,7 @@ fun SubtitleModal(
+                                 }
+                             }
+                         }
++                        DxSecondSubtitlePicker(addonSubtitles) // dx.bi second subtitle hook
+                     }
+ 
+                     AnimatedVisibility(
+@@ -321,7 +322,6 @@ fun SubtitleModal(
+                 }
+ 
+                 AutoSyncSubtitleModalSlot() // AutoSync hook
+-                DxSecondSubtitlePicker(addonSubtitles) // dx.bi second subtitle hook
+             }
+         }
+     }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxSecondSubtitleSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxSecondSubtitleSettings.kt
+index a4481a35..e73f0b27 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxSecondSubtitleSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxSecondSubtitleSettings.kt
+@@ -1,25 +1,92 @@
+ package com.nuvio.app.features.settings
+ 
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.heightIn
++import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.foundation.lazy.items
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.LaunchedEffect
+ import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.unit.dp
+ import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.core.ui.DialogButton
++import com.nuvio.app.core.ui.DialogButtons
++import com.nuvio.app.core.ui.DialogOption
++import com.nuvio.app.core.ui.DialogSurface
++import com.nuvio.app.features.player.AvailableLanguageOptions
+ import com.nuvio.app.features.player.DxSecondSubtitle
++import com.nuvio.app.features.player.languageLabelForCode
++import com.nuvio.app.features.player.normalizeLanguageCode
++import org.jetbrains.compose.resources.stringResource
+ 
+ /** dx.bi port: second subtitle language on top of the picture. The switch hides the picker and the overlay. */
+ @Composable
+ internal fun DxSecondSubtitleSettingsSection(isTablet: Boolean) {
+     LaunchedEffect(Unit) { DxSecondSubtitle.ensureLoaded() }
+     val enabled by DxSecondSubtitle.enabled.collectAsStateWithLifecycle()
++    val language by DxSecondSubtitle.language.collectAsStateWithLifecycle()
++    var showPicker by remember { mutableStateOf(false) }
+     SettingsSection(title = "Second subtitle on top", isTablet = isTablet) {
+         SettingsGroup(isTablet = isTablet) {
+             SettingsSwitchRow(
+-                title = "Second subtitle language",
+-                description = "Shows a second subtitle language at the top of the picture. Pick the language in the player's Subtitles menu. Off hides the picker and the extra line.",
++                title = "Second subtitle",
++                description = "Shows a second subtitle language at the top of the picture. Off hides the picker and the extra line.",
+                 checked = enabled,
+                 isTablet = isTablet,
+                 onCheckedChange = DxSecondSubtitle::setEnabled,
+             )
++            if (enabled) {
++                SettingsGroupDivider(isTablet = isTablet)
++                SettingsNavigationRow(
++                    title = "Second subtitle language",
++                    description = if (language == null) "Off" else languageLabelForCode(language),
++                    isTablet = isTablet,
++                    onClick = { showPicker = true },
++                )
++            }
++        }
++    }
++    if (showPicker) {
++        DialogSurface(
++            onDismissRequest = { showPicker = false },
++            title = "Second subtitle language",
++        ) {
++            val options = AvailableLanguageOptions
++            LazyColumn(
++                modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp),
++                verticalArrangement = Arrangement.spacedBy(8.dp),
++            ) {
++                item {
++                    DialogOption(
++                        text = "Off",
++                        description = null,
++                        selected = language == null,
++                        onClick = {
++                            DxSecondSubtitle.setLanguage(null)
++                            showPicker = false
++                        },
++                    )
++                }
++                items(options) { option ->
++                    DialogOption(
++                        text = stringResource(option.labelRes),
++                        description = null,
++                        selected = language == (normalizeLanguageCode(option.code) ?: option.code),
++                        onClick = {
++                            DxSecondSubtitle.setLanguage(normalizeLanguageCode(option.code) ?: option.code)
++                            showPicker = false
++                        },
++                    )
++                }
++            }
++            DialogButtons {
++                DialogButton(text = "Done", onClick = { showPicker = false })
++            }
+         }
+     }
+ }
