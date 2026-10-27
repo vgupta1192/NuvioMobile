@@ -83,10 +83,10 @@ index f2ca0e9a..1576e568 100644
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/discord/DiscordRpcPlatform.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/discord/DiscordRpcPlatform.android.kt
 new file mode 100644
-index 00000000..180f1b80
+index 00000000..7efa3a81
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/discord/DiscordRpcPlatform.android.kt
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,148 @@
 +package com.nuvio.app.features.discord
 +
 +import android.annotation.SuppressLint
@@ -135,7 +135,6 @@ index 00000000..180f1b80
 +    install(WebSockets)
 +    engine {
 +        config {
-+            dns(com.nuvio.app.core.network.NuvioDns)
 +            connectTimeout(15, TimeUnit.SECONDS)
 +            readTimeout(0, TimeUnit.MILLISECONDS)
 +            writeTimeout(15, TimeUnit.SECONDS)
@@ -1361,7 +1360,7 @@ index baccf8d6..645aec5d 100644
          val releaseLine = formatMetaReleaseLineForDetails(meta)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordGateway.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordGateway.kt
 new file mode 100644
-index 00000000..1bfd7da4
+index 00000000..da828d2a
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordGateway.kt
 @@ -0,0 +1,401 @@
@@ -1522,7 +1521,7 @@ index 00000000..1bfd7da4
 +            } catch (error: Throwable) {
 +                val message = error.message ?: error::class.simpleName ?: "Gateway connection error"
 +                _lastError.value = lastCloseInfo?.let { "$message (after $it)" } ?: message
-+                InAppLogger.error(TAG, "Gateway connection error: $message")
++                InAppLogger.warn(TAG, "Gateway connection error: $message")
 +                if (usingResumeUrl) {
 +                    InAppLogger.warn(TAG, "Resume gateway unreachable, falling back to $GATEWAY_URL")
 +                    resumeGatewayUrl = null
@@ -2279,7 +2278,7 @@ index 00000000..05900696
 +)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordRpcRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordRpcRepository.kt
 new file mode 100644
-index 00000000..69e13504
+index 00000000..5f5ab3b9
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordRpcRepository.kt
 @@ -0,0 +1,586 @@
@@ -2497,7 +2496,7 @@ index 00000000..69e13504
 +            val enabledSettings = _uiState.value.settings.copy(enabled = true)
 +            DiscordRpcStorage.saveSettingsPayload(json.encodeToString(enabledSettings))
 +            runCatching { DiscordRpcStorage.saveToken(normalized) }
-+                .onFailure { InAppLogger.error(TAG, "Unable to save Discord token") }
++                .onFailure { InAppLogger.warn(TAG, "Unable to save Discord token") }
 +            DiscordRpcStorage.saveUserPayload(json.encodeToString(user))
 +            token = normalized
 +            InAppLogger.info(TAG, "Logged in as ${user.displayName}")
@@ -2614,7 +2613,7 @@ index 00000000..69e13504
 +        val currentToken = token
 +        val state = _uiState.value
 +        val settings = state.settings
-+        val privateViewing = PlayerSettingsRepository.uiState.value.privateViewingEnabled
++        val privateViewing = com.nuvio.app.features.player.PrivateViewing.isEnabled()
 +        val isTest = info?.isTest == true
 +        val shouldShow = info != null &&
 +            currentToken != null &&
@@ -2702,7 +2701,7 @@ index 00000000..69e13504
 +            throw error
 +        } catch (error: Exception) {
 +            val message = error.message ?: error::class.simpleName.orEmpty()
-+            InAppLogger.error(TAG, "Unable to update presence: $message")
++            InAppLogger.warn(TAG, "Unable to update presence: $message")
 +            _uiState.update { it.copy(lastError = message) }
 +        }
 +    }
@@ -2820,7 +2819,7 @@ index 00000000..69e13504
 +        } catch (error: CancellationException) {
 +            throw error
 +        } catch (error: Exception) {
-+            InAppLogger.error(TAG, "User lookup failed: ${error.message.orEmpty()}")
++            InAppLogger.warn(TAG, "User lookup failed: ${error.message.orEmpty()}")
 +            _uiState.update { it.copy(lastError = error.message ?: "Discord login check failed") }
 +            null
 +        }
@@ -3552,7 +3551,7 @@ index 30a12fc8..200ccccf 100644
                          title = stringResource(Res.string.compose_settings_page_plugins),
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DiscordRpcSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DiscordRpcSettingsPage.kt
 new file mode 100644
-index 00000000..947bb303
+index 00000000..812f4086
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DiscordRpcSettingsPage.kt
 @@ -0,0 +1,556 @@
@@ -3728,7 +3727,7 @@ index 00000000..947bb303
 +        SettingsGroup(isTablet = isTablet) {
 +            SettingsSwitchRow(
 +                title = stringResource(Res.string.discord_rpc_enable_title),
-+                description = if (playerSettings.privateViewingEnabled) {
++                description = if (com.nuvio.app.features.player.PrivateViewing.isEnabled()) {
 +                    stringResource(Res.string.discord_rpc_private_viewing_notice)
 +                } else {
 +                    stringResource(Res.string.discord_rpc_enable_description)
