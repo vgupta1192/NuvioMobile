@@ -1,0 +1,134 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/addons/DxFileTransfer.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/addons/DxFileTransfer.android.kt
+new file mode 100644
+index 00000000..7b5c8d5e
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/addons/DxFileTransfer.android.kt
+@@ -0,0 +1,47 @@
++package com.nuvio.app.features.addons
++
++import androidx.activity.compose.rememberLauncherForActivityResult
++import androidx.activity.result.contract.ActivityResultContracts
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.ui.platform.LocalContext
++
++@Composable
++internal actual fun rememberDxFileTransfer(): DxFileTransfer? {
++    val context = LocalContext.current
++    val pendingContent = remember { mutableStateOf<String?>(null) }
++    val onSaved = remember { mutableStateOf<((Boolean) -> Unit)?>(null) }
++    val onOpened = remember { mutableStateOf<((String?) -> Unit)?>(null) }
++    val createLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
++        val content = pendingContent.value
++        val callback = onSaved.value
++        pendingContent.value = null
++        onSaved.value = null
++        val ok = uri != null && content != null && runCatching {
++            context.contentResolver.openOutputStream(uri)?.use { it.write(content.toByteArray(Charsets.UTF_8)) } != null
++        }.getOrDefault(false)
++        callback?.invoke(ok)
++    }
++    val openLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
++        val callback = onOpened.value
++        onOpened.value = null
++        val text = uri?.let {
++            runCatching { context.contentResolver.openInputStream(it)?.use { stream -> stream.readBytes().toString(Charsets.UTF_8) } }.getOrNull()
++        }
++        callback?.invoke(text)
++    }
++    return remember(createLauncher, openLauncher) {
++        DxFileTransfer(
++            saveText = { name, content, done ->
++                pendingContent.value = content
++                onSaved.value = done
++                createLauncher.launch(name)
++            },
++            openText = { done ->
++                onOpened.value = done
++                openLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
++            },
++        )
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/DxAddonBackup.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/DxAddonBackup.kt
+index bce69ab0..ba123ca5 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/DxAddonBackup.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/DxAddonBackup.kt
+@@ -92,6 +92,7 @@ internal fun DxAddonBackupCard() {
+     var text by remember { mutableStateOf("") }
+     var message by remember { mutableStateOf<String?>(null) }
+     var busy by remember { mutableStateOf(false) }
++    val files = rememberDxFileTransfer()
+ 
+     NuvioSectionLabel("Backup and restore")
+     NuvioSurfaceCard {
+@@ -109,6 +110,26 @@ internal fun DxAddonBackupCard() {
+                 message = "Copied ${uiState.addons.size} addons to the clipboard."
+             },
+         )
++        if (files != null) {
++            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
++                TextButton(
++                    enabled = uiState.addons.isNotEmpty() && !busy,
++                    onClick = {
++                        files.saveText("nuvio-addons-backup.json", dxExportAddons(uiState.addons)) { ok ->
++                            message = if (ok) "Saved ${uiState.addons.size} addons to the file." else "File was not saved."
++                        }
++                    },
++                ) { Text("Save to file") }
++                TextButton(
++                    enabled = !busy,
++                    onClick = {
++                        files.openText { content ->
++                            if (content == null) message = "File could not be read." else { text = content; message = null }
++                        }
++                    },
++                ) { Text("Load from file") }
++            }
++        }
+         Spacer(modifier = Modifier.height(12.dp))
+         NuvioInputField(
+             value = text,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/DxFileTransfer.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/DxFileTransfer.kt
+new file mode 100644
+index 00000000..4955a9ed
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/DxFileTransfer.kt
+@@ -0,0 +1,12 @@
++package com.nuvio.app.features.addons
++
++import androidx.compose.runtime.Composable
++
++/** File save and open for the addon backup. Null where the platform has no picker. */
++internal class DxFileTransfer(
++    val saveText: (suggestedName: String, content: String, onDone: (Boolean) -> Unit) -> Unit,
++    val openText: (onText: (String?) -> Unit) -> Unit,
++)
++
++@Composable
++internal expect fun rememberDxFileTransfer(): DxFileTransfer?
+diff --git a/composeApp/src/desktopMain/kotlin/com/nuvio/app/features/addons/DxFileTransfer.desktop.kt b/composeApp/src/desktopMain/kotlin/com/nuvio/app/features/addons/DxFileTransfer.desktop.kt
+new file mode 100644
+index 00000000..08bcce1e
+--- /dev/null
++++ b/composeApp/src/desktopMain/kotlin/com/nuvio/app/features/addons/DxFileTransfer.desktop.kt
+@@ -0,0 +1,6 @@
++package com.nuvio.app.features.addons
++
++import androidx.compose.runtime.Composable
++
++@Composable
++internal actual fun rememberDxFileTransfer(): DxFileTransfer? = null
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/addons/DxFileTransfer.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/addons/DxFileTransfer.ios.kt
+new file mode 100644
+index 00000000..08bcce1e
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/addons/DxFileTransfer.ios.kt
+@@ -0,0 +1,6 @@
++package com.nuvio.app.features.addons
++
++import androidx.compose.runtime.Composable
++
++@Composable
++internal actual fun rememberDxFileTransfer(): DxFileTransfer? = null
