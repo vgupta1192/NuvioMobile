@@ -69,6 +69,27 @@ index f2ca0e9a..1576e568 100644
 +        val ANSWER_REGEX = Regex("\"type\"\\s*:\\s*(\\d+)[^}]*?\"data\"\\s*:\\s*\"([^\"]+)\"")
 +    }
 +}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+index d6f908da..2dd74565 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+@@ -2071,6 +2071,7 @@ private class NuvioLibmpvView(
+                     mpv.setPropertyString("sub-outline-color", style.outlineColor.toMpvColor())
+                     mpv.setPropertyString("sub-border-color", style.outlineColor.toMpvColor())
+                     mpv.setPropertyString("sub-border-style", style.toMpvSubtitleBorderStyle())
++                    mpv.setPropertyString("sub-shadow-offset", if (com.nuvio.app.features.settings.ForkPrefs.subtitleShadow.current()) "3" else "0")
+                     mpv.setPropertyString("sub-bold", if (style.bold) "yes" else "no")
+                     SubtitleFontStore.current(context)?.let { mpv.setPropertyString("sub-font", it.familyName) } // Nuvio fork: custom subtitle font
+                     mpv.setPropertyInt("sub-font-size", style.toMpvSubtitleFontSize())
+@@ -2490,7 +2491,7 @@ private fun PlayerView.applySubtitleStyle(style: SubtitleStyleState, pipVideoHei
+                 style.textColor.toArgb(),
+                 style.backgroundColor.toArgb(),
+                 android.graphics.Color.TRANSPARENT,
+-                if (style.outlineEnabled) CaptionStyleCompat.EDGE_TYPE_OUTLINE else CaptionStyleCompat.EDGE_TYPE_NONE,
++                if (com.nuvio.app.features.settings.ForkPrefs.subtitleShadow.current()) CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW else if (style.outlineEnabled) CaptionStyleCompat.EDGE_TYPE_OUTLINE else CaptionStyleCompat.EDGE_TYPE_NONE,
+                 style.outlineColor.toArgb(),
+                 SubtitleFontStore.current(context)?.typeface // Nuvio fork: custom subtitle font
+                     ?.let { if (style.bold) Typeface.create(it, Typeface.BOLD) else it }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/network/DohSetting.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/network/DohSetting.kt
 new file mode 100644
 index 00000000..18dcdef1
@@ -392,10 +413,10 @@ index 00000000..4f1666cd
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPlayerPrefsSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPlayerPrefsSettings.kt
 new file mode 100644
-index 00000000..0e935e02
+index 00000000..b1662a8e
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPlayerPrefsSettings.kt
-@@ -0,0 +1,35 @@
+@@ -0,0 +1,45 @@
 +package com.nuvio.app.features.settings
 +
 +import androidx.compose.runtime.Composable
@@ -408,9 +429,11 @@ index 00000000..0e935e02
 +    LaunchedEffect(Unit) {
 +        ForkPrefs.swipeToSeek.ensureLoaded()
 +        ForkPrefs.subtitlesStartOff.ensureLoaded()
++        ForkPrefs.subtitleShadow.ensureLoaded()
 +    }
 +    val swipe by ForkPrefs.swipeToSeek.value.collectAsStateWithLifecycle()
 +    val subsOff by ForkPrefs.subtitlesStartOff.value.collectAsStateWithLifecycle()
++    val shadow by ForkPrefs.subtitleShadow.value.collectAsStateWithLifecycle()
 +    SettingsSection(title = "Player gestures and subtitles", isTablet = isTablet) {
 +        SettingsGroup(isTablet = isTablet) {
 +            SettingsSwitchRow(
@@ -419,6 +442,14 @@ index 00000000..0e935e02
 +                checked = swipe,
 +                isTablet = isTablet,
 +                onCheckedChange = ForkPrefs.swipeToSeek::set,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Subtitle shadow",
++                description = "Draw a soft drop shadow behind subtitle text. Applies to the next video.",
++                checked = shadow,
++                isTablet = isTablet,
++                onCheckedChange = ForkPrefs.subtitleShadow::set,
 +            )
 +            SettingsGroupDivider(isTablet = isTablet)
 +            SettingsSwitchRow(
@@ -433,10 +464,10 @@ index 00000000..0e935e02
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
 new file mode 100644
-index 00000000..7bff417c
+index 00000000..336fb232
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,37 @@
 +package com.nuvio.app.features.settings
 +
 +import com.nuvio.app.core.storage.AppFileCache
@@ -471,6 +502,7 @@ index 00000000..7bff417c
 +
 +object ForkPrefs {
 +    val swipeToSeek = ForkBoolPref("settings/swipe_to_seek", true)
++    val subtitleShadow = ForkBoolPref("settings/subtitle_shadow", false)
 +    val subtitlesStartOff = ForkBoolPref("settings/subtitles_start_off", false)
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
