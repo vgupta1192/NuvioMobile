@@ -457,6 +457,48 @@ index 00000000..83077438
 +    <string name="details_rating_map_hidden">Watch this episode to reveal its rating</string>
 +    <string name="details_rating_map_hint">Tap an episode to see its rating.</string>
 +</resources>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+index af47702d..d0d9ae2f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+@@ -2380,6 +2380,8 @@ internal fun MainAppContent(
+                     .zIndex(20f),
+             )
+ 
++            com.nuvio.app.features.debrid.DebridAddOfferHost()
++
+             }
+         }
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/StreamDestination.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/StreamDestination.kt
+index a2b26a89..1d3db11b 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/StreamDestination.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/StreamDestination.kt
+@@ -1,5 +1,6 @@
+ package com.nuvio.app
+ 
++import com.nuvio.app.features.debrid.DebridSourceFallback
+ import androidx.compose.foundation.background
+ import androidx.compose.foundation.layout.Box
+ import androidx.compose.foundation.layout.fillMaxSize
+@@ -448,7 +449,7 @@ internal fun StreamDestination(
+                 else -> {
+                     val hasNextCandidate = StreamsRepository.skipAutoPlayStream(selectedStream)
+                     if (!hasNextCandidate) {
+-                        resolved.toastMessage()?.let { NuvioToastController.show(it) }
++                        DebridSourceFallback.notifyFailure(selectedStream, resolved)
+                     }
+                     if (!hasNextCandidate && resolved == DirectDebridPlayableResult.Stale) {
+                         StreamsRepository.reload(
+@@ -625,7 +626,7 @@ internal fun StreamDestination(
+                         forceInternal = forceInternal,
+                     )
+                     else -> {
+-                        resolved.toastMessage()?.let { NuvioToastController.show(it) }
++                        DebridSourceFallback.notifyFailure(stream, resolved)
+                         if (resolved == DirectDebridPlayableResult.Stale) {
+                             StreamsRepository.reload(
+                                 type = launch.type,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/network/DohSetting.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/network/DohSetting.kt
 new file mode 100644
 index 00000000..18dcdef1
@@ -756,6 +798,247 @@ index 72c7e97a..317c5532 100644
  internal fun CloudLibraryUiState.findPlaybackTargetForProgress(
      contentId: String,
      videoId: String,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/debrid/DebridApiClients.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/debrid/DebridApiClients.kt
+index cb33d35f..040a897b 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/debrid/DebridApiClients.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/debrid/DebridApiClients.kt
+@@ -89,12 +89,12 @@ internal object TorboxApiClient {
+         )
+     }
+ 
+-    suspend fun createTorrent(apiKey: String, magnet: String): DebridApiResponse<TorboxEnvelopeDto<TorboxCreateTorrentDataDto>> {
++    suspend fun createTorrent(apiKey: String, magnet: String, onlyIfCached: Boolean = true): DebridApiResponse<TorboxEnvelopeDto<TorboxCreateTorrentDataDto>> {
+         val boundary = "NuvioDebrid${magnet.hashCode().toUInt()}"
+         val body = multipartFormBody(
+             boundary = boundary,
+             "magnet" to magnet,
+-            "add_only_if_cached" to "true",
++            "add_only_if_cached" to onlyIfCached.toString(),
+             "allow_zip" to "false",
+         )
+         return request(
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/debrid/DebridProviderApis.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/debrid/DebridProviderApis.kt
+index 1b0db4b1..ea655c29 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/debrid/DebridProviderApis.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/debrid/DebridProviderApis.kt
+@@ -21,6 +21,11 @@ internal interface DebridProviderApi {
+         season: Int?,
+         episode: Int?,
+     ): DirectDebridResolveResult
++
++    /** Queues an uncached torrent on the account so it is cached later; false when unsupported or refused. */
++    suspend fun addToCache(apiKey: String, magnet: String): Boolean = false
++
++    val supportsAddToCache: Boolean get() = false
+ }
+ 
+ internal object DebridProviderApis {
+@@ -60,6 +65,16 @@ private class TorboxDebridProviderApi(
+ ) : DebridProviderApi {
+     override val provider: DebridProvider = DebridProviders.Torbox
+ 
++    override val supportsAddToCache: Boolean get() = true
++
++    override suspend fun addToCache(apiKey: String, magnet: String): Boolean = try {
++        val response = TorboxApiClient.createTorrent(apiKey = apiKey, magnet = magnet, onlyIfCached = false)
++        response.isSuccessful && response.body?.success != false
++    } catch (error: Exception) {
++        if (error is kotlinx.coroutines.CancellationException) throw error
++        false
++    }
++
+     override suspend fun validateApiKey(apiKey: String): Boolean =
+         TorboxApiClient.validateApiKey(apiKey)
+ 
+@@ -264,7 +279,7 @@ private class RealDebridProviderApi(
+     }
+ }
+ 
+-private fun buildMagnetUri(resolve: StreamClientResolve): String? {
++internal fun buildMagnetUri(resolve: StreamClientResolve): String? {
+     val hash = resolve.infoHash?.takeIf { it.isNotBlank() } ?: return null
+     return buildString {
+         append("magnet:?xt=urn:btih:")
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/debrid/DebridSourceFallback.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/debrid/DebridSourceFallback.kt
+new file mode 100644
+index 00000000..fcb99bfa
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/debrid/DebridSourceFallback.kt
+@@ -0,0 +1,137 @@
++package com.nuvio.app.features.debrid
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.collectAsState
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.rememberCoroutineScope
++import androidx.compose.runtime.setValue
++import com.nuvio.app.core.ui.NuvioStatusModal
++import com.nuvio.app.core.ui.NuvioToastController
++import com.nuvio.app.features.streams.StreamDebridCacheState
++import com.nuvio.app.features.streams.StreamItem
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import kotlinx.coroutines.launch
++
++/** What [DebridSourceFallback.playable] ended with: a stream ready to use, or why there is none. */
++internal data class DebridPlayOutcome(
++    val stream: StreamItem?,
++    val failure: DirectDebridPlayableResult? = null,
++)
++
++/**
++ * The one way play and download entry points turn a source into a usable link. A debrid source
++ * that is not cached (or stale) falls back to the next few [candidates]; when none works, the
++ * user gets "Add to TorBox" (or the error). DebridSourceGuardTest fails when a play/download
++ * file calls the resolver directly.
++ */
++internal object DebridSourceFallback {
++    const val MAX_TRIES = 3
++
++    /**
++     * [stream] ready to play or download. [candidates] is only loaded when a fallback is needed,
++     * in the caller's preferred order. With [notify] the switch note, the add offer or the error
++     * is shown here; without it the caller decides (batch, auto-play) via [notifyFailure].
++     */
++    suspend fun playable(
++        stream: StreamItem,
++        season: Int?,
++        episode: Int?,
++        notify: Boolean = true,
++        candidates: suspend () -> List<StreamItem>,
++    ): DebridPlayOutcome {
++        if (!DirectDebridPlaybackResolver.shouldResolveToPlayableStream(stream)) return DebridPlayOutcome(stream)
++        val first = DirectDebridPlaybackResolver.resolveToPlayableStream(stream, season, episode)
++        if (first is DirectDebridPlayableResult.Success) return DebridPlayOutcome(first.stream)
++        if (first is DirectDebridPlayableResult.NotCached || first is DirectDebridPlayableResult.Stale) {
++            nextWorking(candidates(), stream, season, episode)?.let { fallback ->
++                if (notify) NuvioToastController.show("Not cached, switched to ${fallback.fallbackLabel()}", durationMillis = 4000L)
++                return DebridPlayOutcome(fallback)
++            }
++        }
++        if (notify) notifyFailure(stream, first)
++        return DebridPlayOutcome(null, first)
++    }
++
++    /** Nothing worked for [stream]: offer to add it to the debrid cache, else show the error. */
++    fun notifyFailure(stream: StreamItem, failure: DirectDebridPlayableResult) {
++        if (failure is DirectDebridPlayableResult.NotCached && DebridAddOffer.offer(stream)) return
++        failure.toastMessage()?.let { NuvioToastController.show(it) }
++    }
++
++    /** First of the next few [candidates] (skipping [failed] and known-uncached ones) that resolves. */
++    suspend fun nextWorking(
++        candidates: List<StreamItem>,
++        failed: StreamItem,
++        season: Int?,
++        episode: Int?,
++    ): StreamItem? = candidates
++        .asSequence()
++        .filter { it != failed && it.debridCacheStatus?.state != StreamDebridCacheState.NOT_CACHED }
++        .filter { it.playableDirectUrl != null || DirectDebridPlaybackResolver.shouldResolveToPlayableStream(it) }
++        .take(MAX_TRIES)
++        .toList()
++        .firstNotNullOfOrNull { candidate ->
++            (DirectDebridPlaybackResolver.resolveToPlayableStream(candidate, season, episode) as? DirectDebridPlayableResult.Success)
++                ?.stream?.takeIf { it.playableDirectUrl != null }
++        }
++}
++
++/** App-wide "Add to TorBox" offer, so it shows whichever screen (or closed sheet) asked. */
++internal object DebridAddOffer {
++    private val _pending = MutableStateFlow<StreamItem?>(null)
++    val pending: StateFlow<StreamItem?> = _pending.asStateFlow()
++
++    /** True when [stream]'s provider can add it and the offer is now showing. */
++    fun offer(stream: StreamItem): Boolean {
++        if (DirectDebridPlaybackResolver.addToCacheProviderName(stream) == null) return false
++        _pending.value = stream
++        return true
++    }
++
++    fun dismiss() {
++        _pending.value = null
++    }
++}
++
++/** Shown once at the app root. */
++@Composable
++internal fun DebridAddOfferHost() {
++    val offered by DebridAddOffer.pending.collectAsState()
++    val stream = offered ?: return
++    val provider = DirectDebridPlaybackResolver.addToCacheProviderName(stream) ?: "debrid"
++    val scope = rememberCoroutineScope()
++    var adding by remember(stream) { mutableStateOf(false) }
++    NuvioStatusModal(
++        title = "Not cached on $provider",
++        message = "No other source worked. Add it to $provider so it downloads there and is ready to play later?",
++        isVisible = true,
++        isBusy = adding,
++        confirmText = "Add to $provider",
++        dismissText = "Not now",
++        onConfirm = {
++            adding = true
++            scope.launch {
++                val added = DirectDebridPlaybackResolver.addToCache(stream)
++                DebridAddOffer.dismiss()
++                NuvioToastController.show(
++                    if (added) "Added to $provider. It will be ready to play later." else "$provider didn't accept it. Try again later.",
++                    durationMillis = 4000L,
++                )
++            }
++        },
++        onDismiss = { DebridAddOffer.dismiss() },
++    )
++}
++
++/** Short "which source" text for the switch note: addon and its stream label, first line only. */
++internal fun StreamItem.fallbackLabel(): String =
++    listOf(addonName, streamLabel.lineSequence().firstOrNull().orEmpty())
++        .map { it.trim() }
++        .filter { it.isNotBlank() }
++        .distinct()
++        .joinToString(" · ")
++        .take(60)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/debrid/DirectDebridResolver.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/debrid/DirectDebridResolver.kt
+index d9c18ebf..d0269aea 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/debrid/DirectDebridResolver.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/debrid/DirectDebridResolver.kt
+@@ -143,6 +143,32 @@ object DirectDebridPlaybackResolver {
+         return api.resolveClientStream(stream, apiKey, season, episode)
+     }
+ 
++    /** The account and magnet an uncached [stream] would be added with, or null when that isn't possible. */
++    private fun addTarget(stream: StreamItem): Triple<DebridProviderApi, String, String>? {
++        val credential = if (stream.needsLocalDebridResolve) {
++            localTorrentResolveCredential()
++        } else {
++            val provider = DebridProviders.byId(stream.clientResolve?.service) ?: return null
++            DebridServiceCredential(provider, DebridSettingsRepository.snapshot().apiKeyFor(provider.id))
++        } ?: return null
++        val apiKey = credential.apiKey.trim().takeIf { it.isNotBlank() } ?: return null
++        val api = DebridProviderApis.apiFor(credential.provider.id) ?: return null
++        val magnet = DebridMagnetBuilder.fromStream(stream)
++            ?: stream.clientResolve?.let { it.magnetUri?.takeIf(String::isNotBlank) ?: buildMagnetUri(it) }
++            ?: return null
++        return Triple(api, apiKey, magnet)
++    }
++
++    /** Provider name ("Torbox") when [stream] can be added to the debrid cache, else null. */
++    fun addToCacheProviderName(stream: StreamItem): String? =
++        addTarget(stream)?.first?.takeIf { it.supportsAddToCache }?.provider?.displayName
++
++    /** Adds an uncached [stream] to the debrid account so it gets cached; true when accepted. */
++    suspend fun addToCache(stream: StreamItem): Boolean {
++        val (api, apiKey, magnet) = addTarget(stream) ?: return false
++        return api.addToCache(apiKey, magnet)
++    }
++
+     suspend fun resolveToPlayableStream(
+         stream: StreamItem,
+         season: Int?,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
 index 73553976..82aecfd4 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
@@ -3387,6 +3670,22 @@ index 00000000..63f51fdb
 +        )
 +    }
 +}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeRepository.kt
+index 322a0a28..95f78f7d 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeRepository.kt
+@@ -264,6 +264,11 @@ object HomeRepository {
+             .mapNotNull { definition ->
+                 val preference = preferences[definition.key]
+                 if (preference?.enabled == false) return@mapNotNull null
++                if (definition.serverConnectionId == null &&
++                    com.nuvio.app.features.settings.ForkPrefs.homeVideoRowsOnly.current() &&
++                    definition.type.isNotBlank() &&
++                    definition.type.lowercase() !in setOf("movie", "series", "anime", "collections", "tv")
++                ) return@mapNotNull null
+ 
+                 val section = cachedSections[definition.cacheKey]
+                     ?.withPosterOverlay()
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt
 index 35be12ce..c12464a6 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt
@@ -3475,6 +3774,125 @@ index 529d8f3d..fd254ce9 100644
                                      LibraryListManagementButton()
                                      val targetLayout = if (displaySettings.layoutMode == LibraryLayoutMode.HORIZONTAL) {
                                          LibraryLayoutMode.VERTICAL
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt
+new file mode 100644
+index 00000000..499aa9b1
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt
+@@ -0,0 +1,79 @@
++package com.nuvio.app.features.player
++
++import com.nuvio.app.core.storage.AppFileCache
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++
++data class ForkToolbarButton(val id: String, val label: String)
++
++data class ForkToolbarEntry(val id: String, val visible: Boolean)
++
++object ForkPlayerToolbar {
++    val buttons: List<ForkToolbarButton> = listOf(
++        ForkToolbarButton("next_episode", "Next episode"),
++        ForkToolbarButton("subtitles", "Subtitles"),
++        ForkToolbarButton("audio", "Audio"),
++        ForkToolbarButton("sources", "Sources"),
++        ForkToolbarButton("episodes", "Episodes"),
++        ForkToolbarButton("quality", "Quality"),
++        ForkToolbarButton("rate", "Rate"),
++        ForkToolbarButton("speed", "Speed"),
++        ForkToolbarButton("resize", "Resize"),
++        ForkToolbarButton("external_player", "Open in external player"),
++        ForkToolbarButton("playback_info", "Stream info"),
++        ForkToolbarButton("video_settings", "Video settings"),
++        ForkToolbarButton("submit_intro", "Submit intro"),
++    )
++
++    private const val PATH = "settings/player_toolbar"
++    private val default = buttons.map { ForkToolbarEntry(it.id, true) }
++    private val _entries = MutableStateFlow(default)
++    val entries: StateFlow<List<ForkToolbarEntry>> = _entries.asStateFlow()
++    private var loaded = false
++
++    fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        val stored = runCatching { AppFileCache.read(PATH)?.trim() }.getOrNull()
++        if (!stored.isNullOrBlank()) _entries.value = decode(stored)
++    }
++
++    private fun decode(value: String): List<ForkToolbarEntry> {
++        val known = buttons.map { it.id }.toSet()
++        val parsed = value.split(',').mapNotNull { token ->
++            val id = token.substringBefore(':').trim()
++            if (id !in known) return@mapNotNull null
++            ForkToolbarEntry(id, token.substringAfter(':', "v").trim() != "h")
++        }.distinctBy { it.id }
++        val missing = default.filter { d -> parsed.none { it.id == d.id } }
++        return parsed + missing
++    }
++
++    private fun save(list: List<ForkToolbarEntry>) {
++        _entries.value = list
++        runCatching {
++            AppFileCache.write(PATH, list.joinToString(",") { "${it.id}:${if (it.visible) "v" else "h"}" })
++        }
++    }
++
++    fun setVisible(id: String, visible: Boolean) {
++        ensureLoaded()
++        save(_entries.value.map { if (it.id == id) it.copy(visible = visible) else it })
++    }
++
++    fun move(id: String, delta: Int) {
++        ensureLoaded()
++        val list = _entries.value.toMutableList()
++        val from = list.indexOfFirst { it.id == id }
++        val to = from + delta
++        if (from < 0 || to !in list.indices) return
++        list.add(to, list.removeAt(from))
++        save(list)
++    }
++
++    fun reset() {
++        ensureLoaded()
++        save(default)
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
+index 9ba1b2c2..ceed8f41 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
+@@ -41,6 +41,7 @@ import androidx.compose.material3.Text
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.CompositionLocalProvider
+ import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.collectAsState
+ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.mutableStateOf
+ import androidx.compose.runtime.remember
+@@ -164,7 +165,9 @@ internal fun PlayerControlActions(
+     onRateClick: (() -> Unit)? = null,
+     userRating: Int? = null,
+ ) {
+-    val actions = listOfNotNull(
++    androidx.compose.runtime.LaunchedEffect(Unit) { ForkPlayerToolbar.ensureLoaded() }
++    val toolbarEntries by ForkPlayerToolbar.entries.collectAsState()
++    val allActions = listOf(
+         onNextEpisodeClick?.let {
+             PlayerControlAction(
+                 stringResource(Res.string.player_next_episode), it,
+@@ -236,6 +239,10 @@ internal fun PlayerControlActions(
+             )
+         },
+     )
++    val actionsById = ForkPlayerToolbar.buttons.map { it.id }.zip(allActions).toMap()
++    val actions = toolbarEntries
++        .filter { it.visible }
++        .mapNotNull { entry -> actionsById[entry.id] }
+     val visibleCount = 7
+     val hasOverflow = actions.size > visibleCount
+     var expanded by remember(hasOverflow) { mutableStateOf(false) }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEffectsPanels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEffectsPanels.kt
 index b326c20e..91589cb9 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEffectsPanels.kt
@@ -3487,6 +3905,26 @@ index b326c20e..91589cb9 100644
              VolumeBoosterRow()
          } else {
              EqualizerTab(state)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerNextEpisodeAutoPlay.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerNextEpisodeAutoPlay.kt
+index b4a280f1..5033de16 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerNextEpisodeAutoPlay.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerNextEpisodeAutoPlay.kt
+@@ -1,5 +1,6 @@
+ package com.nuvio.app.features.player
+ 
++import com.nuvio.app.features.debrid.DebridSourceFallback
+ import com.nuvio.app.core.ui.NuvioToastController
+ import com.nuvio.app.features.addons.AddonRepository
+ import com.nuvio.app.features.addons.enabledAddons
+@@ -312,7 +313,7 @@ internal fun CoroutineScope.launchPlayerNextEpisodeAutoPlay(
+             when (val result = DirectDebridPlaybackResolver.resolveToPlayableStream(stream, nextVideo.season, nextVideo.episode)) {
+                 is DirectDebridPlayableResult.Success -> result.stream
+                 else -> {
+-                    result.toastMessage()?.let { NuvioToastController.show(it) }
++                    DebridSourceFallback.notifyFailure(stream, result)
+                     PlayerStreamsRepository.loadEpisodeStreams(
+                         type = type,
+                         videoId = nextVideo.id,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeDiscord.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeDiscord.kt
 new file mode 100644
 index 00000000..2d0c95bd
@@ -3597,6 +4035,26 @@ index 06d106ca..0aac2e78 100644
  
      DisposableEffect(activeSourceUrl) {
          val effectSourceUrl = activeSourceUrl
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSourceActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSourceActions.kt
+index 55763bb1..0f5921a8 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSourceActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSourceActions.kt
+@@ -1,5 +1,6 @@
+ package com.nuvio.app.features.player
+ 
++import com.nuvio.app.features.debrid.DebridSourceFallback
+ import com.nuvio.app.core.ui.NuvioToastController
+ import com.nuvio.app.features.debrid.DirectDebridPlayableResult
+ import com.nuvio.app.features.debrid.DirectDebridPlaybackResolver
+@@ -42,7 +43,7 @@ internal fun PlayerScreenRuntime.resolveDebridForPlayer(
+         when (resolved) {
+             is DirectDebridPlayableResult.Success -> onResolved(resolved.stream)
+             else -> {
+-                resolved.toastMessage()?.let { NuvioToastController.show(it) }
++                DebridSourceFallback.notifyFailure(stream, resolved)
+                 if (resolved == DirectDebridPlayableResult.Stale) {
+                     onStale()
+                 }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
 index 46f0cc27..a8c72885 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
@@ -4567,10 +5025,10 @@ index 00000000..80078a4c
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHomeRowsSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHomeRowsSettings.kt
 new file mode 100644
-index 00000000..41ed8e74
+index 00000000..716e8727
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHomeRowsSettings.kt
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,142 @@
 +package com.nuvio.app.features.settings
 +
 +import androidx.compose.runtime.Composable
@@ -4591,6 +5049,7 @@ index 00000000..41ed8e74
 +        ForkPrefs.ratingMap.ensureLoaded()
 +        ForkPrefs.nuvioRead.ensureLoaded()
 +        ForkPrefs.fillerGuide.ensureLoaded()
++        ForkPrefs.homeVideoRowsOnly.ensureLoaded()
 +    }
 +    val tonight by ForkPrefs.homeUpNextTonight.value.collectAsStateWithLifecycle()
 +    val week by ForkPrefs.homeAiringWeek.value.collectAsStateWithLifecycle()
@@ -4598,6 +5057,7 @@ index 00000000..41ed8e74
 +    val ratingMap by ForkPrefs.ratingMap.value.collectAsStateWithLifecycle()
 +    val fillerGuide by ForkPrefs.fillerGuide.value.collectAsStateWithLifecycle()
 +    val nuvioRead by ForkPrefs.nuvioRead.value.collectAsStateWithLifecycle()
++    val videoRowsOnly by ForkPrefs.homeVideoRowsOnly.value.collectAsStateWithLifecycle()
 +    SettingsSection(title = "Extra home rows", isTablet = isTablet) {
 +        SettingsGroup(isTablet = isTablet) {
 +            SettingsSwitchRow(
@@ -4648,6 +5108,14 @@ index 00000000..41ed8e74
 +            )
 +            SettingsGroupDivider(isTablet = isTablet)
 +            SettingsSwitchRow(
++                title = "Only movie, series and anime rows",
++                description = "Hide Home rows from addons that list other things, like debrid downloads or YouTube channels. They stay in Discover.",
++                checked = videoRowsOnly,
++                isTablet = isTablet,
++                onCheckedChange = ForkPrefs.homeVideoRowsOnly::set,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
 +                title = "Anime filler guide",
 +                description = "List filler and recap episodes on anime pages (Jikan).",
 +                checked = fillerGuide,
@@ -4662,6 +5130,44 @@ index 00000000..41ed8e74
 +                isTablet = isTablet,
 +                onCheckedChange = ForkPrefs.nuvioRead::set,
 +            )
++        }
++    }
++
++    val toolbar by com.nuvio.app.features.player.ForkPlayerToolbar.entries.collectAsStateWithLifecycle()
++    LaunchedEffect(Unit) { com.nuvio.app.features.player.ForkPlayerToolbar.ensureLoaded() }
++    SettingsSection(title = "Player toolbar", isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            toolbar.forEachIndexed { index, entry ->
++                val label = com.nuvio.app.features.player.ForkPlayerToolbar.buttons
++                    .firstOrNull { it.id == entry.id }?.label ?: entry.id
++                androidx.compose.foundation.layout.Row(
++                    modifier = androidx.compose.ui.Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
++                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
++                ) {
++                    androidx.compose.material3.Text(
++                        text = label,
++                        modifier = androidx.compose.ui.Modifier.weight(1f),
++                    )
++                    androidx.compose.material3.TextButton(
++                        onClick = { com.nuvio.app.features.player.ForkPlayerToolbar.move(entry.id, -1) },
++                        enabled = index > 0,
++                    ) { androidx.compose.material3.Text("Up") }
++                    androidx.compose.material3.TextButton(
++                        onClick = { com.nuvio.app.features.player.ForkPlayerToolbar.move(entry.id, 1) },
++                        enabled = index < toolbar.lastIndex,
++                    ) { androidx.compose.material3.Text("Down") }
++                    androidx.compose.material3.Switch(
++                        checked = entry.visible,
++                        onCheckedChange = { com.nuvio.app.features.player.ForkPlayerToolbar.setVisible(entry.id, it) },
++                    )
++                }
++                if (index < toolbar.lastIndex) SettingsGroupDivider(isTablet = isTablet)
++            }
++            SettingsGroupDivider(isTablet = isTablet)
++            androidx.compose.material3.TextButton(
++                onClick = { com.nuvio.app.features.player.ForkPlayerToolbar.reset() },
++                modifier = androidx.compose.ui.Modifier.padding(horizontal = 8.dp),
++            ) { androidx.compose.material3.Text("Reset toolbar") }
 +        }
 +    }
 +}
@@ -4718,10 +5224,10 @@ index 00000000..b1662a8e
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
 new file mode 100644
-index 00000000..5ff4acb5
+index 00000000..f5b80ca5
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,44 @@
 +package com.nuvio.app.features.settings
 +
 +import com.nuvio.app.core.storage.AppFileCache
@@ -4761,6 +5267,7 @@ index 00000000..5ff4acb5
 +    val homeFinishSeries = ForkBoolPref("settings/home_finish_series", true)
 +    val ratingMap = ForkBoolPref("settings/rating_map", true)
 +    val fillerGuide = ForkBoolPref("settings/filler_guide", true)
++    val homeVideoRowsOnly = ForkBoolPref("settings/home_video_rows_only", true)
 +    val nuvioRead = ForkBoolPref("settings/nuvio_read", false)
 +    val subtitleShadow = ForkBoolPref("settings/subtitle_shadow", false)
 +    val subtitlesStartOff = ForkBoolPref("settings/subtitles_start_off", false)
