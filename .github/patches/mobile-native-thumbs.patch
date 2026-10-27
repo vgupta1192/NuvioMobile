@@ -1,5 +1,5 @@
 diff --git a/androidApp/build.gradle.kts b/androidApp/build.gradle.kts
-index 2910dbc2..a020ea4b 100644
+index 2910dbc2..ea49f77b 100644
 --- a/androidApp/build.gradle.kts
 +++ b/androidApp/build.gradle.kts
 @@ -1,4 +1,5 @@
@@ -8,7 +8,7 @@ index 2910dbc2..a020ea4b 100644
  
  fun readXcconfigValue(file: File, key: String): String? {
      if (!file.exists()) return null
-@@ -145,10 +146,76 @@ android {
+@@ -145,10 +146,79 @@ android {
      }
  }
  
@@ -70,8 +70,11 @@ index 2910dbc2..a020ea4b 100644
 +    crate = "aiostreams-native-android"
 +    abis = listOf("arm64-v8a")
 +    minSdk = libs.versions.android.minSdk.get().toInt()
-+    ndkVersion = androidComponents.sdkComponents.ndkDirectory.map { it.asFile.name }
-+    ndk = androidComponents.sdkComponents.ndkDirectory
++    val ndkPath = providers.environmentVariable("ANDROID_NDK_HOME")
++        .orElse(providers.environmentVariable("ANDROID_NDK_ROOT"))
++        .orElse(providers.environmentVariable("ANDROID_NDK_LATEST_HOME"))
++    ndkVersion = ndkPath.map { File(it).name }
++    ndk = layout.dir(ndkPath.map { File(it) })
 +    jniLibs = layout.buildDirectory.dir("cargo/jniLibs")
 +}
 +
