@@ -1,0 +1,151 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/diagnostics/RuntimeDiagnostics.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/diagnostics/RuntimeDiagnostics.kt
+new file mode 100644
+index 00000000..1a589f2a
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/diagnostics/RuntimeDiagnostics.kt
+@@ -0,0 +1,27 @@
++package com.nuvio.app.core.diagnostics
++
++import kotlinx.atomicfu.locks.SynchronizedObject
++import kotlinx.atomicfu.locks.synchronized
++
++internal object RuntimeDiagnostics {
++    private val lock = SynchronizedObject()
++    private val recentLogs = ArrayDeque<String>()
++    private var cloudStreamNativeRepositories: Int = 0
++
++    fun updateCloudStreamNativeRepositories(count: Int) = synchronized(lock) {
++        cloudStreamNativeRepositories = count.coerceAtLeast(0)
++    }
++
++    fun recordLog(message: String) = synchronized(lock) {
++        val line = message.trim().takeIf { it.isNotEmpty() } ?: return@synchronized
++        if (recentLogs.size >= 100) recentLogs.removeFirst()
++        recentLogs.addLast(line)
++    }
++
++    fun snapshotText(): String = synchronized(lock) {
++        buildString {
++            appendLine("CloudStream native repositories: $cloudStreamNativeRepositories")
++            if (recentLogs.isNotEmpty()) append(recentLogs.joinToString("\n"))
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.kt
+index c0e30fce..43bf6a72 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/addons/AddonPlatform.kt
+@@ -45,3 +45,16 @@ expect suspend fun httpRequestRaw(
+     /** When present, sends these bytes verbatim instead of UTF-8 encoding [body]. */
+     bodyBytes: ByteArray? = null,
+ ): RawHttpResponse
++
++suspend fun httpGetBytesWithHeaders(
++    url: String,
++    headers: Map<String, String> = emptyMap(),
++    maxResponseBodyBytes: Int = 50 * 1024 * 1024,
++): ByteArray = httpRequestRaw(
++    method = "GET",
++    url = url,
++    headers = headers,
++    body = "",
++    followRedirects = true,
++    maxResponseBodyBytes = maxResponseBodyBytes,
++).bodyBytes
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerQualitySelector.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerQualitySelector.kt
+index 3b9160af..baa80ae2 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerQualitySelector.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerQualitySelector.kt
+@@ -105,9 +105,10 @@ internal object PlayerQualityResolver {
+     suspend fun resolve(
+         sourceUrl: String,
+         requestHeaders: Map<String, String> = emptyMap(),
++        forceHls: Boolean = false,
+     ): PlayerQualitySelectionState {
+         val normalizedUrl = sourceUrl.trim()
+-        if (!looksLikeHlsPlaylist(normalizedUrl)) {
++        if (!forceHls && !looksLikeHlsPlaylist(normalizedUrl)) {
+             InAppLogger.debug(
+                 "Player/Quality",
+                 "skip HLS quality inspection url=${InAppLogger.redactUrl(normalizedUrl)}",
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamFetchSupport.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamFetchSupport.kt
+index 4752e0fd..1d858795 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamFetchSupport.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamFetchSupport.kt
+@@ -368,7 +368,7 @@ internal fun buildCloudStreamSearchRequest(
+     val title = searchTitle?.trim()?.takeIf { it.isNotBlank() }
+         ?: meta?.name?.trim()?.takeIf { it.isNotBlank() }
+         ?: return null
+-    val aliases = (listOfNotNull(meta?.name, searchTitle) + meta?.aliases.orEmpty())
++    val aliases = (listOfNotNull(meta?.name, searchTitle))
+         .cleanCloudStreamRequestAliases(primaryTitle = title)
+     val year = meta?.releaseInfo.cloudStreamReleaseYear()
+         ?: title.cloudStreamReleaseYear()
+diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/plugins/CloudStreamSettingsSection.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/plugins/CloudStreamSettingsSection.kt
+index b777fce9..4df7e151 100644
+--- a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/plugins/CloudStreamSettingsSection.kt
++++ b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/plugins/CloudStreamSettingsSection.kt
+@@ -59,7 +59,7 @@ import com.nuvio.app.features.cloudstream.CloudStreamPluginItem
+ import com.nuvio.app.features.cloudstream.CloudStreamRepository
+ import com.nuvio.app.features.settings.AppLanguage
+ import com.nuvio.app.features.settings.ThemeSettingsRepository
+-import com.nuvio.app.features.streams.StreamSourcePreferencesRepository
++import com.nuvio.app.features.streams.PinnedStreamSourcesRepository
+ import com.nuvio.app.features.streams.cloudStreamAddonId
+ import kotlinx.coroutines.launch
+ 
+@@ -72,9 +72,9 @@ internal fun CloudStreamSettingsSection() {
+     }
+     val state by CloudStreamRepository.uiState.collectAsStateWithLifecycle()
+     val selectedAppLanguage by ThemeSettingsRepository.selectedAppLanguage.collectAsStateWithLifecycle()
+-    val sourcePreferences by remember {
+-        StreamSourcePreferencesRepository.ensureLoaded()
+-        StreamSourcePreferencesRepository.uiState
++    val pinnedSourceIds by remember {
++        PinnedStreamSourcesRepository.ensureLoaded()
++        PinnedStreamSourcesRepository.pinnedSourceIds
+     }.collectAsStateWithLifecycle()
+     val copy = remember(selectedAppLanguage) { CloudStreamSettingsCopy.forLanguage(selectedAppLanguage) }
+     val scope = rememberCoroutineScope()
+@@ -115,9 +115,6 @@ internal fun CloudStreamSettingsSection() {
+                 (!item.isRunnable || item.hasUpdate || !item.isInstalled || !item.verified)
+         }
+     }
+-    val pinnedSourceIds = remember(sourcePreferences.pinnedSources) {
+-        sourcePreferences.pinnedSources.map { it.id }.toSet()
+-    }
+ 
+     NuvioSectionLabel(copy.sectionTitle)
+     NuvioSurfaceCard {
+@@ -401,7 +398,7 @@ internal fun CloudStreamSettingsSection() {
+         CloudStreamPluginCard(
+             plugin = plugin,
+             securityWarningAccepted = state.securityWarningAccepted,
+-            pinnedSourceIds = pinnedSourceIds,
++            pinnedSourceIds = pinnedSourceIds.toSet(),
+             copy = copy,
+             onMessage = { message = it },
+         )
+@@ -437,7 +434,8 @@ private fun CloudStreamPluginCard(
+ ) {
+     val scope = rememberCoroutineScope()
+     val sourceId = remember(plugin.metadata.id.value) { cloudStreamAddonId(plugin.metadata.id.value) }
+-    val isPinnedSource = sourceId in pinnedSourceIds
++    val pinKey = remember(sourceId, plugin.metadata.name) { PinnedStreamSourcesRepository.sourceKeyFor(sourceId, plugin.metadata.name) }
++    val isPinnedSource = pinKey in pinnedSourceIds
+     NuvioSurfaceCard {
+         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+             AsyncImage(
+@@ -465,11 +463,7 @@ private fun CloudStreamPluginCard(
+                         MaterialTheme.colorScheme.onSurfaceVariant
+                     },
+                     onClick = {
+-                        if (isPinnedSource) {
+-                            StreamSourcePreferencesRepository.unpinSource(sourceId)
+-                        } else {
+-                            StreamSourcePreferencesRepository.pinSource(sourceId, plugin.metadata.name)
+-                        }
++                        PinnedStreamSourcesRepository.setPinned(pinKey, !isPinnedSource)
+                     },
+                 )
+                 Switch(
