@@ -1,3 +1,15 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
+index 7362a5ca..510ce816 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
+@@ -136,6 +136,7 @@ open class MainActivity : AppCompatActivity() {
+         ServerStorage.initialize(applicationContext)
+         PlatformMdbListSyncStorage.initialize(applicationContext)
+         SimklAuthStorage.initialize(applicationContext)
++        com.nuvio.app.features.discord.DiscordRpcStorage.initialize(applicationContext)
+         SimklSyncStorage.initialize(applicationContext)
+         LibraryDisplaySettingsStorage.initialize(applicationContext)
+         com.nuvio.app.features.library.LibraryCalendarStorage.initialize(applicationContext) // Nuvio fork: library calendar
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/core/network/IPv4FirstDns.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/core/network/IPv4FirstDns.kt
 index f2ca0e9a..1576e568 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/core/network/IPv4FirstDns.kt
@@ -69,6 +81,268 @@ index f2ca0e9a..1576e568 100644
 +        val ANSWER_REGEX = Regex("\"type\"\\s*:\\s*(\\d+)[^}]*?\"data\"\\s*:\\s*\"([^\"]+)\"")
 +    }
 +}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/discord/DiscordRpcPlatform.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/discord/DiscordRpcPlatform.android.kt
+new file mode 100644
+index 00000000..180f1b80
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/discord/DiscordRpcPlatform.android.kt
+@@ -0,0 +1,149 @@
++package com.nuvio.app.features.discord
++
++import android.annotation.SuppressLint
++import android.net.Uri
++import android.os.Build
++import android.os.Handler
++import android.os.Looper
++import android.view.View
++import android.view.ViewGroup
++import android.webkit.CookieManager
++import android.webkit.JsResult
++import android.webkit.WebChromeClient
++import android.webkit.WebStorage
++import android.webkit.WebView
++import android.webkit.WebViewClient
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.rememberUpdatedState
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.viewinterop.AndroidView
++import io.ktor.client.HttpClient
++import io.ktor.client.engine.okhttp.OkHttp
++import io.ktor.client.plugins.websocket.WebSockets
++import java.util.concurrent.TimeUnit
++
++private const val JS_SNIPPET =
++    "javascript:(function()%7Bvar%20i%3Ddocument.createElement('iframe')%3Bdocument.body.appendChild(i)%3Balert(i.contentWindow.localStorage.token.slice(1,-1))%7D)()"
++private const val TOKEN_READER_SCRIPT =
++    "(function(){try{var i=document.createElement('iframe');i.style.display='none';document.body.appendChild(i);var t=i.contentWindow.localStorage.getItem('token');i.remove();return t?JSON.parse(t):null;}catch(e){return null;}})()"
++private const val MOTOROLA = "motorola"
++private const val SAMSUNG_USER_AGENT =
++    "Mozilla/5.0 (Linux; Android 14; SM-S921U; Build/UP1A.231005.007) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Mobile Safari/537.363"
++
++internal actual object DiscordRpcPlatform {
++    actual val isSupported: Boolean = true
++
++    actual fun clearLoginSession() {
++        Handler(Looper.getMainLooper()).post {
++            runCatching { CookieManager.getInstance().removeAllCookies(null) }
++            runCatching { CookieManager.getInstance().flush() }
++            runCatching { WebStorage.getInstance().deleteAllData() }
++        }
++    }
++}
++
++internal actual fun createDiscordGatewayHttpClient(): HttpClient = HttpClient(OkHttp) {
++    install(WebSockets)
++    engine {
++        config {
++            dns(com.nuvio.app.core.network.NuvioDns)
++            connectTimeout(15, TimeUnit.SECONDS)
++            readTimeout(0, TimeUnit.MILLISECONDS)
++            writeTimeout(15, TimeUnit.SECONDS)
++            retryOnConnectionFailure(true)
++        }
++    }
++}
++
++@SuppressLint("SetJavaScriptEnabled")
++@Composable
++internal actual fun DiscordLoginWebView(
++    modifier: Modifier,
++    onLoginCompleted: (String) -> Unit,
++) {
++    val currentOnLoginCompleted = rememberUpdatedState(onLoginCompleted)
++    AndroidView(
++        modifier = modifier,
++        factory = { context ->
++            WebView(context).apply {
++                layoutParams = ViewGroup.LayoutParams(
++                    ViewGroup.LayoutParams.MATCH_PARENT,
++                    ViewGroup.LayoutParams.MATCH_PARENT,
++                )
++                var tokenRequested = false
++                var tokenDelivered = false
++                fun deliverToken(token: String?) {
++                    val value = token?.trim()?.removeSurrounding("\"")?.takeIf { it.isNotBlank() && it != "null" }
++                    if (tokenDelivered || value == null) return
++                    tokenDelivered = true
++                    visibility = View.GONE
++                    currentOnLoginCompleted.value(value)
++                }
++                fun readStoredToken(webView: WebView, url: String?) {
++                    if (tokenDelivered || url == null) return
++                    val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return
++                    val host = uri.host.orEmpty()
++                    val path = uri.path.orEmpty()
++                    if (!host.endsWith("discord.com")) return
++                    if (path.startsWith("/login") || path.startsWith("/register") || path.isBlank() || path == "/") return
++                    webView.evaluateJavascript(TOKEN_READER_SCRIPT) { result -> deliverToken(result) }
++                }
++                fun requestToken(webView: WebView, url: String?) {
++                    readStoredToken(webView, url)
++                    if (tokenRequested || tokenDelivered || url == null || !url.endsWith("/app")) return
++                    tokenRequested = true
++                    webView.loadUrl(JS_SNIPPET)
++                    webView.visibility = View.GONE
++                }
++                webViewClient = object : WebViewClient() {
++                    @Deprecated("Deprecated in Java")
++                    override fun shouldOverrideUrlLoading(
++                        webView: WebView,
++                        url: String,
++                    ): Boolean {
++                        stopLoading()
++                        requestToken(webView, url)
++                        return false
++                    }
++
++                    override fun doUpdateVisitedHistory(
++                        view: WebView,
++                        url: String?,
++                        isReload: Boolean,
++                    ) {
++                        super.doUpdateVisitedHistory(view, url, isReload)
++                        requestToken(view, url)
++                    }
++
++                    override fun onPageFinished(view: WebView, url: String?) {
++                        super.onPageFinished(view, url)
++                        readStoredToken(view, url)
++                    }
++                }
++                settings.javaScriptEnabled = true
++                settings.domStorageEnabled = true
++
++                if (Build.MANUFACTURER.equals(MOTOROLA, ignoreCase = true)) {
++                    settings.userAgentString = SAMSUNG_USER_AGENT
++                }
++                webChromeClient = object : WebChromeClient() {
++                    override fun onJsAlert(
++                        view: WebView,
++                        url: String,
++                        message: String,
++                        result: JsResult,
++                    ): Boolean {
++                        result.confirm()
++                        deliverToken(message)
++                        return true
++                    }
++                }
++                loadUrl(DiscordRpcConfig.LOGIN_URL)
++            }
++        },
++        onRelease = { webView ->
++            webView.stopLoading()
++            webView.destroy()
++        },
++    )
++}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/discord/DiscordRpcStorage.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/discord/DiscordRpcStorage.android.kt
+new file mode 100644
+index 00000000..e94e5ae8
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/discord/DiscordRpcStorage.android.kt
+@@ -0,0 +1,101 @@
++package com.nuvio.app.features.discord
++
++import android.content.Context
++import android.content.SharedPreferences
++import android.security.keystore.KeyGenParameterSpec
++import android.security.keystore.KeyProperties
++import android.util.Base64
++import java.security.KeyStore
++import javax.crypto.Cipher
++import javax.crypto.KeyGenerator
++import javax.crypto.SecretKey
++import javax.crypto.spec.GCMParameterSpec
++
++internal actual object DiscordRpcStorage {
++    private const val preferencesName = "nuvio_discord_rpc"
++    private const val settingsKey = "settings_payload"
++    private const val userKey = "user_payload"
++    private const val tokenKey = "token"
++    private const val keyAlias = "com.nuvio.media.discord.token.v1"
++
++    private var preferences: SharedPreferences? = null
++    private val lock = Any()
++
++    fun initialize(context: Context) {
++        preferences = context.applicationContext.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
++    }
++
++    actual fun loadSettingsPayload(): String? =
++        preferences?.getString(settingsKey, null)
++
++    actual fun saveSettingsPayload(payload: String) {
++        preferences
++            ?.edit()
++            ?.putString(settingsKey, payload)
++            ?.apply()
++    }
++
++    actual fun loadUserPayload(): String? =
++        preferences?.getString(userKey, null)
++
++    actual fun saveUserPayload(payload: String?) {
++        val editor = preferences?.edit() ?: return
++        if (payload == null) editor.remove(userKey) else editor.putString(userKey, payload)
++        editor.apply()
++    }
++
++    actual fun loadToken(): String? = synchronized(lock) {
++        val prefs = preferences ?: return@synchronized null
++        val value = prefs.getString(tokenKey, null) ?: return@synchronized null
++        try {
++            val parts = value.split('.', limit = 2)
++            require(parts.size == 2)
++            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
++            cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(128, decode(parts[0])))
++            cipher.updateAAD("$keyAlias:$tokenKey".toByteArray(Charsets.UTF_8))
++            cipher.doFinal(decode(parts[1])).toString(Charsets.UTF_8)
++        } catch (_: Exception) {
++            prefs.edit().remove(tokenKey).commit()
++            null
++        }
++    }
++
++    actual fun saveToken(token: String?) {
++        synchronized(lock) {
++            writeToken(token)
++        }
++    }
++
++    private fun writeToken(token: String?) {
++        val prefs = preferences ?: return
++        val editor = prefs.edit()
++        if (token.isNullOrBlank()) {
++            editor.remove(tokenKey)
++        } else {
++            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
++            cipher.init(Cipher.ENCRYPT_MODE, secretKey())
++            cipher.updateAAD("$keyAlias:$tokenKey".toByteArray(Charsets.UTF_8))
++            val encrypted = cipher.doFinal(token.toByteArray(Charsets.UTF_8))
++            editor.putString(tokenKey, "${encode(cipher.iv)}.${encode(encrypted)}")
++        }
++        editor.commit()
++    }
++
++    private fun secretKey(): SecretKey {
++        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
++        (keyStore.getKey(keyAlias, null) as? SecretKey)?.let { return it }
++        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").run {
++            init(
++                KeyGenParameterSpec.Builder(keyAlias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
++                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
++                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
++                    .build(),
++            )
++            generateKey()
++        }
++    }
++
++    private fun encode(value: ByteArray): String = Base64.encodeToString(value, Base64.NO_WRAP)
++
++    private fun decode(value: String): ByteArray = Base64.decode(value, Base64.NO_WRAP)
++}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 index d6f908da..2dd74565 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
@@ -90,6 +364,100 @@ index d6f908da..2dd74565 100644
                  style.outlineColor.toArgb(),
                  SubtitleFontStore.current(context)?.typeface // Nuvio fork: custom subtitle font
                      ?.let { if (style.bold) Typeface.create(it, Typeface.BOLD) else it }
+diff --git a/composeApp/src/commonMain/composeResources/values/strings.xml b/composeApp/src/commonMain/composeResources/values/strings.xml
+index 4726426f..3f909a93 100644
+--- a/composeApp/src/commonMain/composeResources/values/strings.xml
++++ b/composeApp/src/commonMain/composeResources/values/strings.xml
+@@ -2475,4 +2475,5 @@
+     <string name="settings_content_discovery_providers_description">Add external CloudStream repositories and enable providers that can work independently of TMDB.</string>
+     <string name="compose_settings_page_cloudstream">CloudStream / CS3</string>
+     <string name="settings_content_discovery_cloudstream_description">Install CloudStream repositories and manage the providers they make available.</string>
++
+ </resources>
+diff --git a/composeApp/src/commonMain/composeResources/values/strings_discord.xml b/composeApp/src/commonMain/composeResources/values/strings_discord.xml
+new file mode 100644
+index 00000000..8aba43fd
+--- /dev/null
++++ b/composeApp/src/commonMain/composeResources/values/strings_discord.xml
+@@ -0,0 +1,60 @@
++<resources>
++    <string name="compose_settings_page_discord_rpc">Discord</string>
++    <string name="settings_integrations_discord_description">Show what you're watching on your Discord profile.</string>
++    <string name="discord_rpc_section_account">Discord account</string>
++    <string name="discord_rpc_login_description">Log in to your Discord account to show what you're watching in Nuvio as Rich Presence.</string>
++    <string name="discord_rpc_login_button">Log in with Discord</string>
++    <string name="discord_rpc_login_title">Log in to Discord</string>
++    <string name="discord_rpc_logging_in">Logging in…</string>
++    <string name="discord_rpc_login_failed">Your Discord session expired or the login failed. Please log in again.</string>
++    <string name="discord_rpc_logged_in_as">Logged in as %1$s</string>
++    <string name="discord_rpc_logout">Log out</string>
++    <string name="discord_rpc_close">Close</string>
++    <string name="discord_rpc_tos_notice">Like Kizzy, this signs in with your Discord account token to set Rich Presence. Using your account this way may go against Discord's Terms of Service.</string>
++    <string name="discord_rpc_status_presence_active">Presence is active</string>
++    <string name="discord_rpc_status_connecting">Connecting to Discord…</string>
++    <string name="discord_rpc_status_waiting">Presence appears while you're watching</string>
++    <string name="discord_rpc_status_failed">Couldn't connect to Discord</string>
++    <string name="discord_rpc_section_presence">Rich Presence</string>
++    <string name="discord_rpc_enable_title">Discord Rich Presence</string>
++    <string name="discord_rpc_enable_description">Show the movie or episode you're watching on your Discord profile.</string>
++    <string name="discord_rpc_private_viewing_notice">Presence is never shown while Private viewing is on.</string>
++    <string name="discord_rpc_activity_type_title">Activity type</string>
++    <string name="discord_rpc_activity_type_description">How Discord labels the activity on your profile.</string>
++    <string name="discord_rpc_activity_watching">Watching</string>
++    <string name="discord_rpc_activity_playing">Playing</string>
++    <string name="discord_rpc_activity_listening">Listening</string>
++    <string name="discord_rpc_activity_competing">Competing</string>
++    <string name="discord_rpc_status_title">Status</string>
++    <string name="discord_rpc_status_description">Your Discord status while the presence is active.</string>
++    <string name="discord_rpc_status_online">Online</string>
++    <string name="discord_rpc_status_idle">Idle</string>
++    <string name="discord_rpc_status_dnd">Do Not Disturb</string>
++    <string name="discord_rpc_status_invisible">Invisible</string>
++    <string name="discord_rpc_section_display">Display</string>
++    <string name="discord_rpc_show_title_as_name_title">Show title as activity name</string>
++    <string name="discord_rpc_show_title_as_name_description">Use the movie or show name instead of Nuvio as the activity name.</string>
++    <string name="discord_rpc_show_poster_title">Show poster</string>
++    <string name="discord_rpc_show_poster_description">Use the poster artwork as the large image.</string>
++    <string name="discord_rpc_show_playback_state_title">Show playback state</string>
++    <string name="discord_rpc_show_playback_state_description">Show a play or pause icon on the artwork.</string>
++    <string name="discord_rpc_show_timestamps_title">Show timestamps</string>
++    <string name="discord_rpc_show_timestamps_description">Show elapsed and remaining time while playing.</string>
++    <string name="discord_rpc_hide_on_pause_title">Hide when paused</string>
++    <string name="discord_rpc_hide_on_pause_description">Clear the presence while playback is paused.</string>
++    <string name="discord_rpc_show_imdb_button_title">Show IMDb button</string>
++    <string name="discord_rpc_show_imdb_button_description">Add a View on IMDb button when the title has an IMDb ID.</string>
++    <string name="discord_rpc_section_advanced">Advanced</string>
++    <string name="discord_rpc_application_id_title">Application ID</string>
++    <string name="discord_rpc_application_id_description">Optional Discord application ID used for the presence. Leave empty to use the default.</string>
++    <string name="discord_rpc_application_id_label">Application ID</string>
++    <string name="discord_rpc_save">Save</string>
++    <string name="discord_rpc_presence_playing">Playing</string>
++    <string name="discord_rpc_presence_paused">Paused</string>
++    <string name="discord_rpc_presence_live">Live</string>
++    <string name="discord_rpc_button_imdb">View on IMDb</string>
++    <string name="discord_rpc_test_button">Send test presence</string>
++    <string name="discord_rpc_test_active">Test presence sent. Check your Discord profile; it clears in about a minute.</string>
++    <string name="discord_rpc_test_subtitle">Rich Presence test</string>
++    <string name="discord_rpc_last_error">Last error: %1$s</string>
++</resources>
+diff --git a/composeApp/src/commonMain/composeResources/values/strings_ratingmap.xml b/composeApp/src/commonMain/composeResources/values/strings_ratingmap.xml
+new file mode 100644
+index 00000000..83077438
+--- /dev/null
++++ b/composeApp/src/commonMain/composeResources/values/strings_ratingmap.xml
+@@ -0,0 +1,12 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <string name="details_rating_map">Rating Map</string>
++    <string name="details_rating_map_summary">Average %1$s · %2$d episodes rated</string>
++    <string name="details_rating_map_season_rated">%1$d rated</string>
++    <string name="details_rating_map_best">Best %1$s</string>
++    <string name="details_rating_map_lowest">Lowest %1$s</string>
++    <string name="details_rating_map_rated">Rated %1$s on %2$s</string>
++    <string name="details_rating_map_unrated">Not rated yet</string>
++    <string name="details_rating_map_hidden">Watch this episode to reveal its rating</string>
++    <string name="details_rating_map_hint">Tap an episode to see its rating.</string>
++</resources>
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/network/DohSetting.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/network/DohSetting.kt
 new file mode 100644
 index 00000000..18dcdef1
@@ -133,6 +501,2389 @@ index 00000000..18dcdef1
 +        _provider.value = provider
 +        runCatching { AppFileCache.write(PATH, provider.id) }
 +    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
+index 73553976..e42b5afa 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
+@@ -105,6 +105,10 @@ import com.nuvio.app.features.details.components.CommentDetailSheet
+ import com.nuvio.app.features.details.components.DetailAdditionalInfoSection
+ import com.nuvio.app.features.details.components.DetailCastSection
+ import com.nuvio.app.features.details.components.DetailCommentsSection
++import com.nuvio.app.features.details.components.DetailEpisodeRatingMap
++import com.nuvio.app.features.details.components.DetailFillerGuide
++import com.nuvio.app.features.details.components.isFillerGuideCandidate
++import com.nuvio.app.features.details.components.hasEpisodeRatingMap
+ import com.nuvio.app.features.details.components.DetailFloatingHeader
+ import com.nuvio.app.features.details.components.DetailHero
+ import com.nuvio.app.features.details.components.DetailMetaInfo
+@@ -1110,6 +1114,8 @@ fun MetaDetailsScreen(
+                     val isTablet = useTabletLayout || maxWidth >= 720.dp
+                     val contentHorizontalPadding = if (isTablet) 32.dp else 18.dp
+                     val contentMaxWidth = detailTabletContentMaxWidth(maxWidth, isTablet)
++                    val forkRatingMapEnabled by remember { com.nuvio.app.features.settings.ForkPrefs.ratingMap.ensureLoaded(); com.nuvio.app.features.settings.ForkPrefs.ratingMap.value }.collectAsStateWithLifecycle()
++            val forkFillerGuideEnabled by remember { com.nuvio.app.features.settings.ForkPrefs.fillerGuide.ensureLoaded(); com.nuvio.app.features.settings.ForkPrefs.fillerGuide.value }.collectAsStateWithLifecycle()
+                     val backdropUrl = meta.background ?: meta.poster
+                     val backgroundMode = metaScreenSettingsUiState.backgroundMode
+                     val dominantColorEnabled = backgroundMode == MetaScreenBackgroundMode.DominantColor &&
+@@ -1387,6 +1393,54 @@ fun MetaDetailsScreen(
+                                     animatedVisibilityScope = animatedVisibilityScope,
+                                 )
+ 
++                                if (
++                                    forkRatingMapEnabled &&
++                                    metaScreenSettingsUiState.episodeRatingsVisibility.showRatings &&
++                                    hasEpisodes &&
++                                    meta.hasEpisodeRatingMap(episodeImdbRatings)
++                                ) {
++                                    item(key = "detail-rating-map") {
++                                        val ratingMapWatchedKeys = watchedUiState.watchedKeys
++                                        val isRatingMapEpisodeWatched = remember(meta, ratingMapWatchedKeys, progressByVideoId) {
++                                            { episode: MetaVideo ->
++                                                isEpisodeWatchedForActions(
++                                                    meta = meta,
++                                                    episode = episode,
++                                                    watchedKeys = ratingMapWatchedKeys,
++                                                    progressByVideoId = progressByVideoId,
++                                                )
++                                            }
++                                        }
++                                        DetailSectionContainer(
++                                            horizontalPadding = contentHorizontalPadding,
++                                            contentMaxWidth = if (isTablet && !useTabletLayout) contentMaxWidth else Dp.Unspecified,
++                                        ) {
++                                            DetailEpisodeRatingMap(
++                                                meta = meta,
++                                                episodeRatings = episodeImdbRatings,
++                                                episodeRatingsVisibility = metaScreenSettingsUiState.episodeRatingsVisibility,
++                                                isEpisodeWatched = isRatingMapEpisodeWatched,
++                                                onEpisodeClick = onEpisodePlayClick,
++                                                onEpisodeLongPress = { video ->
++                                                    selectedEpisodeZoomAnchor = null
++                                                    selectedEpisodeForActions = video
++                                                },
++                                            )
++                                        }
++                                    }
++                                }
++
++                                if (forkFillerGuideEnabled && hasEpisodes && meta.isFillerGuideCandidate()) {
++                                    item(key = "detail-filler-guide") {
++                                        DetailSectionContainer(
++                                            horizontalPadding = contentHorizontalPadding,
++                                            contentMaxWidth = if (isTablet && !useTabletLayout) contentMaxWidth else Dp.Unspecified,
++                                        ) {
++                                            DetailFillerGuide(meta = meta)
++                                        }
++                                    }
++                                }
++
+                                 item(key = "detail-bottom-spacer") {
+                                     Spacer(modifier = Modifier.height(nuvioSafeBottomPadding(32.dp)))
+                                 }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailEpisodeRatingMap.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailEpisodeRatingMap.kt
+new file mode 100644
+index 00000000..6a772d5b
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailEpisodeRatingMap.kt
+@@ -0,0 +1,580 @@
++package com.nuvio.app.features.details.components
++
++import androidx.compose.foundation.ExperimentalFoundationApi
++import androidx.compose.foundation.background
++import androidx.compose.foundation.border
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.combinedClickable
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.BoxWithConstraints
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.PaddingValues
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.heightIn
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.foundation.lazy.items
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.rounded.KeyboardArrowDown
++import androidx.compose.material.icons.rounded.PlayArrow
++import androidx.compose.material.icons.rounded.Star
++import androidx.compose.material3.ExperimentalMaterial3Api
++import androidx.compose.material3.Icon
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.material3.rememberModalBottomSheetState
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.rememberCoroutineScope
++import androidx.compose.runtime.saveable.rememberSaveable
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.semantics.contentDescription
++import androidx.compose.ui.semantics.semantics
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.Dp
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import com.nuvio.app.core.i18n.localizedSeasonEpisodeCode
++import com.nuvio.app.core.ui.NuvioBottomSheetActionRow
++import com.nuvio.app.core.ui.NuvioModalBottomSheet
++import com.nuvio.app.core.ui.dismissNuvioBottomSheet
++import com.nuvio.app.core.ui.nuvioSafeBottomPadding
++import com.nuvio.app.features.details.EpisodeRatingsVisibility
++import com.nuvio.app.features.details.MetaDetails
++import com.nuvio.app.features.details.MetaVideo
++import com.nuvio.app.features.details.SPECIALS_SEASON_NUMBER
++import com.nuvio.app.features.details.groupedEpisodesForDisplay
++import kotlinx.coroutines.launch
++import nuvio.composeapp.generated.resources.*
++import org.jetbrains.compose.resources.stringResource
++import kotlin.math.absoluteValue
++import kotlin.math.floor
++import kotlin.math.roundToInt
++
++private enum class RatingMapSource(val label: String) {
++    IMDB("IMDb"),
++    TMDB("TMDB"),
++    OTHER(""),
++}
++
++private data class RatingMapCell(
++    val video: MetaVideo,
++    val season: Int,
++    val episode: Int,
++    val rating: Double?,
++    val source: RatingMapSource?,
++    val isHidden: Boolean,
++) {
++    val key: String = "$season:$episode:${video.id}"
++    val visibleRating: Double? get() = rating.takeUnless { isHidden }
++}
++
++private data class RatingMapSeason(
++    val number: Int,
++    val cells: List<RatingMapCell>,
++) {
++    val visibleRated: List<RatingMapCell> = cells.filter { it.visibleRating != null }
++    val average: Double? = visibleRated.mapNotNull { it.visibleRating }.takeIf { it.isNotEmpty() }?.average()
++}
++
++private data class RatingMapTier(
++    val minRating: Double,
++    val label: String,
++    val fill: Color,
++    val content: Color,
++)
++
++private val ratingMapTiers = listOf(
++    RatingMapTier(9.0, "9+", Color(0xFF1B7F45), Color.White),
++    RatingMapTier(8.0, "8–9", Color(0xFF3DB46D), Color(0xFF06331A)),
++    RatingMapTier(7.0, "7–8", Color(0xFFF2C94C), Color(0xFF4A3703)),
++    RatingMapTier(6.0, "6–7", Color(0xFFF2994A), Color(0xFF4A2200)),
++    RatingMapTier(0.0, "<6", Color(0xFFE5534B), Color.White),
++)
++
++private fun tierFor(rating: Double): RatingMapTier =
++    ratingMapTiers.first { rating >= it.minRating }
++
++private fun MetaVideo.ratingMapScore(episodeRatings: Map<Pair<Int, Int>, Double>): Pair<Double, RatingMapSource>? {
++    val s = season
++    val e = episode
++    if (s != null && e != null) {
++        episodeRatings[s to e]?.takeIf { it > 0.0 }?.let { return it to RatingMapSource.IMDB }
++    }
++    rating?.takeIf { it > 0.0 }?.let { return it to RatingMapSource.OTHER }
++    return null
++}
++
++private fun formatRatingMapScore(rating: Double): String {
++    val roundedTenths = (rating * 10.0).roundToInt()
++    val whole = roundedTenths / 10
++    val tenth = (roundedTenths % 10).absoluteValue
++    return "$whole.$tenth"
++}
++
++internal fun MetaDetails.hasEpisodeRatingMap(episodeRatings: Map<Pair<Int, Int>, Double>): Boolean {
++    if (type == "movie") return false
++    val rated = videos.count { video ->
++        (video.season ?: SPECIALS_SEASON_NUMBER) > SPECIALS_SEASON_NUMBER &&
++            video.episode != null &&
++            video.ratingMapScore(episodeRatings) != null
++    }
++    return rated >= 2
++}
++
++@OptIn(ExperimentalMaterial3Api::class)
++@Composable
++fun DetailEpisodeRatingMap(
++    meta: MetaDetails,
++    episodeRatings: Map<Pair<Int, Int>, Double>,
++    episodeRatingsVisibility: EpisodeRatingsVisibility,
++    isEpisodeWatched: (MetaVideo) -> Boolean,
++    onEpisodeClick: (MetaVideo) -> Unit,
++    onEpisodeLongPress: (MetaVideo) -> Unit,
++    modifier: Modifier = Modifier,
++) {
++    if (!episodeRatingsVisibility.showRatings) return
++
++    val seasons: List<RatingMapSeason> = remember(meta.videos, episodeRatings, episodeRatingsVisibility, isEpisodeWatched) {
++        meta.groupedEpisodesForDisplay()
++            .filterKeys { it > SPECIALS_SEASON_NUMBER }
++            .toList()
++            .sortedBy { it.first }
++            .map { (season, episodes) ->
++                RatingMapSeason(
++                    number = season,
++                    cells = episodes
++                        .filter { it.episode != null }
++                        .distinctBy { it.episode }
++                        .map { video ->
++                            val score = video.ratingMapScore(episodeRatings)
++                            RatingMapCell(
++                                video = video,
++                                season = season,
++                                episode = video.episode ?: 0,
++                                rating = score?.first,
++                                source = score?.second,
++                                isHidden = score != null &&
++                                    !episodeRatingsVisibility.showRating(isEpisodeWatched(video)),
++                            )
++                        },
++                )
++            }
++            .filter { it.cells.isNotEmpty() }
++    }
++    if (seasons.isEmpty()) return
++
++    var selectedSeasonNumber by rememberSaveable(meta.id) { mutableStateOf(seasons.first().number) }
++    val season = seasons.firstOrNull { it.number == selectedSeasonNumber } ?: seasons.first()
++    var selectedKey by rememberSaveable(meta.id, season.number) { mutableStateOf<String?>(null) }
++    var showSeasonSheet by remember { mutableStateOf(false) }
++
++    val bestCell = remember(season) { season.visibleRated.maxByOrNull { it.visibleRating ?: 0.0 } }
++    val lowestCell = remember(season, bestCell) {
++        season.visibleRated.minByOrNull { it.visibleRating ?: 0.0 }?.takeIf { it.key != bestCell?.key }
++    }
++    val selectedCell = season.cells.firstOrNull { it.key == selectedKey }
++    val colorScheme = MaterialTheme.colorScheme
++    val canPickSeason = seasons.size > 1
++
++    DetailSection(
++        title = stringResource(Res.string.details_rating_map),
++        modifier = modifier,
++    ) {
++        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
++            Row(
++                modifier = Modifier.fillMaxWidth(),
++                verticalAlignment = Alignment.CenterVertically,
++                horizontalArrangement = Arrangement.spacedBy(12.dp),
++            ) {
++                Row(
++                    modifier = Modifier
++                        .clip(RoundedCornerShape(50))
++                        .background(colorScheme.surfaceVariant.copy(alpha = 0.55f))
++                        .then(
++                            if (canPickSeason) {
++                                Modifier.clickable { showSeasonSheet = true }
++                            } else {
++                                Modifier
++                            },
++                        )
++                        .padding(start = 14.dp, end = if (canPickSeason) 8.dp else 14.dp, top = 8.dp, bottom = 8.dp),
++                    verticalAlignment = Alignment.CenterVertically,
++                    horizontalArrangement = Arrangement.spacedBy(4.dp),
++                ) {
++                    Text(
++                        text = stringResource(Res.string.episodes_season, season.number),
++                        style = MaterialTheme.typography.titleSmall,
++                        fontWeight = FontWeight.SemiBold,
++                        color = colorScheme.onSurface,
++                        maxLines = 1,
++                    )
++                    if (canPickSeason) {
++                        Icon(
++                            imageVector = Icons.Rounded.KeyboardArrowDown,
++                            contentDescription = stringResource(Res.string.details_seasons),
++                            tint = colorScheme.onSurfaceVariant,
++                            modifier = Modifier.size(20.dp),
++                        )
++                    }
++                }
++                season.average?.let { average ->
++                    Row(
++                        modifier = Modifier.weight(1f),
++                        verticalAlignment = Alignment.CenterVertically,
++                        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End),
++                    ) {
++                        Icon(
++                            imageVector = Icons.Rounded.Star,
++                            contentDescription = null,
++                            tint = Color(0xFFF5C518),
++                            modifier = Modifier.size(16.dp),
++                        )
++                        Text(
++                            text = stringResource(
++                                Res.string.details_rating_map_summary,
++                                formatRatingMapScore(average),
++                                season.visibleRated.size,
++                            ),
++                            style = MaterialTheme.typography.bodySmall,
++                            color = colorScheme.onSurfaceVariant,
++                            maxLines = 1,
++                            overflow = TextOverflow.Ellipsis,
++                        )
++                    }
++                }
++            }
++
++            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
++                val gap = 4.dp
++                val targetCell = if (maxWidth >= 720.dp) 46.dp else 36.dp
++                val columns = floor(((maxWidth + gap) / (targetCell + gap)).toDouble())
++                    .toInt()
++                    .coerceIn(5, 25)
++                val cellSize: Dp = (maxWidth - gap * (columns - 1)) / columns
++
++                Column(verticalArrangement = Arrangement.spacedBy(gap)) {
++                    season.cells.chunked(columns).forEach { rowCells ->
++                        Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
++                            rowCells.forEach { cell ->
++                                RatingMapCellView(
++                                    cell = cell,
++                                    size = cellSize,
++                                    selected = cell.key == selectedKey,
++                                    onClick = {
++                                        selectedKey = if (selectedKey == cell.key) null else cell.key
++                                    },
++                                    onLongClick = { onEpisodeLongPress(cell.video) },
++                                )
++                            }
++                        }
++                    }
++                }
++            }
++
++            Row(
++                modifier = Modifier.fillMaxWidth(),
++                horizontalArrangement = Arrangement.spacedBy(12.dp),
++                verticalAlignment = Alignment.CenterVertically,
++            ) {
++                ratingMapTiers.forEach { tier ->
++                    Row(
++                        verticalAlignment = Alignment.CenterVertically,
++                        horizontalArrangement = Arrangement.spacedBy(4.dp),
++                    ) {
++                        Box(
++                            modifier = Modifier
++                                .size(10.dp)
++                                .clip(RoundedCornerShape(3.dp))
++                                .background(tier.fill),
++                        )
++                        Text(
++                            text = tier.label,
++                            style = MaterialTheme.typography.labelSmall,
++                            color = colorScheme.onSurfaceVariant,
++                        )
++                    }
++                }
++            }
++
++            if (selectedCell != null) {
++                RatingMapSelectionPanel(
++                    cell = selectedCell,
++                    shape = RoundedCornerShape(16.dp),
++                    onPlay = { onEpisodeClick(selectedCell.video) },
++                )
++            } else {
++                Text(
++                    text = stringResource(Res.string.details_rating_map_hint),
++                    style = MaterialTheme.typography.bodySmall,
++                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
++                )
++            }
++
++            if (bestCell != null || lowestCell != null) {
++                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
++                    bestCell?.let { cell ->
++                        RatingMapHighlightChip(
++                            label = stringResource(
++                                Res.string.details_rating_map_best,
++                                localizedSeasonEpisodeCode(cell.season, cell.episode).orEmpty(),
++                            ),
++                            tier = tierFor(cell.visibleRating ?: 0.0),
++                            onClick = { selectedKey = cell.key },
++                        )
++                    }
++                    lowestCell?.let { cell ->
++                        RatingMapHighlightChip(
++                            label = stringResource(
++                                Res.string.details_rating_map_lowest,
++                                localizedSeasonEpisodeCode(cell.season, cell.episode).orEmpty(),
++                            ),
++                            tier = tierFor(cell.visibleRating ?: 0.0),
++                            onClick = { selectedKey = cell.key },
++                        )
++                    }
++                }
++            }
++        }
++    }
++
++    if (showSeasonSheet) {
++        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
++        val scope = rememberCoroutineScope()
++        NuvioModalBottomSheet(
++            onDismissRequest = { showSeasonSheet = false },
++            sheetState = sheetState,
++        ) {
++            Text(
++                text = stringResource(Res.string.details_seasons),
++                style = MaterialTheme.typography.titleLarge,
++                fontWeight = FontWeight.SemiBold,
++                color = colorScheme.onSurface,
++                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
++            )
++            LazyColumn(
++                modifier = Modifier
++                    .fillMaxWidth()
++                    .heightIn(max = 520.dp),
++                contentPadding = PaddingValues(bottom = nuvioSafeBottomPadding(16.dp)),
++            ) {
++                items(seasons, key = { it.number }) { item ->
++                    NuvioBottomSheetActionRow(
++                        title = stringResource(Res.string.episodes_season, item.number),
++                        selected = item.number == season.number,
++                        onClick = {
++                            scope.launch {
++                                dismissNuvioBottomSheet(sheetState) {
++                                    selectedSeasonNumber = item.number
++                                    showSeasonSheet = false
++                                }
++                            }
++                        },
++                        trailingContent = {
++                            Text(
++                                text = stringResource(Res.string.details_rating_map_season_rated, item.visibleRated.size),
++                                style = MaterialTheme.typography.labelMedium,
++                                color = colorScheme.onSurfaceVariant,
++                                maxLines = 1,
++                            )
++                            RatingMapAverageBadge(average = item.average)
++                        },
++                    )
++                }
++            }
++        }
++    }
++}
++
++@Composable
++private fun RatingMapAverageBadge(average: Double?) {
++    val colorScheme = MaterialTheme.colorScheme
++    val tier = average?.let(::tierFor)
++    Box(
++        modifier = Modifier
++            .width(44.dp)
++            .clip(RoundedCornerShape(8.dp))
++            .background(tier?.fill ?: colorScheme.surfaceVariant.copy(alpha = 0.55f))
++            .padding(vertical = 6.dp),
++        contentAlignment = Alignment.Center,
++    ) {
++        Text(
++            text = average?.let(::formatRatingMapScore) ?: "–",
++            color = tier?.content ?: colorScheme.onSurfaceVariant,
++            fontSize = 13.sp,
++            fontWeight = FontWeight.Bold,
++            maxLines = 1,
++        )
++    }
++}
++
++@OptIn(ExperimentalFoundationApi::class)
++@Composable
++private fun RatingMapCellView(
++    cell: RatingMapCell,
++    size: Dp,
++    selected: Boolean,
++    onClick: () -> Unit,
++    onLongClick: () -> Unit,
++) {
++    val colorScheme = MaterialTheme.colorScheme
++    val shape = RoundedCornerShape(6.dp)
++    val rating = cell.visibleRating
++    val tier = rating?.let(::tierFor)
++    val fill = tier?.fill ?: colorScheme.surfaceVariant.copy(alpha = 0.55f)
++    val content = tier?.content ?: colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
++    val label = when {
++        rating != null -> formatRatingMapScore(rating)
++        cell.isHidden -> "?"
++        else -> "–"
++    }
++    val description = localizedSeasonEpisodeCode(cell.season, cell.episode).orEmpty() +
++        (rating?.let { " · ${formatRatingMapScore(it)}" } ?: "")
++    Box(
++        modifier = Modifier
++            .size(size)
++            .clip(shape)
++            .background(fill)
++            .then(
++                if (selected) {
++                    Modifier.border(2.dp, colorScheme.onBackground, shape)
++                } else {
++                    Modifier
++                },
++            )
++            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
++            .semantics { contentDescription = description },
++        contentAlignment = Alignment.Center,
++    ) {
++        Text(
++            text = label,
++            color = content,
++            fontSize = if (size >= 40.dp) 12.sp else 10.sp,
++            fontWeight = FontWeight.SemiBold,
++            maxLines = 1,
++        )
++    }
++}
++
++@Composable
++private fun RatingMapSelectionPanel(
++    cell: RatingMapCell,
++    shape: RoundedCornerShape,
++    onPlay: () -> Unit,
++) {
++    val colorScheme = MaterialTheme.colorScheme
++    val code = localizedSeasonEpisodeCode(cell.season, cell.episode).orEmpty()
++    val title = cell.video.title.takeIf { it.isNotBlank() }
++    val rating = cell.visibleRating
++    val subtitle = when {
++        rating != null && cell.source != null && cell.source.label.isNotEmpty() ->
++            stringResource(Res.string.details_rating_map_rated, formatRatingMapScore(rating), cell.source.label)
++        rating != null -> formatRatingMapScore(rating)
++        cell.isHidden -> stringResource(Res.string.details_rating_map_hidden)
++        else -> stringResource(Res.string.details_rating_map_unrated)
++    }
++    Row(
++        modifier = Modifier
++            .fillMaxWidth()
++            .clip(shape)
++            .background(colorScheme.surfaceVariant.copy(alpha = 0.45f))
++            .padding(horizontal = 14.dp, vertical = 12.dp),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        rating?.let {
++            val tier = tierFor(it)
++            Box(
++                modifier = Modifier
++                    .size(40.dp)
++                    .clip(RoundedCornerShape(10.dp))
++                    .background(tier.fill),
++                contentAlignment = Alignment.Center,
++            ) {
++                Text(
++                    text = formatRatingMapScore(it),
++                    color = tier.content,
++                    fontSize = 14.sp,
++                    fontWeight = FontWeight.Bold,
++                )
++            }
++            Spacer(modifier = Modifier.width(12.dp))
++        }
++        Column(modifier = Modifier.weight(1f)) {
++            Text(
++                text = if (title != null) "$code · $title" else code,
++                style = MaterialTheme.typography.titleSmall,
++                color = colorScheme.onSurface,
++                maxLines = 1,
++                overflow = TextOverflow.Ellipsis,
++            )
++            Spacer(modifier = Modifier.height(2.dp))
++            Text(
++                text = subtitle,
++                style = MaterialTheme.typography.bodySmall,
++                color = colorScheme.onSurfaceVariant,
++                maxLines = 2,
++                overflow = TextOverflow.Ellipsis,
++            )
++        }
++        Spacer(modifier = Modifier.width(8.dp))
++        Box(
++            modifier = Modifier
++                .size(40.dp)
++                .clip(RoundedCornerShape(20.dp))
++                .background(colorScheme.primary)
++                .clickable(onClick = onPlay),
++            contentAlignment = Alignment.Center,
++        ) {
++            Icon(
++                imageVector = Icons.Rounded.PlayArrow,
++                contentDescription = stringResource(Res.string.action_play),
++                tint = colorScheme.onPrimary,
++                modifier = Modifier.size(22.dp),
++            )
++        }
++    }
++}
++
++@Composable
++private fun RatingMapHighlightChip(
++    label: String,
++    tier: RatingMapTier,
++    onClick: () -> Unit,
++) {
++    Row(
++        modifier = Modifier
++            .clip(RoundedCornerShape(8.dp))
++            .background(tier.fill.copy(alpha = 0.18f))
++            .clickable(onClick = onClick)
++            .padding(horizontal = 10.dp, vertical = 6.dp),
++        verticalAlignment = Alignment.CenterVertically,
++        horizontalArrangement = Arrangement.spacedBy(6.dp),
++    ) {
++        Box(
++            modifier = Modifier
++                .size(8.dp)
++                .clip(RoundedCornerShape(2.dp))
++                .background(tier.fill),
++        )
++        Text(
++            text = label,
++            style = MaterialTheme.typography.labelMedium,
++            color = MaterialTheme.colorScheme.onSurface,
++            maxLines = 1,
++        )
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailFillerGuide.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailFillerGuide.kt
+new file mode 100644
+index 00000000..85b738c9
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailFillerGuide.kt
+@@ -0,0 +1,141 @@
++package com.nuvio.app.features.details.components
++
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.unit.dp
++import com.nuvio.app.features.addons.httpGetText
++import com.nuvio.app.features.details.MetaDetails
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.delay
++import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.JsonObject
++import kotlinx.serialization.json.booleanOrNull
++import kotlinx.serialization.json.intOrNull
++import kotlinx.serialization.json.jsonArray
++import kotlinx.serialization.json.jsonObject
++import kotlinx.serialization.json.jsonPrimitive
++
++private data class FillerResult(val filler: List<Int>, val recap: List<Int>)
++
++private val fillerJson = Json { ignoreUnknownKeys = true; isLenient = true }
++private val fillerCache = mutableMapOf<String, FillerResult?>()
++
++internal fun MetaDetails.isFillerGuideCandidate(): Boolean {
++    if (type == "movie") return false
++    return genres.any { it.equals("Anime", ignoreCase = true) || it.equals("Animation", ignoreCase = true) }
++}
++
++private fun encodeQuery(text: String): String = buildString {
++    text.encodeToByteArray().forEach { b ->
++        val c = b.toInt() and 0xFF
++        if (c in 'a'.code..'z'.code || c in 'A'.code..'Z'.code || c in '0'.code..'9'.code) append(c.toChar())
++        else append('%').append("0123456789ABCDEF"[c shr 4]).append("0123456789ABCDEF"[c and 15])
++    }
++}
++
++private suspend fun loadFiller(title: String): FillerResult? {
++    if (fillerCache.containsKey(title)) return fillerCache[title]
++    val result = try {
++        val search = fillerJson.parseToJsonElement(
++            httpGetText("https://api.jikan.moe/v4/anime?q=${encodeQuery(title)}&limit=1&type=tv"),
++        ).jsonObject["data"]?.jsonArray?.firstOrNull()?.jsonObject
++        val malId = search?.get("mal_id")?.jsonPrimitive?.intOrNull
++        if (malId == null) {
++            null
++        } else {
++            val filler = mutableListOf<Int>()
++            val recap = mutableListOf<Int>()
++            var page = 1
++            while (page <= 12) {
++                if (page > 1) delay(400)
++                val root = fillerJson.parseToJsonElement(
++                    httpGetText("https://api.jikan.moe/v4/anime/$malId/episodes?page=$page"),
++                ).jsonObject
++                root["data"]?.jsonArray?.forEach { element ->
++                    val ep: JsonObject = element.jsonObject
++                    val number = ep["mal_id"]?.jsonPrimitive?.intOrNull ?: return@forEach
++                    if (ep["filler"]?.jsonPrimitive?.booleanOrNull == true) filler += number
++                    if (ep["recap"]?.jsonPrimitive?.booleanOrNull == true) recap += number
++                }
++                val hasNext = root["pagination"]?.jsonObject?.get("has_next_page")?.jsonPrimitive?.booleanOrNull == true
++                if (!hasNext) break
++                page++
++            }
++            FillerResult(filler, recap)
++        }
++    } catch (cancelled: CancellationException) {
++        throw cancelled
++    } catch (_: Exception) {
++        null
++    }
++    fillerCache[title] = result
++    return result
++}
++
++private fun List<Int>.asRanges(): String {
++    if (isEmpty()) return "none"
++    val sorted = distinct().sorted()
++    val parts = mutableListOf<String>()
++    var start = sorted.first()
++    var prev = start
++    for (n in sorted.drop(1)) {
++        if (n == prev + 1) {
++            prev = n
++            continue
++        }
++        parts += if (start == prev) "$start" else "$start-$prev"
++        start = n
++        prev = n
++    }
++    parts += if (start == prev) "$start" else "$start-$prev"
++    return parts.joinToString(", ")
++}
++
++@Composable
++internal fun DetailFillerGuide(meta: MetaDetails, modifier: Modifier = Modifier) {
++    var state by remember(meta.id) { mutableStateOf<FillerResult?>(null) }
++    var done by remember(meta.id) { mutableStateOf(false) }
++    LaunchedEffect(meta.id) {
++        state = loadFiller(meta.name)
++        done = true
++    }
++    val result = state
++    if (!done || result == null || (result.filler.isEmpty() && result.recap.isEmpty())) return
++    Column(
++        modifier = modifier.fillMaxWidth(),
++        verticalArrangement = Arrangement.spacedBy(6.dp),
++    ) {
++        Text(
++            text = "Filler guide",
++            style = MaterialTheme.typography.titleMedium,
++            color = MaterialTheme.colorScheme.onSurface,
++        )
++        Text(
++            text = "Filler episodes: ${result.filler.asRanges()}",
++            style = MaterialTheme.typography.bodyMedium,
++            color = MaterialTheme.colorScheme.onSurface,
++        )
++        if (result.recap.isNotEmpty()) {
++            Text(
++                text = "Recap episodes: ${result.recap.asRanges()}",
++                style = MaterialTheme.typography.bodyMedium,
++                color = MaterialTheme.colorScheme.onSurfaceVariant,
++            )
++        }
++        Text(
++            text = "Numbers follow MyAnimeList and count from the first episode of the show.",
++            style = MaterialTheme.typography.bodySmall,
++            color = MaterialTheme.colorScheme.onSurfaceVariant,
++        )
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailMetaInfo.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailMetaInfo.kt
+index baccf8d6..645aec5d 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailMetaInfo.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailMetaInfo.kt
+@@ -27,6 +27,9 @@ import androidx.compose.material3.MaterialTheme
+ import androidx.compose.material3.Text
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.remember
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import androidx.compose.runtime.getValue
++import androidx.compose.ui.draw.clip
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.graphics.Color
+@@ -76,10 +79,29 @@ fun DetailMetaInfo(
+     showOverallRatings: Boolean = true,
+     isMdbListActive: Boolean = false,
+ ) {
++    val forkReadCard by remember {
++        com.nuvio.app.features.settings.ForkPrefs.nuvioRead.ensureLoaded()
++        com.nuvio.app.features.settings.ForkPrefs.nuvioRead.value
++    }.collectAsStateWithLifecycle()
+     Column(
+         modifier = modifier
+             .fillMaxWidth()
+-            .animateContentSize(),
++            .animateContentSize()
++            .then(
++                if (forkReadCard) {
++                    Modifier
++                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(24.dp))
++                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.82f))
++                        .border(
++                            1.dp,
++                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f),
++                            androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
++                        )
++                        .padding(16.dp)
++                } else {
++                    Modifier
++                },
++            ),
+         verticalArrangement = Arrangement.spacedBy(12.dp),
+     ) {
+         val releaseLine = formatMetaReleaseLineForDetails(meta)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordGateway.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordGateway.kt
+new file mode 100644
+index 00000000..1bfd7da4
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordGateway.kt
+@@ -0,0 +1,401 @@
++package com.nuvio.app.features.discord
++
++import com.nuvio.app.core.logging.InAppLogger
++import com.nuvio.app.features.discord.DiscordIdentify.Companion.toIdentifyPayload
++import io.ktor.client.HttpClient
++import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
++import io.ktor.client.plugins.websocket.webSocket
++import io.ktor.websocket.CloseReason
++import io.ktor.websocket.Frame
++import io.ktor.websocket.close
++import io.ktor.websocket.readText
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.Job
++import kotlinx.coroutines.SupervisorJob
++import kotlinx.coroutines.cancel
++import kotlinx.coroutines.currentCoroutineContext
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import kotlinx.coroutines.isActive
++import kotlinx.coroutines.launch
++import kotlinx.coroutines.withTimeoutOrNull
++import kotlinx.serialization.encodeToString
++import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.JsonArray
++import kotlinx.serialization.json.JsonElement
++import kotlinx.serialization.json.JsonNull
++import kotlinx.serialization.json.JsonObject
++import kotlinx.serialization.json.JsonPrimitive
++import kotlinx.serialization.json.booleanOrNull
++import kotlinx.serialization.json.contentOrNull
++import kotlinx.serialization.json.intOrNull
++import kotlinx.serialization.json.longOrNull
++
++internal enum class DiscordGatewayState {
++    Idle,
++    Connecting,
++    Ready,
++    Reconnecting,
++    AuthenticationFailed,
++    Failed,
++    Closed,
++}
++
++internal class DiscordGatewayConnection(
++    private val token: String,
++) {
++    private val dispatcher = Dispatchers.Default.limitedParallelism(1)
++    private val scope = CoroutineScope(SupervisorJob() + dispatcher)
++    private val client: HttpClient = createDiscordGatewayHttpClient()
++    private val json = Json {
++        ignoreUnknownKeys = true
++        encodeDefaults = true
++    }
++
++    private var websocket: DefaultClientWebSocketSession? = null
++    private var connectionJob: Job? = null
++    private var heartbeatJob: Job? = null
++    private var sequence: Int? = null
++    private var sessionId: String? = null
++    private var resumeGatewayUrl: String? = null
++    private var pendingPresence: DiscordPresence? = null
++    private var reconnectAttempts = 0
++    private var heartbeatAcknowledged = true
++    private var closed = false
++    private var lastCloseInfo: String? = null
++
++    private val _state = MutableStateFlow(DiscordGatewayState.Idle)
++    val state: StateFlow<DiscordGatewayState> = _state.asStateFlow()
++
++    private val _user = MutableStateFlow<DiscordReadyUser?>(null)
++    val user: StateFlow<DiscordReadyUser?> = _user.asStateFlow()
++
++    private val _lastError = MutableStateFlow<String?>(null)
++    val lastError: StateFlow<String?> = _lastError.asStateFlow()
++
++    fun connect() {
++        scope.launch {
++            if (closed || connectionJob?.isActive == true) return@launch
++            connectionJob = scope.launch { runConnection() }
++        }
++    }
++
++    fun updatePresence(presence: DiscordPresence) {
++        scope.launch {
++            if (closed) return@launch
++            pendingPresence = presence
++            if (_state.value == DiscordGatewayState.Ready) {
++                sendPresence(presence)
++            }
++        }
++    }
++
++    fun close() {
++        scope.launch {
++            if (closed) return@launch
++            closed = true
++            pendingPresence = null
++            heartbeatJob?.cancel()
++            heartbeatJob = null
++            val session = websocket
++            websocket = null
++            if (session != null) {
++                withTimeoutOrNull(CLOSE_TIMEOUT_MS) {
++                    runCatching {
++                        session.close(CloseReason(CloseReason.Codes.NORMAL, "Presence cleared"))
++                    }
++                }
++            }
++            connectionJob?.cancel()
++            connectionJob = null
++            runCatching { client.close() }
++            sessionId = null
++            resumeGatewayUrl = null
++            sequence = null
++            _state.value = DiscordGatewayState.Closed
++            InAppLogger.info(TAG, "Connection to gateway closed")
++            scope.cancel()
++        }
++    }
++
++    private suspend fun runConnection() {
++        while (currentCoroutineContext().isActive && !closed) {
++            _state.value = if (reconnectAttempts == 0) {
++                DiscordGatewayState.Connecting
++            } else {
++                DiscordGatewayState.Reconnecting
++            }
++            var closeCode: Int? = null
++            var closeMessage: String? = null
++            val usingResumeUrl = resumeGatewayUrl != null
++            try {
++                val url = resumeGatewayUrl ?: GATEWAY_URL
++                InAppLogger.info(TAG, "Connecting to $url")
++                client.webSocket(urlString = url) {
++                    websocket = this
++                    heartbeatAcknowledged = true
++                    InAppLogger.info(TAG, "Gateway socket opened")
++                    for (frame in incoming) {
++                        when (frame) {
++                            is Frame.Text -> handleMessage(frame.readText())
++                            is Frame.Close -> InAppLogger.warn(TAG, "Close frame received")
++                            else -> Unit
++                        }
++                    }
++                    val reason = withTimeoutOrNull(CLOSE_TIMEOUT_MS) { closeReason.await() }
++                    closeCode = reason?.code?.toInt()
++                    closeMessage = reason?.message
++                }
++            } catch (error: CancellationException) {
++                throw error
++            } catch (error: Throwable) {
++                val message = error.message ?: error::class.simpleName ?: "Gateway connection error"
++                _lastError.value = lastCloseInfo?.let { "$message (after $it)" } ?: message
++                InAppLogger.error(TAG, "Gateway connection error: $message")
++                if (usingResumeUrl) {
++                    InAppLogger.warn(TAG, "Resume gateway unreachable, falling back to $GATEWAY_URL")
++                    resumeGatewayUrl = null
++                }
++            }
++
++            heartbeatJob?.cancel()
++            heartbeatJob = null
++            websocket = null
++            if (closed) return
++
++            val code = closeCode
++            val fatal = code != null && FATAL_CLOSE_CODES.contains(code)
++            if (code != null) {
++                val info = "Discord closed the connection ($code${closeMessage?.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()})"
++                lastCloseInfo = info
++                _lastError.value = info
++            }
++            InAppLogger.warn(TAG, "Closed with code: $code, reason: $closeMessage, can_reconnect: ${code != 4004 && !fatal}")
++            InAppLogger.debug(TAG, "Gateway closed code=$code reason=$closeMessage")
++            if (code == 4004) {
++                _state.value = DiscordGatewayState.AuthenticationFailed
++                return
++            }
++            if (fatal) {
++                _state.value = DiscordGatewayState.Failed
++                return
++            }
++            if (code == 4007 || code == 4009) resetSession()
++
++            reconnectAttempts += 1
++            if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
++                _state.value = DiscordGatewayState.Failed
++                return
++            }
++            _state.value = DiscordGatewayState.Reconnecting
++            delay(if (code == 4000) RECONNECT_FAST_DELAY_MS else (reconnectAttempts * RECONNECT_STEP_DELAY_MS).coerceAtMost(RECONNECT_MAX_DELAY_MS))
++        }
++    }
++
++    private suspend fun handleMessage(jsonString: String) {
++        val root = try {
++            json.parseToJsonElement(jsonString) as? JsonObject
++        } catch (error: CancellationException) {
++            throw error
++        } catch (error: Exception) {
++            InAppLogger.warn(TAG, "Unable to decode payload: ${error.message.orEmpty()}")
++            null
++        } ?: return
++
++        val op = root["op"].intValue()
++        val seq = root["s"].intValue()
++        val event = root["t"].stringValue()
++        val data = root["d"]
++        InAppLogger.debug(TAG, "Received op:$op, seq:$seq, event :$event")
++
++        seq?.let { sequence = it }
++        when (op) {
++            DiscordOpCode.DISPATCH.value -> handleDispatch(event, data)
++            DiscordOpCode.HEARTBEAT.value -> sendHeartbeat()
++            DiscordOpCode.RECONNECT.value -> reconnectWebSocket("Reconnect requested")
++            DiscordOpCode.INVALID_SESSION.value -> handleInvalidSession(data)
++            DiscordOpCode.HELLO.value -> handleHello(data)
++            DiscordOpCode.HEARTBEAT_ACK.value -> heartbeatAcknowledged = true
++            else -> Unit
++        }
++    }
++
++    private suspend fun handleDispatch(event: String?, data: JsonElement?) {
++        when (event) {
++            "READY" -> {
++                val ready = data as? JsonObject
++                sessionId = ready?.get("session_id").stringValue()
++                resumeGatewayUrl = ready?.get("resume_gateway_url").stringValue()
++                    ?.takeIf { it.isNotBlank() }
++                    ?.let { "${it.trimEnd('/')}/?v=10&encoding=json" }
++                (ready?.get("user") as? JsonObject)?.let { user ->
++                    _user.value = DiscordReadyUser(
++                        id = user["id"].stringValue(),
++                        username = user["username"].stringValue(),
++                        globalName = user["global_name"].stringValue(),
++                        avatar = user["avatar"].stringValue(),
++                    )
++                }
++                InAppLogger.info(TAG, "Session ready")
++                onSessionReady()
++            }
++            "RESUMED" -> {
++                InAppLogger.info(TAG, "Session Resumed")
++                onSessionReady()
++            }
++            "SESSIONS_REPLACE" -> logSessions(data)
++            else -> Unit
++        }
++    }
++
++    private suspend fun onSessionReady() {
++        reconnectAttempts = 0
++        lastCloseInfo = null
++        _lastError.value = null
++        _state.value = DiscordGatewayState.Ready
++        pendingPresence?.let { sendPresence(it) }
++    }
++
++    private suspend fun handleInvalidSession(data: JsonElement?) {
++        InAppLogger.info(TAG, "Handling Invalid Session")
++        val resumable = (data as? JsonPrimitive)?.booleanOrNull == true
++        delay(INVALID_SESSION_DELAY_MS)
++        if (resumable && !sessionId.isNullOrBlank() && sequence != null) {
++            sendResume()
++        } else {
++            resetSession()
++            sendIdentify()
++        }
++    }
++
++    private suspend fun handleHello(data: JsonElement?) {
++        if (sequence != null && !sessionId.isNullOrBlank()) {
++            sendResume()
++        } else {
++            sendIdentify()
++        }
++        val interval = (data as? JsonObject)?.get("heartbeat_interval").longValue() ?: DEFAULT_HEARTBEAT_INTERVAL_MS
++        InAppLogger.info(TAG, "Setting heartbeatInterval= $interval")
++        startHeartbeatJob(interval)
++    }
++
++    private fun resetSession() {
++        sessionId = null
++        sequence = null
++        resumeGatewayUrl = null
++    }
++
++    private suspend fun sendHeartbeat() {
++        heartbeatAcknowledged = false
++        send(op = DiscordOpCode.HEARTBEAT, d = sequence)
++    }
++
++    private suspend fun reconnectWebSocket(reason: String) {
++        InAppLogger.info(TAG, reason)
++        websocket?.close(CloseReason(4000, reason))
++    }
++
++    private suspend fun sendIdentify() {
++        InAppLogger.info(TAG, "Sending ${DiscordOpCode.IDENTIFY}")
++        send(op = DiscordOpCode.IDENTIFY, d = token.toIdentifyPayload())
++    }
++
++    private suspend fun sendResume() {
++        InAppLogger.info(TAG, "Sending ${DiscordOpCode.RESUME}")
++        send(
++            op = DiscordOpCode.RESUME,
++            d = DiscordResume(
++                seq = sequence ?: 0,
++                sessionId = sessionId,
++                token = token,
++            ),
++        )
++    }
++
++    private suspend fun sendPresence(presence: DiscordPresence) {
++        InAppLogger.info(TAG, "Sending ${DiscordOpCode.PRESENCE_UPDATE}")
++        InAppLogger.debug(TAG, "Presence payload ${json.encodeToString(presence)}")
++        send(op = DiscordOpCode.PRESENCE_UPDATE, d = presence)
++    }
++
++    private fun logSessions(data: JsonElement?) {
++        val sessions = data as? JsonArray ?: return
++        sessions.forEach { element ->
++            val session = element as? JsonObject ?: return@forEach
++            val id = session["session_id"].stringValue()
++            val label = when (id) {
++                sessionId -> "this"
++                "all" -> "all"
++                else -> "other"
++            }
++            val activities = (session["activities"] as? JsonArray).orEmpty().mapNotNull { activity ->
++                (activity as? JsonObject)?.let {
++                    "type=${it["type"].intValue()} name=${it["name"].stringValue()} details=${it["details"].stringValue()} state=${it["state"].stringValue()}"
++                }
++            }
++            InAppLogger.debug(TAG, "Session $label status=${session["status"].stringValue()} activities=$activities")
++            if (label == "this" && activities.isEmpty() && !pendingPresence?.activities.isNullOrEmpty()) {
++                InAppLogger.warn(TAG, "Discord dropped the activity from this session")
++            }
++        }
++    }
++
++    private fun startHeartbeatJob(interval: Long) {
++        heartbeatJob?.cancel()
++        heartbeatJob = scope.launch {
++            delay((interval * HEARTBEAT_JITTER).toLong())
++            while (isActive) {
++                if (!heartbeatAcknowledged) {
++                    reconnectWebSocket("Heartbeat was not acknowledged")
++                    return@launch
++                }
++                sendHeartbeat()
++                delay(interval)
++            }
++        }
++    }
++
++    private suspend inline fun <reified T> send(op: DiscordOpCode, d: T?) {
++        val session = websocket ?: return
++        val payload = json.encodeToString(
++            DiscordOutgoingPayload(
++                op = op,
++                d = d,
++            ),
++        )
++        try {
++            session.send(Frame.Text(payload))
++        } catch (error: CancellationException) {
++            throw error
++        } catch (error: Exception) {
++            InAppLogger.warn(TAG, "Unable to send $op: ${error.message.orEmpty()}")
++        }
++    }
++
++    private fun JsonElement?.stringValue(): String? =
++        (this as? JsonPrimitive)?.takeIf { it !is JsonNull }?.contentOrNull
++
++    private fun JsonElement?.intValue(): Int? =
++        (this as? JsonPrimitive)?.takeIf { it !is JsonNull }?.intOrNull
++
++    private fun JsonElement?.longValue(): Long? =
++        (this as? JsonPrimitive)?.takeIf { it !is JsonNull }?.longOrNull
++
++    private companion object {
++        const val TAG = "DiscordRPC"
++        const val GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json"
++        const val MAX_RECONNECT_ATTEMPTS = 5
++        const val RECONNECT_FAST_DELAY_MS = 200L
++        const val RECONNECT_STEP_DELAY_MS = 2_000L
++        const val RECONNECT_MAX_DELAY_MS = 15_000L
++        const val INVALID_SESSION_DELAY_MS = 1_500L
++        const val CLOSE_TIMEOUT_MS = 3_000L
++        const val DEFAULT_HEARTBEAT_INTERVAL_MS = 41_250L
++        const val HEARTBEAT_JITTER = 0.5
++        val FATAL_CLOSE_CODES = setOf(4010, 4011, 4012, 4013, 4014)
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordGatewayModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordGatewayModels.kt
+new file mode 100644
+index 00000000..22df47ff
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordGatewayModels.kt
+@@ -0,0 +1,208 @@
++package com.nuvio.app.features.discord
++
++import kotlinx.serialization.KSerializer
++import kotlinx.serialization.SerialName
++import kotlinx.serialization.Serializable
++import kotlinx.serialization.descriptors.PrimitiveKind
++import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
++import kotlinx.serialization.descriptors.SerialDescriptor
++import kotlinx.serialization.encoding.Decoder
++import kotlinx.serialization.encoding.Encoder
++
++@Serializable(with = DiscordOpCodeSerializer::class)
++internal enum class DiscordOpCode(val value: Int) {
++    DISPATCH(0),
++    HEARTBEAT(1),
++    IDENTIFY(2),
++    PRESENCE_UPDATE(3),
++    VOICE_STATE(4),
++    RESUME(6),
++    RECONNECT(7),
++    REQUEST_GUILD_MEMBERS(8),
++    INVALID_SESSION(9),
++    HELLO(10),
++    HEARTBEAT_ACK(11),
++    UNKNOWN(-1),
++}
++
++internal object DiscordOpCodeSerializer : KSerializer<DiscordOpCode> {
++    override val descriptor: SerialDescriptor =
++        PrimitiveSerialDescriptor("DiscordOpCode", PrimitiveKind.INT)
++
++    override fun deserialize(decoder: Decoder): DiscordOpCode {
++        val opCode = decoder.decodeInt()
++        return DiscordOpCode.entries.firstOrNull { it.value == opCode } ?: DiscordOpCode.UNKNOWN
++    }
++
++    override fun serialize(encoder: Encoder, value: DiscordOpCode) {
++        encoder.encodeInt(value.value)
++    }
++}
++
++@Serializable
++internal data class DiscordPayload(
++    @SerialName("t")
++    val t: String? = null,
++    @SerialName("s")
++    val s: Int? = null,
++    @SerialName("op")
++    val op: DiscordOpCode? = null,
++)
++
++@Serializable
++internal data class DiscordPayloadData<T>(
++    @SerialName("d")
++    val d: T? = null,
++)
++
++@Serializable
++internal data class DiscordOutgoingPayload<T>(
++    @SerialName("op")
++    val op: DiscordOpCode? = null,
++    @SerialName("d")
++    val d: T? = null,
++)
++
++@Serializable
++internal data class DiscordHeartbeat(
++    @SerialName("heartbeat_interval")
++    val heartbeatInterval: Long,
++)
++
++@Serializable
++internal data class DiscordIdentify(
++    @SerialName("capabilities")
++    val capabilities: Int,
++    @SerialName("compress")
++    val compress: Boolean,
++    @SerialName("large_threshold")
++    val largeThreshold: Int,
++    @SerialName("properties")
++    val properties: DiscordIdentifyProperties,
++    @SerialName("token")
++    val token: String,
++) {
++    companion object {
++        fun String.toIdentifyPayload() = DiscordIdentify(
++            capabilities = 65,
++            compress = false,
++            largeThreshold = 100,
++            properties = DiscordIdentifyProperties(
++                browser = "Discord Client",
++                device = "ktor",
++                os = "Windows",
++            ),
++            token = this,
++        )
++    }
++}
++
++@Serializable
++internal data class DiscordIdentifyProperties(
++    @SerialName("browser")
++    val browser: String,
++    @SerialName("device")
++    val device: String,
++    @SerialName("os")
++    val os: String,
++)
++
++@Serializable
++internal data class DiscordResume(
++    @SerialName("seq")
++    val seq: Int,
++    @SerialName("session_id")
++    val sessionId: String?,
++    @SerialName("token")
++    val token: String,
++)
++
++@Serializable
++internal data class DiscordReady(
++    @SerialName("resume_gateway_url")
++    val resumeGatewayUrl: String? = null,
++    @SerialName("session_id")
++    val sessionId: String? = null,
++    @SerialName("user")
++    val user: DiscordReadyUser? = null,
++)
++
++@Serializable
++internal data class DiscordReadyUser(
++    @SerialName("id")
++    val id: String? = null,
++    @SerialName("username")
++    val username: String? = null,
++    @SerialName("global_name")
++    val globalName: String? = null,
++    @SerialName("avatar")
++    val avatar: String? = null,
++    @SerialName("bio")
++    val bio: String? = null,
++    @SerialName("premium_type")
++    val premiumType: Int? = null,
++)
++
++@Serializable
++internal data class DiscordPresence(
++    @SerialName("activities")
++    val activities: List<DiscordActivity?>?,
++    @SerialName("afk")
++    val afk: Boolean? = true,
++    @SerialName("since")
++    val since: Long? = 0L,
++    @SerialName("status")
++    val status: String? = "online",
++)
++
++@Serializable
++internal data class DiscordActivity(
++    @SerialName("name")
++    val name: String?,
++    @SerialName("state")
++    val state: String? = null,
++    @SerialName("details")
++    val details: String? = null,
++    @SerialName("type")
++    val type: Int? = 0,
++    @SerialName("platform")
++    val platform: String? = null,
++    @SerialName("timestamps")
++    val timestamps: DiscordActivityTimestamps? = null,
++    @SerialName("assets")
++    val assets: DiscordActivityAssets? = null,
++    @SerialName("buttons")
++    val buttons: List<String?>? = null,
++    @SerialName("metadata")
++    val metadata: DiscordActivityMetadata? = null,
++    @SerialName("application_id")
++    val applicationId: String? = null,
++    @SerialName("url")
++    val url: String? = null,
++)
++
++@Serializable
++internal data class DiscordActivityAssets(
++    @SerialName("large_image")
++    val largeImage: String?,
++    @SerialName("small_image")
++    val smallImage: String?,
++    @SerialName("large_text")
++    val largeText: String? = null,
++    @SerialName("small_text")
++    val smallText: String? = null,
++)
++
++@Serializable
++internal data class DiscordActivityMetadata(
++    @SerialName("button_urls")
++    val buttonUrls: List<String?>?,
++)
++
++@Serializable
++internal data class DiscordActivityTimestamps(
++    @SerialName("end")
++    val end: Long? = null,
++    @SerialName("start")
++    val start: Long? = null,
++)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordRpc.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordRpc.kt
+new file mode 100644
+index 00000000..38f94d9f
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordRpc.kt
+@@ -0,0 +1,110 @@
++package com.nuvio.app.features.discord
++
++import com.nuvio.app.core.logging.InAppLogger
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.withTimeoutOrNull
++import kotlin.time.Clock
++
++internal data class DiscordRpcTimestamps(
++    val start: Long? = null,
++    val end: Long? = null,
++)
++
++internal data class DiscordRpcButton(
++    val label: String,
++    val url: String,
++)
++
++internal data class CommonDiscordRpc(
++    val name: String = "",
++    val type: Int = DiscordRpcActivityType.Watching.value,
++    val details: String? = null,
++    val state: String? = null,
++    val largeImage: DiscordRpcImage? = null,
++    val smallImage: DiscordRpcImage? = null,
++    val largeText: String? = null,
++    val smallText: String? = null,
++    val time: DiscordRpcTimestamps? = null,
++    val buttons: List<DiscordRpcButton> = emptyList(),
++)
++
++internal class DiscordRpc(
++    val token: String,
++) {
++    private val discordWebSocket = DiscordGatewayConnection(token)
++
++    val state: StateFlow<DiscordGatewayState>
++        get() = discordWebSocket.state
++
++    val user: StateFlow<DiscordReadyUser?>
++        get() = discordWebSocket.user
++
++    val lastError: StateFlow<String?>
++        get() = discordWebSocket.lastError
++
++    fun closeRPC() {
++        discordWebSocket.close()
++    }
++
++    fun isRpcRunning(): Boolean = discordWebSocket.state.value == DiscordGatewayState.Ready
++
++    suspend fun updateRPC(
++        commonRpc: CommonDiscordRpc,
++        status: String,
++        applicationId: String,
++    ) {
++        if (token.isBlank()) return
++        val largeImage = commonRpc.largeImage?.let { image ->
++            withTimeoutOrNull(IMAGE_RESOLVE_TIMEOUT_MS) { image.resolveImage(token, applicationId) }
++        }?.validAssetKey()
++        val smallImage = commonRpc.smallImage?.let { image ->
++            withTimeoutOrNull(IMAGE_RESOLVE_TIMEOUT_MS) { image.resolveImage(token, applicationId) }
++        }?.validAssetKey()
++        val buttons = commonRpc.buttons
++            .filter { it.label.isNotBlank() && it.url.isNotBlank() }
++            .take(2)
++        val presence = DiscordPresence(
++            activities = listOf(
++                DiscordActivity(
++                    name = commonRpc.name.sanitize(),
++                    details = commonRpc.details?.takeIf { it.isNotEmpty() }?.sanitize(),
++                    state = commonRpc.state?.takeIf { it.isNotEmpty() }?.sanitize(),
++                    type = commonRpc.type,
++                    timestamps = commonRpc.time
++                        ?.takeIf { it.start != null || it.end != null }
++                        ?.let { DiscordActivityTimestamps(start = it.start, end = it.end) },
++                    assets = DiscordActivityAssets(
++                        largeImage = largeImage,
++                        smallImage = smallImage,
++                        largeText = commonRpc.largeText?.takeIf { it.isNotEmpty() }?.sanitize(),
++                        smallText = commonRpc.smallText?.takeIf { it.isNotEmpty() }?.sanitize(),
++                    ).takeIf { largeImage != null || smallImage != null },
++                    buttons = buttons
++                        .map { it.label.take(DiscordRpcConfig.MAX_BUTTON_LABEL_LENGTH) }
++                        .takeIf { it.isNotEmpty() },
++                    metadata = DiscordActivityMetadata(buttonUrls = buttons.map { it.url })
++                        .takeIf { buttons.isNotEmpty() },
++                    applicationId = applicationId.takeIf { it.isNotEmpty() } ?: DiscordRpcConfig.APPLICATION_ID,
++                ),
++            ),
++            afk = true,
++            since = commonRpc.time?.start ?: Clock.System.now().toEpochMilliseconds(),
++            status = status,
++        )
++        discordWebSocket.connect()
++        discordWebSocket.updatePresence(presence)
++    }
++
++    private companion object {
++        const val IMAGE_RESOLVE_TIMEOUT_MS = 8_000L
++    }
++
++    private fun String.validAssetKey(): String? {
++        if (length <= DiscordRpcConfig.MAX_ASSET_KEY_LENGTH) return this
++        InAppLogger.warn("DiscordRPC", "Dropping image asset, key length $length exceeds ${DiscordRpcConfig.MAX_ASSET_KEY_LENGTH}")
++        return null
++    }
++
++    private fun String.sanitize(): String =
++        if (length > DiscordRpcConfig.MAX_TEXT_LENGTH) substring(0, DiscordRpcConfig.MAX_TEXT_LENGTH) else this
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordRpcConfig.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordRpcConfig.kt
+new file mode 100644
+index 00000000..950f93c3
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordRpcConfig.kt
+@@ -0,0 +1,19 @@
++package com.nuvio.app.features.discord
++
++internal object DiscordRpcConfig {
++    const val APP_NAME = "Nuvio"
++    const val APPLICATION_ID = "962990036020756480"
++    const val DISCORD_API_URL = "https://discord.com/api/v10"
++    const val KIZZY_API_URL = "https://kizzy-api.cjjdxhdjd.workers.dev"
++    const val LOGIN_URL = "https://discord.com/login"
++    const val MAX_TEXT_LENGTH = 128
++    const val MAX_BUTTON_LABEL_LENGTH = 32
++    const val MAX_ASSET_KEY_LENGTH = 256
++    const val MAX_ARTWORK_URL_LENGTH = 200
++
++    fun metahubPosterUrl(imdbId: String): String = "https://images.metahub.space/poster/medium/$imdbId/img"
++    val APPLICATION_ID_LENGTH_RANGE = 17..20
++
++    const val PLAY_ASSET = "app-assets/$APPLICATION_ID/1300361266212241430.png"
++    const val PAUSE_ASSET = "app-assets/$APPLICATION_ID/1300361619490209802.png"
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordRpcImage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordRpcImage.kt
+new file mode 100644
+index 00000000..fcf32bef
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordRpcImage.kt
+@@ -0,0 +1,126 @@
++package com.nuvio.app.features.discord
++
++import com.nuvio.app.core.logging.InAppLogger
++import com.nuvio.app.core.network.createApiHttpClient
++import io.ktor.client.HttpClient
++import io.ktor.client.request.get
++import io.ktor.client.request.header
++import io.ktor.client.request.parameter
++import io.ktor.client.request.post
++import io.ktor.client.request.setBody
++import io.ktor.client.statement.bodyAsText
++import io.ktor.http.ContentType
++import io.ktor.http.HttpHeaders
++import io.ktor.http.content.TextContent
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.sync.Mutex
++import kotlinx.coroutines.sync.withLock
++import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.JsonArray
++import kotlinx.serialization.json.JsonObject
++import kotlinx.serialization.json.JsonPrimitive
++import kotlinx.serialization.json.buildJsonArray
++import kotlinx.serialization.json.buildJsonObject
++import kotlinx.serialization.json.contentOrNull
++
++internal sealed class DiscordRpcImage {
++    abstract suspend fun resolveImage(token: String, applicationId: String): String?
++
++    data class DiscordImage(val image: String) : DiscordRpcImage() {
++        override suspend fun resolveImage(token: String, applicationId: String): String =
++            "mp:$image"
++    }
++
++    data class ExternalImage(val image: String) : DiscordRpcImage() {
++        override suspend fun resolveImage(token: String, applicationId: String): String? =
++            DiscordExternalAssets.resolve(image, token, applicationId)
++    }
++}
++
++internal object DiscordExternalAssets {
++    private const val TAG = "DiscordRPC"
++    private const val MAX_CACHE_ENTRIES = 64
++
++    private val client: HttpClient by lazy { createApiHttpClient() }
++    private val json = Json { ignoreUnknownKeys = true }
++    private val mutex = Mutex()
++    private val cache = LinkedHashMap<String, String>()
++
++    suspend fun resolve(url: String, token: String, applicationId: String): String? {
++        val normalized = url.trim()
++        if (normalized.isEmpty()) return null
++        if (normalized.startsWith("mp:")) return normalized
++        if (!normalized.startsWith("http://") && !normalized.startsWith("https://")) return null
++
++        mutex.withLock { cache[normalized] }?.let { return it }
++
++        val resolved = fromDiscord(normalized, token, applicationId) ?: fromKizzyApi(normalized)
++        if (resolved != null) {
++            mutex.withLock {
++                cache.remove(normalized)
++                cache[normalized] = resolved
++                while (cache.size > MAX_CACHE_ENTRIES) {
++                    val oldest = cache.keys.firstOrNull() ?: break
++                    cache.remove(oldest)
++                }
++            }
++        }
++        return resolved
++    }
++
++    fun clear() {
++        if (mutex.tryLock()) {
++            try {
++                cache.clear()
++            } finally {
++                mutex.unlock()
++            }
++        }
++    }
++
++    private suspend fun fromDiscord(url: String, token: String, applicationId: String): String? =
++        try {
++            val body = buildJsonObject {
++                put("urls", buildJsonArray { add(JsonPrimitive(url)) })
++            }.toString()
++            val response = client.post("${DiscordRpcConfig.DISCORD_API_URL}/applications/$applicationId/external-assets") {
++                header(HttpHeaders.Authorization, token)
++                setBody(TextContent(body, ContentType.Application.Json))
++            }
++            if (response.status.value !in 200..299) {
++                InAppLogger.warn(TAG, "External asset request failed with ${response.status.value}")
++                null
++            } else {
++                val root = json.parseToJsonElement(response.bodyAsText()) as? JsonArray
++                val path = (root?.firstOrNull() as? JsonObject)
++                    ?.get("external_asset_path")
++                    ?.let { (it as? JsonPrimitive)?.contentOrNull }
++                    ?.takeIf { it.isNotBlank() }
++                path?.let { "mp:$it" }
++            }
++        } catch (error: CancellationException) {
++            throw error
++        } catch (error: Exception) {
++            InAppLogger.warn(TAG, "External asset request failed: ${error.message.orEmpty()}")
++            null
++        }
++
++    private suspend fun fromKizzyApi(url: String): String? =
++        try {
++            val response = client.get("${DiscordRpcConfig.KIZZY_API_URL}/image") {
++                parameter("url", url)
++            }
++            if (response.status.value !in 200..299) {
++                null
++            } else {
++                val root = json.parseToJsonElement(response.bodyAsText()) as? JsonObject
++                val id = (root?.get("id") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
++                id?.let { if (it.startsWith("mp:")) it else "mp:$it" }
++            }
++        } catch (error: CancellationException) {
++            throw error
++        } catch (error: Exception) {
++            InAppLogger.warn(TAG, "Image proxy request failed: ${error.message.orEmpty()}")
++            null
++        }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordRpcPlatform.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordRpcPlatform.kt
+new file mode 100644
+index 00000000..05900696
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordRpcPlatform.kt
+@@ -0,0 +1,18 @@
++package com.nuvio.app.features.discord
++
++import androidx.compose.runtime.Composable
++import androidx.compose.ui.Modifier
++import io.ktor.client.HttpClient
++
++internal expect object DiscordRpcPlatform {
++    val isSupported: Boolean
++    fun clearLoginSession()
++}
++
++internal expect fun createDiscordGatewayHttpClient(): HttpClient
++
++@Composable
++internal expect fun DiscordLoginWebView(
++    modifier: Modifier,
++    onLoginCompleted: (String) -> Unit,
++)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordRpcRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordRpcRepository.kt
+new file mode 100644
+index 00000000..69e13504
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordRpcRepository.kt
+@@ -0,0 +1,586 @@
++package com.nuvio.app.features.discord
++
++import com.nuvio.app.core.logging.InAppLogger
++import com.nuvio.app.core.network.createApiHttpClient
++import com.nuvio.app.features.player.PlayerSettingsRepository
++import io.ktor.client.HttpClient
++import io.ktor.client.request.get
++import io.ktor.client.request.header
++import io.ktor.client.statement.bodyAsText
++import io.ktor.http.HttpHeaders
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.Job
++import kotlinx.coroutines.SupervisorJob
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import kotlinx.coroutines.flow.update
++import kotlinx.coroutines.launch
++import kotlinx.serialization.SerialName
++import kotlinx.serialization.Serializable
++import kotlinx.serialization.decodeFromString
++import kotlinx.serialization.encodeToString
++import kotlinx.serialization.json.Json
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.discord_rpc_activity_competing
++import nuvio.composeapp.generated.resources.discord_rpc_activity_listening
++import nuvio.composeapp.generated.resources.discord_rpc_activity_playing
++import nuvio.composeapp.generated.resources.discord_rpc_activity_watching
++import nuvio.composeapp.generated.resources.discord_rpc_button_imdb
++import nuvio.composeapp.generated.resources.discord_rpc_presence_live
++import nuvio.composeapp.generated.resources.discord_rpc_presence_paused
++import nuvio.composeapp.generated.resources.discord_rpc_presence_playing
++import nuvio.composeapp.generated.resources.discord_rpc_status_dnd
++import nuvio.composeapp.generated.resources.discord_rpc_status_idle
++import nuvio.composeapp.generated.resources.discord_rpc_status_invisible
++import nuvio.composeapp.generated.resources.discord_rpc_status_online
++import nuvio.composeapp.generated.resources.discord_rpc_test_subtitle
++import org.jetbrains.compose.resources.StringResource
++import org.jetbrains.compose.resources.getString
++import kotlin.math.abs
++import kotlin.time.Clock
++
++internal enum class DiscordRpcActivityType(
++    val value: Int,
++    val labelRes: StringResource,
++) {
++    Watching(3, Res.string.discord_rpc_activity_watching),
++    Playing(0, Res.string.discord_rpc_activity_playing),
++    Listening(2, Res.string.discord_rpc_activity_listening),
++    Competing(5, Res.string.discord_rpc_activity_competing),
++    ;
++
++    companion object {
++        fun fromValue(value: Int): DiscordRpcActivityType =
++            entries.firstOrNull { it.value == value } ?: Watching
++    }
++}
++
++internal enum class DiscordRpcStatus(
++    val value: String,
++    val labelRes: StringResource,
++) {
++    Online("online", Res.string.discord_rpc_status_online),
++    Idle("idle", Res.string.discord_rpc_status_idle),
++    DoNotDisturb("dnd", Res.string.discord_rpc_status_dnd),
++    Invisible("invisible", Res.string.discord_rpc_status_invisible),
++    ;
++
++    companion object {
++        fun fromValue(value: String): DiscordRpcStatus =
++            entries.firstOrNull { it.value == value } ?: Online
++    }
++}
++
++@Serializable
++internal data class DiscordRpcSettings(
++    @SerialName("enabled")
++    val enabled: Boolean = false,
++    @SerialName("activity_type")
++    val activityType: Int = DiscordRpcActivityType.Watching.value,
++    @SerialName("status")
++    val status: String = DiscordRpcStatus.Online.value,
++    @SerialName("show_title_as_name")
++    val showTitleAsName: Boolean = false,
++    @SerialName("show_poster")
++    val showPoster: Boolean = true,
++    @SerialName("show_playback_state")
++    val showPlaybackState: Boolean = true,
++    @SerialName("show_timestamps")
++    val showTimestamps: Boolean = true,
++    @SerialName("hide_on_pause")
++    val hideOnPause: Boolean = false,
++    @SerialName("show_imdb_button")
++    val showImdbButton: Boolean = false,
++    @SerialName("application_id")
++    val applicationId: String = "",
++)
++
++@Serializable
++internal data class DiscordRpcUser(
++    @SerialName("id")
++    val id: String,
++    @SerialName("username")
++    val username: String? = null,
++    @SerialName("global_name")
++    val globalName: String? = null,
++    @SerialName("avatar")
++    val avatar: String? = null,
++) {
++    val displayName: String
++        get() = globalName?.takeIf { it.isNotBlank() } ?: username?.takeIf { it.isNotBlank() } ?: id
++
++    val avatarUrl: String?
++        get() = avatar?.takeIf { it.isNotBlank() }?.let { hash ->
++            val extension = if (hash.startsWith("a_")) "gif" else "png"
++            "https://cdn.discordapp.com/avatars/$id/$hash.$extension?size=128"
++        }
++}
++
++internal data class DiscordRpcUiState(
++    val isSupported: Boolean = false,
++    val isLoggedIn: Boolean = false,
++    val isLoggingIn: Boolean = false,
++    val user: DiscordRpcUser? = null,
++    val settings: DiscordRpcSettings = DiscordRpcSettings(),
++    val connectionState: DiscordGatewayState = DiscordGatewayState.Idle,
++    val tokenExpired: Boolean = false,
++    val isPresenceActive: Boolean = false,
++    val lastError: String? = null,
++    val isTestActive: Boolean = false,
++)
++
++internal data class DiscordPlaybackInfo(
++    val title: String,
++    val subtitle: String? = null,
++    val artworkUrl: String? = null,
++    val isPlaying: Boolean = false,
++    val isLoading: Boolean = false,
++    val positionMs: Long = 0L,
++    val durationMs: Long = 0L,
++    val isLive: Boolean = false,
++    val imdbId: String? = null,
++    val isTest: Boolean = false,
++) {
++    val isPaused: Boolean
++        get() = !isPlaying && !isLoading
++}
++
++internal object DiscordRpcRepository {
++    private const val TAG = "DiscordRPC"
++    private const val UPDATE_DEBOUNCE_MS = 1_000L
++    private const val SEEK_TOLERANCE_MS = 3_000L
++    private const val DURATION_BUCKET_MS = 5_000L
++    private const val FAILURE_COOLDOWN_MS = 60_000L
++    private const val TEST_PRESENCE_DURATION_MS = 60_000L
++
++    private val json = Json {
++        ignoreUnknownKeys = true
++        encodeDefaults = true
++    }
++    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
++    private val httpClient: HttpClient by lazy { createApiHttpClient() }
++
++    private val _uiState = MutableStateFlow(DiscordRpcUiState())
++    val uiState: StateFlow<DiscordRpcUiState> = _uiState.asStateFlow()
++
++    private var hasLoaded = false
++    private var token: String? = null
++    private var playback: DiscordPlaybackInfo? = null
++    private var rpc: DiscordRpc? = null
++    private var rpcStateJob: Job? = null
++    private var rpcErrorJob: Job? = null
++    private var testJob: Job? = null
++    private var updateJob: Job? = null
++    private var lastSignature: Any? = null
++    private var lastStartEpochMs: Long? = null
++    private var lastHiddenReason: String? = null
++    private var retryAfterEpochMs = 0L
++
++    fun ensureLoaded() {
++        if (hasLoaded) return
++        hasLoaded = true
++        val settings = DiscordRpcStorage.loadSettingsPayload()
++            ?.let { payload -> runCatching { json.decodeFromString<DiscordRpcSettings>(payload) }.getOrNull() }
++            ?: DiscordRpcSettings()
++        val user = DiscordRpcStorage.loadUserPayload()
++            ?.let { payload -> runCatching { json.decodeFromString<DiscordRpcUser>(payload) }.getOrNull() }
++        val storedToken = runCatching { DiscordRpcStorage.loadToken() }.getOrNull()?.takeIf { it.isNotBlank() }
++        token = storedToken
++        _uiState.value = DiscordRpcUiState(
++            isSupported = DiscordRpcPlatform.isSupported,
++            isLoggedIn = storedToken != null,
++            user = user.takeIf { storedToken != null },
++            settings = settings,
++        )
++    }
++
++    fun login(newToken: String) {
++        ensureLoaded()
++        val normalized = newToken.trim().removeSurrounding("\"")
++        if (normalized.isBlank()) return
++        _uiState.update { it.copy(isLoggingIn = true, tokenExpired = false) }
++        scope.launch {
++            val user = fetchUser(normalized)
++            if (user == null) {
++                _uiState.update { it.copy(isLoggingIn = false, tokenExpired = true) }
++                return@launch
++            }
++            val enabledSettings = _uiState.value.settings.copy(enabled = true)
++            DiscordRpcStorage.saveSettingsPayload(json.encodeToString(enabledSettings))
++            runCatching { DiscordRpcStorage.saveToken(normalized) }
++                .onFailure { InAppLogger.error(TAG, "Unable to save Discord token") }
++            DiscordRpcStorage.saveUserPayload(json.encodeToString(user))
++            token = normalized
++            InAppLogger.info(TAG, "Logged in as ${user.displayName}")
++            _uiState.update {
++                it.copy(
++                    isLoggedIn = true,
++                    isLoggingIn = false,
++                    user = user,
++                    tokenExpired = false,
++                    lastError = null,
++                    settings = enabledSettings,
++                )
++            }
++            scheduleUpdate(force = true)
++        }
++    }
++
++    fun logout() {
++        ensureLoaded()
++        scope.launch {
++            signOut(expired = false)
++        }
++    }
++
++    fun setEnabled(enabled: Boolean) = updateSettings { it.copy(enabled = enabled) }
++
++    fun setActivityType(type: DiscordRpcActivityType) = updateSettings { it.copy(activityType = type.value) }
++
++    fun setStatus(status: DiscordRpcStatus) = updateSettings { it.copy(status = status.value) }
++
++    fun setShowTitleAsName(enabled: Boolean) = updateSettings { it.copy(showTitleAsName = enabled) }
++
++    fun setShowPoster(enabled: Boolean) = updateSettings { it.copy(showPoster = enabled) }
++
++    fun setShowPlaybackState(enabled: Boolean) = updateSettings { it.copy(showPlaybackState = enabled) }
++
++    fun setShowTimestamps(enabled: Boolean) = updateSettings { it.copy(showTimestamps = enabled) }
++
++    fun setHideOnPause(enabled: Boolean) = updateSettings { it.copy(hideOnPause = enabled) }
++
++    fun setShowImdbButton(enabled: Boolean) = updateSettings { it.copy(showImdbButton = enabled) }
++
++    fun setApplicationId(applicationId: String) = updateSettings {
++        it.copy(applicationId = applicationId.trim().filter(Char::isDigit))
++    }
++
++    fun updatePlayback(info: DiscordPlaybackInfo) {
++        ensureLoaded()
++        scope.launch {
++            if (testJob != null) {
++                testJob?.cancel()
++                testJob = null
++                _uiState.update { it.copy(isTestActive = false) }
++            }
++            playback = info
++            scheduleUpdate(force = false)
++        }
++    }
++
++    fun clearPlayback() {
++        scope.launch {
++            InAppLogger.debug(TAG, "Playback cleared")
++            playback = null
++            stopRpc()
++        }
++    }
++
++    fun sendTestPresence() {
++        ensureLoaded()
++        scope.launch {
++            if (token == null) return@launch
++            val currentPlayback = playback
++            if (currentPlayback != null && !currentPlayback.isTest) {
++                scheduleUpdate(force = true)
++                return@launch
++            }
++            testJob?.cancel()
++            playback = DiscordPlaybackInfo(
++                title = DiscordRpcConfig.APP_NAME,
++                subtitle = getString(Res.string.discord_rpc_test_subtitle),
++                isPlaying = true,
++                isTest = true,
++            )
++            retryAfterEpochMs = 0L
++            _uiState.update { it.copy(isTestActive = true, lastError = null) }
++            scheduleUpdate(force = true)
++            testJob = scope.launch {
++                delay(TEST_PRESENCE_DURATION_MS)
++                if (playback?.isTest == true) {
++                    playback = null
++                    stopRpc()
++                }
++                testJob = null
++                _uiState.update { it.copy(isTestActive = false) }
++            }
++        }
++    }
++
++    private fun updateSettings(transform: (DiscordRpcSettings) -> DiscordRpcSettings) {
++        ensureLoaded()
++        val current = _uiState.value.settings
++        val updated = transform(current)
++        if (updated == current) return
++        _uiState.update { it.copy(settings = updated) }
++        DiscordRpcStorage.saveSettingsPayload(json.encodeToString(updated))
++        scope.launch {
++            if (updated.applicationId != current.applicationId) stopRpc()
++            scheduleUpdate(force = true)
++        }
++    }
++
++    private fun scheduleUpdate(force: Boolean) {
++        val info = playback
++        val currentToken = token
++        val state = _uiState.value
++        val settings = state.settings
++        val privateViewing = PlayerSettingsRepository.uiState.value.privateViewingEnabled
++        val isTest = info?.isTest == true
++        val shouldShow = info != null &&
++            currentToken != null &&
++            state.isSupported &&
++            (settings.enabled || isTest) &&
++            (!privateViewing || isTest) &&
++            info.title.isNotBlank() &&
++            !(settings.hideOnPause && info.isPaused)
++        if (info == null || !shouldShow) {
++            val reason = when {
++                info == null -> "no playback"
++                currentToken == null -> "not logged in"
++                !state.isSupported -> "unsupported platform"
++                !(settings.enabled || isTest) -> "disabled in settings"
++                privateViewing && !isTest -> "private viewing enabled"
++                info.title.isBlank() -> "blank title"
++                else -> "hidden on pause"
++            }
++            if (reason != lastHiddenReason) {
++                lastHiddenReason = reason
++                InAppLogger.debug(TAG, "Presence not shown: $reason")
++            }
++            if (rpc != null || updateJob != null) stopRpc()
++            return
++        }
++        lastHiddenReason = null
++        if (!force && rpc == null && nowEpochMs() < retryAfterEpochMs) return
++
++        val startEpochMs = if (info.isPlaying) nowEpochMs() - info.positionMs.coerceAtLeast(0L) else null
++        val signature = info.copy(
++            positionMs = 0L,
++            durationMs = info.durationMs / DURATION_BUCKET_MS,
++        ) to settings
++        val sameStart = when {
++            startEpochMs == null && lastStartEpochMs == null -> true
++            startEpochMs != null && lastStartEpochMs != null -> abs(startEpochMs - lastStartEpochMs!!) < SEEK_TOLERANCE_MS
++            else -> false
++        }
++        if (!force && signature == lastSignature && sameStart) return
++
++        lastSignature = signature
++        lastStartEpochMs = startEpochMs
++        updateJob?.cancel()
++        updateJob = scope.launch {
++            delay(UPDATE_DEBOUNCE_MS)
++            applyPresence()
++        }
++    }
++
++    private suspend fun applyPresence() {
++        val info = playback ?: return
++        val currentToken = token ?: return
++        val settings = _uiState.value.settings
++        val applicationId = settings.applicationId
++            .takeIf { it.length in DiscordRpcConfig.APPLICATION_ID_LENGTH_RANGE }
++            ?: DiscordRpcConfig.APPLICATION_ID
++
++        val client = rpc?.takeIf { it.token == currentToken } ?: run {
++            rpc?.closeRPC()
++            rpcStateJob?.cancel()
++            rpcErrorJob?.cancel()
++            DiscordRpc(currentToken).also { created ->
++                rpc = created
++                rpcStateJob = scope.launch {
++                    created.state.collect { state -> onGatewayStateChanged(created, state) }
++                }
++                rpcErrorJob = scope.launch {
++                    created.lastError.collect { error ->
++                        if (rpc === created && error != null) {
++                            _uiState.update { it.copy(lastError = error) }
++                        }
++                    }
++                }
++            }
++        }
++
++        try {
++            client.updateRPC(
++                commonRpc = buildCommonRpc(info, settings),
++                status = settings.status,
++                applicationId = applicationId,
++            )
++            _uiState.update { it.copy(isPresenceActive = true) }
++        } catch (error: CancellationException) {
++            throw error
++        } catch (error: Exception) {
++            val message = error.message ?: error::class.simpleName.orEmpty()
++            InAppLogger.error(TAG, "Unable to update presence: $message")
++            _uiState.update { it.copy(lastError = message) }
++        }
++    }
++
++    private suspend fun onGatewayStateChanged(client: DiscordRpc, state: DiscordGatewayState) {
++        if (rpc !== client) return
++        _uiState.update {
++            it.copy(
++                connectionState = state,
++                lastError = if (state == DiscordGatewayState.Ready) null else it.lastError,
++            )
++        }
++        when (state) {
++            DiscordGatewayState.AuthenticationFailed -> {
++                InAppLogger.warn(TAG, "Token Seems to be invalid, Please Login again")
++                signOut(expired = true)
++            }
++            DiscordGatewayState.Failed -> {
++                retryAfterEpochMs = nowEpochMs() + FAILURE_COOLDOWN_MS
++                stopRpc()
++            }
++            DiscordGatewayState.Ready -> retryAfterEpochMs = 0L
++            else -> Unit
++        }
++    }
++
++    private suspend fun buildCommonRpc(
++        info: DiscordPlaybackInfo,
++        settings: DiscordRpcSettings,
++    ): CommonDiscordRpc {
++        val appName = DiscordRpcConfig.APP_NAME
++        val title = info.title.trim()
++        val subtitle = info.subtitle?.trim()?.takeIf { it.isNotEmpty() }
++        val now = nowEpochMs()
++
++        val time = if (settings.showTimestamps && info.isPlaying) {
++            val start = now - info.positionMs.coerceAtLeast(0L)
++            val end = if (!info.isLive && info.durationMs > 0L) start + info.durationMs else null
++            DiscordRpcTimestamps(start = start, end = end)
++        } else {
++            null
++        }
++
++        val playbackLabel = when {
++            info.isLive -> getString(Res.string.discord_rpc_presence_live)
++            info.isPaused -> getString(Res.string.discord_rpc_presence_paused)
++            else -> getString(Res.string.discord_rpc_presence_playing)
++        }
++
++        val largeImage = info.artworkUrl
++            ?.takeIf { settings.showPoster && it.isNotBlank() }
++            ?.let { DiscordRpcImage.ExternalImage(it) }
++        val smallImage = if (settings.showPlaybackState) {
++            DiscordRpcImage.DiscordImage(
++                if (info.isPaused) DiscordRpcConfig.PAUSE_ASSET else DiscordRpcConfig.PLAY_ASSET,
++            )
++        } else {
++            null
++        }
++
++        val buttons = if (settings.showImdbButton && !info.imdbId.isNullOrBlank()) {
++            listOf(
++                DiscordRpcButton(
++                    label = getString(Res.string.discord_rpc_button_imdb),
++                    url = "https://www.imdb.com/title/${info.imdbId}/",
++                ),
++            )
++        } else {
++            emptyList()
++        }
++
++        val pausedState = playbackLabel.takeIf { info.isPaused && !settings.showPlaybackState }
++
++        return if (settings.showTitleAsName) {
++            CommonDiscordRpc(
++                name = title,
++                type = settings.activityType,
++                details = subtitle,
++                state = pausedState,
++                largeImage = largeImage,
++                smallImage = smallImage,
++                largeText = appName,
++                smallText = playbackLabel.takeIf { smallImage != null },
++                time = time,
++                buttons = buttons,
++            )
++        } else {
++            CommonDiscordRpc(
++                name = appName,
++                type = settings.activityType,
++                details = title,
++                state = subtitle ?: pausedState,
++                largeImage = largeImage,
++                smallImage = smallImage,
++                largeText = title,
++                smallText = playbackLabel.takeIf { smallImage != null },
++                time = time,
++                buttons = buttons,
++            )
++        }
++    }
++
++    private suspend fun fetchUser(candidateToken: String): DiscordRpcUser? =
++        try {
++            val response = httpClient.get("${DiscordRpcConfig.DISCORD_API_URL}/users/@me") {
++                header(HttpHeaders.Authorization, candidateToken)
++            }
++            if (response.status.value !in 200..299) {
++                InAppLogger.warn(TAG, "User lookup failed with ${response.status.value}")
++                _uiState.update { it.copy(lastError = "Discord login check failed (HTTP ${response.status.value})") }
++                null
++            } else {
++                json.decodeFromString<DiscordRpcUser>(response.bodyAsText())
++            }
++        } catch (error: CancellationException) {
++            throw error
++        } catch (error: Exception) {
++            InAppLogger.error(TAG, "User lookup failed: ${error.message.orEmpty()}")
++            _uiState.update { it.copy(lastError = error.message ?: "Discord login check failed") }
++            null
++        }
++
++    private fun signOut(expired: Boolean) {
++        testJob?.cancel()
++        testJob = null
++        playback = playback?.takeIf { !it.isTest }
++        stopRpc()
++        token = null
++        runCatching { DiscordRpcStorage.saveToken(null) }
++        DiscordRpcStorage.saveUserPayload(null)
++        DiscordExternalAssets.clear()
++        DiscordRpcPlatform.clearLoginSession()
++        _uiState.update {
++            it.copy(
++                isLoggedIn = false,
++                isLoggingIn = false,
++                user = null,
++                tokenExpired = expired,
++                connectionState = DiscordGatewayState.Idle,
++                isPresenceActive = false,
++                isTestActive = false,
++            )
++        }
++    }
++
++    private fun stopRpc() {
++        updateJob?.cancel()
++        updateJob = null
++        rpcStateJob?.cancel()
++        rpcStateJob = null
++        rpcErrorJob?.cancel()
++        rpcErrorJob = null
++        rpc?.closeRPC()
++        rpc = null
++        lastSignature = null
++        lastStartEpochMs = null
++        _uiState.update {
++            it.copy(
++                connectionState = DiscordGatewayState.Idle,
++                isPresenceActive = false,
++            )
++        }
++    }
++
++    private fun nowEpochMs(): Long = Clock.System.now().toEpochMilliseconds()
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordRpcStorage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordRpcStorage.kt
+new file mode 100644
+index 00000000..b9fb026b
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/discord/DiscordRpcStorage.kt
+@@ -0,0 +1,10 @@
++package com.nuvio.app.features.discord
++
++internal expect object DiscordRpcStorage {
++    fun loadSettingsPayload(): String?
++    fun saveSettingsPayload(payload: String)
++    fun loadUserPayload(): String?
++    fun saveUserPayload(payload: String?)
++    fun loadToken(): String?
++    fun saveToken(token: String?)
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/ForkHomeRows.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/ForkHomeRows.kt
 new file mode 100644
@@ -405,6 +3156,136 @@ index b326c20e..91589cb9 100644
              VolumeBoosterRow()
          } else {
              EqualizerTab(state)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeDiscord.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeDiscord.kt
+new file mode 100644
+index 00000000..2d0c95bd
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeDiscord.kt
+@@ -0,0 +1,92 @@
++package com.nuvio.app.features.player
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.DisposableEffect
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.rememberUpdatedState
++import androidx.compose.runtime.snapshotFlow
++import com.nuvio.app.core.i18n.localizedSeasonEpisodeCode
++import com.nuvio.app.features.discord.DiscordPlaybackInfo
++import com.nuvio.app.features.discord.DiscordRpcConfig
++import com.nuvio.app.features.discord.DiscordRpcRepository
++import kotlinx.coroutines.flow.distinctUntilChanged
++
++private val imdbIdPattern = Regex("tt\\d{5,}")
++
++@Composable
++internal fun PlayerScreenRuntime.BindDiscordRpcEffects() {
++    val seasonNumber = activeSeasonNumber
++    val episodeNumber = activeEpisodeNumber
++    val episodeTitle = activeEpisodeTitle
++    val liveTv = isLiveTvPlayback
++    val subtitle = remember(seasonNumber, episodeNumber, episodeTitle, liveTv) {
++        buildDiscordSubtitle(
++            isLiveTv = liveTv,
++            seasonNumber = seasonNumber,
++            episodeNumber = episodeNumber,
++            episodeTitle = episodeTitle,
++        )
++    }
++    val currentSubtitle = rememberUpdatedState(subtitle)
++
++    LaunchedEffect(Unit) {
++        snapshotFlow { buildDiscordPlaybackInfo(currentSubtitle.value) }
++            .distinctUntilChanged()
++            .collect { info -> DiscordRpcRepository.updatePlayback(info) }
++    }
++
++    DisposableEffect(Unit) {
++        onDispose {
++            DiscordRpcRepository.clearPlayback()
++        }
++    }
++}
++
++private fun buildDiscordSubtitle(
++    isLiveTv: Boolean,
++    seasonNumber: Int?,
++    episodeNumber: Int?,
++    episodeTitle: String?,
++): String? {
++    if (isLiveTv || seasonNumber == null || episodeNumber == null) return null
++    val parts = buildList {
++        localizedSeasonEpisodeCode(seasonNumber, episodeNumber)?.let { add(it) }
++        episodeTitle?.takeIf { it.isNotBlank() }?.let { add(it) }
++    }
++    return parts.takeIf { it.isNotEmpty() }?.joinToString(" - ")
++}
++
++private fun PlayerScreenRuntime.buildDiscordPlaybackInfo(subtitle: String?): DiscordPlaybackInfo {
++    val snapshot = playbackSnapshot
++    val displayTitle = if (isLiveTvPlayback) {
++        activeStreamTitle.ifBlank { title }
++    } else {
++        title.ifBlank { activeStreamTitle }
++    }
++    val imdbId = if (isLiveTvPlayback) {
++        null
++    } else {
++        imdbIdPattern.find(parentMetaId)?.value ?: activeVideoId?.let { imdbIdPattern.find(it)?.value }
++    }
++    val artworkCandidates = if (isLiveTvPlayback) {
++        listOf(activeLogo, poster, background)
++    } else {
++        listOf(poster, background)
++    }.mapNotNull { it?.trim()?.takeIf(String::isNotEmpty) }
++    val artwork = artworkCandidates.firstOrNull { it.length <= DiscordRpcConfig.MAX_ARTWORK_URL_LENGTH && '?' !in it }
++        ?: imdbId?.let(DiscordRpcConfig::metahubPosterUrl)
++        ?: artworkCandidates.firstOrNull { it.length <= DiscordRpcConfig.MAX_ARTWORK_URL_LENGTH }
++
++    return DiscordPlaybackInfo(
++        title = displayTitle,
++        subtitle = subtitle,
++        artworkUrl = artwork,
++        isPlaying = snapshot.isPlaying,
++        isLoading = snapshot.isLoading,
++        positionMs = snapshot.positionMs,
++        durationMs = snapshot.durationMs,
++        isLive = isLiveTvPlayback,
++        imdbId = imdbId,
++    )
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
+index 06d106ca..0aac2e78 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
+@@ -351,6 +351,7 @@ internal fun PlayerScreenRuntime.BindPlayerRuntimeEffects() {
+     BindPlayerUiVisibilityEffects()
+     BindPlayerMetadataAndSkipEffects()
+     BindPartyEffects()
++    BindDiscordRpcEffects()
+ 
+     DisposableEffect(activeSourceUrl) {
+         val effectSourceUrl = activeSourceUrl
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
+index 46f0cc27..a8c72885 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
+@@ -49,6 +49,7 @@ internal class PlayerScreenRuntime(
+     val episodeTitle: String? get() = args.episodeTitle
+     val episodeThumbnail: String? get() = args.episodeThumbnail
+     val contentType: String? get() = args.contentType
++    val isLiveTvPlayback: Boolean get() = contentType == "live"
+     val videoId: String? get() = args.videoId
+     val parentMetaId: String get() = args.parentMetaId
+     val parentMetaType: String get() = args.parentMetaType
+@@ -129,6 +130,7 @@ internal class PlayerScreenRuntime(
+     var activeEpisodeThumbnail by mutableStateOf(episodeThumbnail)
+     var activePauseDescription by mutableStateOf(pauseDescription)
+     var activeVideoId by mutableStateOf(videoId)
++    var activeLogo by mutableStateOf(logo)
+     var activeInitialPositionMs by mutableStateOf(initialPositionMs)
+     var activeInitialProgressFraction by mutableStateOf(initialProgressFraction)
+     var shouldPlay by mutableStateOf(true)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeTrackActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeTrackActions.kt
 index 47bac957..0570ad21 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeTrackActions.kt
@@ -631,6 +3512,606 @@ index 6418963d..05e91bbf 100644
      item {
          SettingsSection(
              title = stringResource(Res.string.settings_advanced_section_cache),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContentDiscoverySettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContentDiscoverySettingsPage.kt
+index 30a12fc8..200ccccf 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContentDiscoverySettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContentDiscoverySettingsPage.kt
+@@ -5,7 +5,10 @@ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.remember
+ import androidx.lifecycle.compose.collectAsStateWithLifecycle
+ import com.nuvio.app.core.build.AppFeaturePolicy
++import com.nuvio.app.features.discord.DiscordRpcPlatform
+ import com.nuvio.app.features.search.SearchHistoryRepository
++import nuvio.composeapp.generated.resources.compose_settings_page_discord_rpc
++import nuvio.composeapp.generated.resources.settings_integrations_discord_description
+ import nuvio.composeapp.generated.resources.Res
+ import nuvio.composeapp.generated.resources.compose_settings_page_addons
+ import nuvio.composeapp.generated.resources.compose_settings_page_live_tv
+@@ -33,6 +36,7 @@ internal fun LazyListScope.contentDiscoveryContent(
+     onMediaServersClick: () -> Unit,
+     onLiveTvClick: () -> Unit = {},
+     onCloudStreamClick: () -> Unit = {},
++    onDiscordClick: () -> Unit = {},
+ ) {
+     item {
+         DxWatchedTitlesSettingsSection(isTablet = isTablet) // dx.bi watched titles hook
+@@ -89,6 +93,14 @@ internal fun LazyListScope.contentDiscoveryContent(
+                     isTablet = isTablet,
+                     onClick = onLiveTvClick,
+                 )
++                if (DiscordRpcPlatform.isSupported) {
++                    SettingsNavigationRow(
++                        title = stringResource(Res.string.compose_settings_page_discord_rpc),
++                        description = stringResource(Res.string.settings_integrations_discord_description),
++                        isTablet = isTablet,
++                        onClick = onDiscordClick,
++                    )
++                }
+                 if (showPluginsEntry) {
+                     SettingsNavigationRow(
+                         title = stringResource(Res.string.compose_settings_page_plugins),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DiscordRpcSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DiscordRpcSettingsPage.kt
+new file mode 100644
+index 00000000..947bb303
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DiscordRpcSettingsPage.kt
+@@ -0,0 +1,556 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.WindowInsets
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.safeDrawing
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.layout.windowInsetsPadding
++import androidx.compose.foundation.lazy.LazyListScope
++import androidx.compose.foundation.shape.CircleShape
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.rounded.Close
++import androidx.compose.material3.Button
++import androidx.compose.material3.CircularProgressIndicator
++import androidx.compose.material3.Icon
++import androidx.compose.material3.IconButton
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.OutlinedButton
++import androidx.compose.material3.OutlinedTextField
++import androidx.compose.material3.Surface
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.saveable.rememberSaveable
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.layout.ContentScale
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.input.KeyboardType
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.window.Dialog
++import androidx.compose.ui.window.DialogProperties
++import androidx.compose.foundation.text.KeyboardOptions
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import coil3.compose.AsyncImage
++import com.nuvio.app.core.ui.Chip
++import com.nuvio.app.features.discord.DiscordGatewayState
++import com.nuvio.app.features.discord.DiscordLoginWebView
++import com.nuvio.app.features.discord.DiscordRpcActivityType
++import com.nuvio.app.features.discord.DiscordRpcRepository
++import com.nuvio.app.features.discord.DiscordRpcStatus
++import com.nuvio.app.features.discord.DiscordRpcUiState
++import com.nuvio.app.features.player.PlayerSettingsRepository
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.discord_rpc_activity_type_description
++import nuvio.composeapp.generated.resources.discord_rpc_activity_type_title
++import nuvio.composeapp.generated.resources.discord_rpc_application_id_description
++import nuvio.composeapp.generated.resources.discord_rpc_application_id_label
++import nuvio.composeapp.generated.resources.discord_rpc_application_id_title
++import nuvio.composeapp.generated.resources.discord_rpc_close
++import nuvio.composeapp.generated.resources.discord_rpc_enable_description
++import nuvio.composeapp.generated.resources.discord_rpc_enable_title
++import nuvio.composeapp.generated.resources.discord_rpc_hide_on_pause_description
++import nuvio.composeapp.generated.resources.discord_rpc_hide_on_pause_title
++import nuvio.composeapp.generated.resources.discord_rpc_last_error
++import nuvio.composeapp.generated.resources.discord_rpc_logged_in_as
++import nuvio.composeapp.generated.resources.discord_rpc_logging_in
++import nuvio.composeapp.generated.resources.discord_rpc_login_button
++import nuvio.composeapp.generated.resources.discord_rpc_login_description
++import nuvio.composeapp.generated.resources.discord_rpc_login_failed
++import nuvio.composeapp.generated.resources.discord_rpc_login_title
++import nuvio.composeapp.generated.resources.discord_rpc_logout
++import nuvio.composeapp.generated.resources.discord_rpc_private_viewing_notice
++import nuvio.composeapp.generated.resources.discord_rpc_save
++import nuvio.composeapp.generated.resources.discord_rpc_section_account
++import nuvio.composeapp.generated.resources.discord_rpc_section_advanced
++import nuvio.composeapp.generated.resources.discord_rpc_section_display
++import nuvio.composeapp.generated.resources.discord_rpc_section_presence
++import nuvio.composeapp.generated.resources.discord_rpc_show_imdb_button_description
++import nuvio.composeapp.generated.resources.discord_rpc_show_imdb_button_title
++import nuvio.composeapp.generated.resources.discord_rpc_show_playback_state_description
++import nuvio.composeapp.generated.resources.discord_rpc_show_playback_state_title
++import nuvio.composeapp.generated.resources.discord_rpc_show_poster_description
++import nuvio.composeapp.generated.resources.discord_rpc_show_poster_title
++import nuvio.composeapp.generated.resources.discord_rpc_show_timestamps_description
++import nuvio.composeapp.generated.resources.discord_rpc_show_timestamps_title
++import nuvio.composeapp.generated.resources.discord_rpc_show_title_as_name_description
++import nuvio.composeapp.generated.resources.discord_rpc_show_title_as_name_title
++import nuvio.composeapp.generated.resources.discord_rpc_status_connecting
++import nuvio.composeapp.generated.resources.discord_rpc_status_description
++import nuvio.composeapp.generated.resources.discord_rpc_status_failed
++import nuvio.composeapp.generated.resources.discord_rpc_status_presence_active
++import nuvio.composeapp.generated.resources.discord_rpc_status_title
++import nuvio.composeapp.generated.resources.discord_rpc_status_waiting
++import nuvio.composeapp.generated.resources.discord_rpc_test_active
++import nuvio.composeapp.generated.resources.discord_rpc_test_button
++import nuvio.composeapp.generated.resources.discord_rpc_tos_notice
++import org.jetbrains.compose.resources.stringResource
++
++internal fun LazyListScope.discordRpcSettingsContent(
++    isTablet: Boolean,
++) {
++    item {
++        DiscordRpcAccountSection(isTablet = isTablet)
++    }
++    item {
++        DiscordRpcPresenceSection(isTablet = isTablet)
++    }
++    item {
++        DiscordRpcDisplaySection(isTablet = isTablet)
++    }
++    item {
++        DiscordRpcAdvancedSection(isTablet = isTablet)
++    }
++}
++
++@Composable
++private fun rememberDiscordRpcUiState(): DiscordRpcUiState {
++    remember { DiscordRpcRepository.ensureLoaded() }
++    val uiState by DiscordRpcRepository.uiState.collectAsStateWithLifecycle()
++    return uiState
++}
++
++@Composable
++private fun DiscordRpcAccountSection(
++    isTablet: Boolean,
++) {
++    val uiState = rememberDiscordRpcUiState()
++    var showLogin by rememberSaveable { mutableStateOf(false) }
++
++    SettingsSection(
++        title = stringResource(Res.string.discord_rpc_section_account),
++        isTablet = isTablet,
++    ) {
++        SettingsGroup(isTablet = isTablet) {
++            DiscordAccountRow(
++                isTablet = isTablet,
++                uiState = uiState,
++                onLoginClick = { showLogin = true },
++                onLogoutClick = DiscordRpcRepository::logout,
++            )
++        }
++    }
++
++    if (showLogin) {
++        DiscordLoginDialog(
++            onDismiss = { showLogin = false },
++            onTokenReceived = { token ->
++                showLogin = false
++                DiscordRpcRepository.login(token)
++            },
++        )
++    }
++}
++
++@Composable
++private fun DiscordRpcPresenceSection(
++    isTablet: Boolean,
++) {
++    val uiState = rememberDiscordRpcUiState()
++    val playerSettings by PlayerSettingsRepository.uiState.collectAsStateWithLifecycle()
++    val settings = uiState.settings
++
++    SettingsSection(
++        title = stringResource(Res.string.discord_rpc_section_presence),
++        isTablet = isTablet,
++    ) {
++        SettingsGroup(isTablet = isTablet) {
++            SettingsSwitchRow(
++                title = stringResource(Res.string.discord_rpc_enable_title),
++                description = if (playerSettings.privateViewingEnabled) {
++                    stringResource(Res.string.discord_rpc_private_viewing_notice)
++                } else {
++                    stringResource(Res.string.discord_rpc_enable_description)
++                },
++                checked = settings.enabled,
++                enabled = uiState.isLoggedIn,
++                isTablet = isTablet,
++                onCheckedChange = DiscordRpcRepository::setEnabled,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsChipRow(
++                title = stringResource(Res.string.discord_rpc_activity_type_title),
++                description = stringResource(Res.string.discord_rpc_activity_type_description),
++                isTablet = isTablet,
++            ) {
++                val selectedType = DiscordRpcActivityType.fromValue(settings.activityType)
++                DiscordRpcActivityType.entries.forEach { type ->
++                    Chip(
++                        label = stringResource(type.labelRes),
++                        selected = selectedType == type,
++                        onClick = { DiscordRpcRepository.setActivityType(type) },
++                    )
++                }
++            }
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsChipRow(
++                title = stringResource(Res.string.discord_rpc_status_title),
++                description = stringResource(Res.string.discord_rpc_status_description),
++                isTablet = isTablet,
++            ) {
++                val selectedStatus = DiscordRpcStatus.fromValue(settings.status)
++                DiscordRpcStatus.entries.forEach { status ->
++                    Chip(
++                        label = stringResource(status.labelRes),
++                        selected = selectedStatus == status,
++                        onClick = { DiscordRpcRepository.setStatus(status) },
++                    )
++                }
++            }
++        }
++    }
++}
++
++@Composable
++private fun DiscordRpcDisplaySection(
++    isTablet: Boolean,
++) {
++    val settings = rememberDiscordRpcUiState().settings
++
++    SettingsSection(
++        title = stringResource(Res.string.discord_rpc_section_display),
++        isTablet = isTablet,
++    ) {
++        SettingsGroup(isTablet = isTablet) {
++            SettingsSwitchRow(
++                title = stringResource(Res.string.discord_rpc_show_title_as_name_title),
++                description = stringResource(Res.string.discord_rpc_show_title_as_name_description),
++                checked = settings.showTitleAsName,
++                isTablet = isTablet,
++                onCheckedChange = DiscordRpcRepository::setShowTitleAsName,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = stringResource(Res.string.discord_rpc_show_poster_title),
++                description = stringResource(Res.string.discord_rpc_show_poster_description),
++                checked = settings.showPoster,
++                isTablet = isTablet,
++                onCheckedChange = DiscordRpcRepository::setShowPoster,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = stringResource(Res.string.discord_rpc_show_playback_state_title),
++                description = stringResource(Res.string.discord_rpc_show_playback_state_description),
++                checked = settings.showPlaybackState,
++                isTablet = isTablet,
++                onCheckedChange = DiscordRpcRepository::setShowPlaybackState,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = stringResource(Res.string.discord_rpc_show_timestamps_title),
++                description = stringResource(Res.string.discord_rpc_show_timestamps_description),
++                checked = settings.showTimestamps,
++                isTablet = isTablet,
++                onCheckedChange = DiscordRpcRepository::setShowTimestamps,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = stringResource(Res.string.discord_rpc_hide_on_pause_title),
++                description = stringResource(Res.string.discord_rpc_hide_on_pause_description),
++                checked = settings.hideOnPause,
++                isTablet = isTablet,
++                onCheckedChange = DiscordRpcRepository::setHideOnPause,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = stringResource(Res.string.discord_rpc_show_imdb_button_title),
++                description = stringResource(Res.string.discord_rpc_show_imdb_button_description),
++                checked = settings.showImdbButton,
++                isTablet = isTablet,
++                onCheckedChange = DiscordRpcRepository::setShowImdbButton,
++            )
++        }
++    }
++}
++
++@Composable
++private fun DiscordRpcAdvancedSection(
++    isTablet: Boolean,
++) {
++    val settings = rememberDiscordRpcUiState().settings
++
++    SettingsSection(
++        title = stringResource(Res.string.discord_rpc_section_advanced),
++        isTablet = isTablet,
++    ) {
++        SettingsGroup(isTablet = isTablet) {
++            DiscordApplicationIdRow(
++                isTablet = isTablet,
++                value = settings.applicationId,
++                onCommitted = DiscordRpcRepository::setApplicationId,
++            )
++        }
++    }
++}
++
++@Composable
++private fun DiscordAccountRow(
++    isTablet: Boolean,
++    uiState: DiscordRpcUiState,
++    onLoginClick: () -> Unit,
++    onLogoutClick: () -> Unit,
++) {
++    val horizontalPadding = if (isTablet) 20.dp else 16.dp
++    val verticalPadding = if (isTablet) 16.dp else 14.dp
++    val user = uiState.user
++
++    Column(
++        modifier = Modifier
++            .fillMaxWidth()
++            .padding(horizontal = horizontalPadding, vertical = verticalPadding),
++        verticalArrangement = Arrangement.spacedBy(12.dp),
++    ) {
++        if (uiState.isLoggedIn) {
++            Row(
++                modifier = Modifier.fillMaxWidth(),
++                verticalAlignment = Alignment.CenterVertically,
++            ) {
++                val avatarUrl = user?.avatarUrl
++                if (avatarUrl != null) {
++                    AsyncImage(
++                        model = avatarUrl,
++                        contentDescription = null,
++                        contentScale = ContentScale.Crop,
++                        modifier = Modifier
++                            .size(44.dp)
++                            .clip(CircleShape),
++                    )
++                    Spacer(modifier = Modifier.width(12.dp))
++                }
++                Column(
++                    modifier = Modifier.weight(1f),
++                    verticalArrangement = Arrangement.spacedBy(2.dp),
++                ) {
++                    Text(
++                        text = stringResource(
++                            Res.string.discord_rpc_logged_in_as,
++                            user?.displayName.orEmpty(),
++                        ),
++                        style = MaterialTheme.typography.bodyLarge,
++                        color = MaterialTheme.colorScheme.onSurface,
++                        fontWeight = FontWeight.Medium,
++                        maxLines = 1,
++                        overflow = TextOverflow.Ellipsis,
++                    )
++                    user?.let { account -> account.username?.takeIf { it.isNotBlank() && it != account.displayName } }?.let { username ->
++                        Text(
++                            text = "@$username",
++                            style = MaterialTheme.typography.bodyMedium,
++                            color = MaterialTheme.colorScheme.onSurfaceVariant,
++                            maxLines = 1,
++                            overflow = TextOverflow.Ellipsis,
++                        )
++                    }
++                    Text(
++                        text = discordConnectionLabel(uiState),
++                        style = MaterialTheme.typography.bodySmall,
++                        color = if (uiState.connectionState == DiscordGatewayState.Failed) {
++                            MaterialTheme.colorScheme.error
++                        } else {
++                            MaterialTheme.colorScheme.onSurfaceVariant
++                        },
++                    )
++                }
++                Spacer(modifier = Modifier.width(12.dp))
++                OutlinedButton(onClick = onLogoutClick) {
++                    Text(stringResource(Res.string.discord_rpc_logout))
++                }
++            }
++            uiState.lastError?.takeIf { it.isNotBlank() }?.let { error ->
++                Text(
++                    text = stringResource(Res.string.discord_rpc_last_error, error),
++                    style = MaterialTheme.typography.bodySmall,
++                    color = MaterialTheme.colorScheme.error,
++                )
++            }
++            OutlinedButton(
++                onClick = DiscordRpcRepository::sendTestPresence,
++                enabled = !uiState.isTestActive,
++            ) {
++                Text(stringResource(Res.string.discord_rpc_test_button))
++            }
++            if (uiState.isTestActive) {
++                Text(
++                    text = stringResource(Res.string.discord_rpc_test_active),
++                    style = MaterialTheme.typography.bodySmall,
++                    color = MaterialTheme.colorScheme.onSurfaceVariant,
++                )
++            }
++        } else {
++            Text(
++                text = stringResource(Res.string.discord_rpc_login_description),
++                style = MaterialTheme.typography.bodyMedium,
++                color = MaterialTheme.colorScheme.onSurfaceVariant,
++            )
++            Row(
++                modifier = Modifier.fillMaxWidth(),
++                horizontalArrangement = Arrangement.spacedBy(12.dp),
++                verticalAlignment = Alignment.CenterVertically,
++            ) {
++                Button(
++                    onClick = onLoginClick,
++                    enabled = !uiState.isLoggingIn,
++                ) {
++                    Text(stringResource(Res.string.discord_rpc_login_button))
++                }
++                if (uiState.isLoggingIn) {
++                    CircularProgressIndicator(
++                        modifier = Modifier.size(20.dp),
++                        strokeWidth = 2.dp,
++                    )
++                    Text(
++                        text = stringResource(Res.string.discord_rpc_logging_in),
++                        style = MaterialTheme.typography.bodySmall,
++                        color = MaterialTheme.colorScheme.onSurfaceVariant,
++                    )
++                }
++            }
++            if (uiState.tokenExpired) {
++                Text(
++                    text = stringResource(Res.string.discord_rpc_login_failed),
++                    style = MaterialTheme.typography.bodySmall,
++                    color = MaterialTheme.colorScheme.error,
++                )
++            }
++        }
++        Text(
++            text = stringResource(Res.string.discord_rpc_tos_notice),
++            style = MaterialTheme.typography.bodySmall,
++            color = MaterialTheme.colorScheme.onSurfaceVariant,
++        )
++    }
++}
++
++@Composable
++private fun discordConnectionLabel(uiState: DiscordRpcUiState): String =
++    when (uiState.connectionState) {
++        DiscordGatewayState.Ready -> stringResource(Res.string.discord_rpc_status_presence_active)
++        DiscordGatewayState.Connecting,
++        DiscordGatewayState.Reconnecting,
++        -> stringResource(Res.string.discord_rpc_status_connecting)
++        DiscordGatewayState.Failed,
++        DiscordGatewayState.AuthenticationFailed,
++        -> stringResource(Res.string.discord_rpc_status_failed)
++        DiscordGatewayState.Idle,
++        DiscordGatewayState.Closed,
++        -> stringResource(Res.string.discord_rpc_status_waiting)
++    }
++
++@Composable
++private fun DiscordApplicationIdRow(
++    isTablet: Boolean,
++    value: String,
++    onCommitted: (String) -> Unit,
++) {
++    val horizontalPadding = if (isTablet) 20.dp else 16.dp
++    val verticalPadding = if (isTablet) 16.dp else 14.dp
++    var draft by rememberSaveable(value) { mutableStateOf(value) }
++    val normalizedDraft = draft.trim().filter(Char::isDigit)
++
++    Column(
++        modifier = Modifier
++            .fillMaxWidth()
++            .padding(horizontal = horizontalPadding, vertical = verticalPadding),
++        verticalArrangement = Arrangement.spacedBy(10.dp),
++    ) {
++        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
++            Text(
++                text = stringResource(Res.string.discord_rpc_application_id_title),
++                style = MaterialTheme.typography.bodyLarge,
++                color = MaterialTheme.colorScheme.onSurface,
++                fontWeight = FontWeight.Medium,
++            )
++            Text(
++                text = stringResource(Res.string.discord_rpc_application_id_description),
++                style = MaterialTheme.typography.bodyMedium,
++                color = MaterialTheme.colorScheme.onSurfaceVariant,
++            )
++        }
++
++        OutlinedTextField(
++            value = draft,
++            onValueChange = { draft = it },
++            modifier = Modifier.fillMaxWidth(),
++            singleLine = true,
++            label = { Text(stringResource(Res.string.discord_rpc_application_id_label)) },
++            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
++        )
++
++        Row(modifier = Modifier.fillMaxWidth()) {
++            Button(
++                onClick = {
++                    draft = normalizedDraft
++                    onCommitted(normalizedDraft)
++                },
++                enabled = normalizedDraft != value,
++            ) {
++                Text(stringResource(Res.string.discord_rpc_save))
++            }
++        }
++    }
++}
++
++@Composable
++private fun DiscordLoginDialog(
++    onDismiss: () -> Unit,
++    onTokenReceived: (String) -> Unit,
++) {
++    Dialog(
++        onDismissRequest = onDismiss,
++        properties = DialogProperties(usePlatformDefaultWidth = false),
++    ) {
++        Surface(
++            modifier = Modifier.fillMaxSize(),
++            color = MaterialTheme.colorScheme.background,
++        ) {
++            Column(
++                modifier = Modifier
++                    .fillMaxSize()
++                    .windowInsetsPadding(WindowInsets.safeDrawing),
++            ) {
++                Row(
++                    modifier = Modifier
++                        .fillMaxWidth()
++                        .padding(horizontal = 4.dp, vertical = 4.dp),
++                    verticalAlignment = Alignment.CenterVertically,
++                ) {
++                    IconButton(onClick = onDismiss) {
++                        Icon(
++                            imageVector = Icons.Rounded.Close,
++                            contentDescription = stringResource(Res.string.discord_rpc_close),
++                        )
++                    }
++                    Text(
++                        text = stringResource(Res.string.discord_rpc_login_title),
++                        style = MaterialTheme.typography.titleMedium,
++                        color = MaterialTheme.colorScheme.onSurface,
++                        fontWeight = FontWeight.SemiBold,
++                    )
++                }
++                Box(
++                    modifier = Modifier
++                        .fillMaxWidth()
++                        .weight(1f),
++                ) {
++                    DiscordLoginWebView(
++                        modifier = Modifier.fillMaxSize(),
++                        onLoginCompleted = onTokenReceived,
++                    )
++                }
++            }
++        }
++    }
++}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DohSettingsRow.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DohSettingsRow.kt
 new file mode 100644
 index 00000000..4f1666cd
@@ -686,12 +4167,79 @@ index 00000000..4f1666cd
 +        }
 +    }
 +}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkAboutSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkAboutSettings.kt
+new file mode 100644
+index 00000000..80078a4c
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkAboutSettings.kt
+@@ -0,0 +1,61 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.material3.AlertDialog
++import androidx.compose.material3.Text
++import androidx.compose.material3.TextButton
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import coil3.SingletonImageLoader
++import coil3.compose.LocalPlatformContext
++
++private val forkChanges = listOf(
++    "Native seek-bar thumbnails and a shared thumbnail cache",
++    "CloudStream plugins (.cs3) in the full build",
++    "Sleep timer, swipe to seek, subtitles start off, subtitle shadow",
++    "Home rows: Up next tonight, Airing this week, Finish a series",
++    "Episode rating map on series pages (needs episode ratings on)",
++    "Nuvio Read card for the series overview",
++    "TheIntroDB skip segments when no IntroDB address is set",
++    "Discord presence (Settings > Content discovery > Discord)",
++    "Calendar weeks start on Monday, DNS over HTTPS option",
++)
++
++@Composable
++internal fun ForkAboutSettingsSection(isTablet: Boolean) {
++    var showNews by remember { mutableStateOf(false) }
++    var cacheMessage by remember { mutableStateOf<String?>(null) }
++    val context = LocalPlatformContext.current
++    SettingsSection(title = "Performance and fork news", isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            SettingsNavigationRow(
++                title = "Clear image cache",
++                description = cacheMessage ?: "Free space used by posters and backdrops. They load again when needed.",
++                isTablet = isTablet,
++                onClick = {
++                    val loader = SingletonImageLoader.get(context)
++                    runCatching { loader.memoryCache?.clear() }
++                    runCatching { loader.diskCache?.clear() }
++                    cacheMessage = "Image cache cleared"
++                },
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsNavigationRow(
++                title = "What's new in this build",
++                description = "Features added by this fork",
++                isTablet = isTablet,
++                onClick = { showNews = true },
++            )
++        }
++    }
++    if (showNews) {
++        AlertDialog(
++            onDismissRequest = { showNews = false },
++            confirmButton = { TextButton(onClick = { showNews = false }) { Text("Close") } },
++            title = { Text("What's new") },
++            text = { Text(forkChanges.joinToString("\n") { "- $it" }) },
++        )
++    }
++}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHomeRowsSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHomeRowsSettings.kt
 new file mode 100644
-index 00000000..63c6e491
+index 00000000..3e842a5e
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHomeRowsSettings.kt
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,75 @@
 +package com.nuvio.app.features.settings
 +
 +import androidx.compose.runtime.Composable
@@ -705,10 +4253,16 @@ index 00000000..63c6e491
 +        ForkPrefs.homeUpNextTonight.ensureLoaded()
 +        ForkPrefs.homeAiringWeek.ensureLoaded()
 +        ForkPrefs.homeFinishSeries.ensureLoaded()
++        ForkPrefs.ratingMap.ensureLoaded()
++        ForkPrefs.nuvioRead.ensureLoaded()
++        ForkPrefs.fillerGuide.ensureLoaded()
 +    }
 +    val tonight by ForkPrefs.homeUpNextTonight.value.collectAsStateWithLifecycle()
 +    val week by ForkPrefs.homeAiringWeek.value.collectAsStateWithLifecycle()
 +    val finish by ForkPrefs.homeFinishSeries.value.collectAsStateWithLifecycle()
++    val ratingMap by ForkPrefs.ratingMap.value.collectAsStateWithLifecycle()
++    val fillerGuide by ForkPrefs.fillerGuide.value.collectAsStateWithLifecycle()
++    val nuvioRead by ForkPrefs.nuvioRead.value.collectAsStateWithLifecycle()
 +    SettingsSection(title = "Extra home rows", isTablet = isTablet) {
 +        SettingsGroup(isTablet = isTablet) {
 +            SettingsSwitchRow(
@@ -733,6 +4287,30 @@ index 00000000..63c6e491
 +                checked = finish,
 +                isTablet = isTablet,
 +                onCheckedChange = ForkPrefs.homeFinishSeries::set,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Episode rating map",
++                description = "Show a season grid of episode ratings on series pages.",
++                checked = ratingMap,
++                isTablet = isTablet,
++                onCheckedChange = ForkPrefs.ratingMap::set,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Anime filler guide",
++                description = "List filler and recap episodes on anime pages (Jikan).",
++                checked = fillerGuide,
++                isTablet = isTablet,
++                onCheckedChange = ForkPrefs.fillerGuide::set,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Nuvio Read card",
++                description = "Show the overview, year, runtime and ratings in one rounded card.",
++                checked = nuvioRead,
++                isTablet = isTablet,
++                onCheckedChange = ForkPrefs.nuvioRead::set,
 +            )
 +        }
 +    }
@@ -790,10 +4368,10 @@ index 00000000..b1662a8e
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
 new file mode 100644
-index 00000000..ddbc8ea7
+index 00000000..5ff4acb5
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,43 @@
 +package com.nuvio.app.features.settings
 +
 +import com.nuvio.app.core.storage.AppFileCache
@@ -831,18 +4409,22 @@ index 00000000..ddbc8ea7
 +    val homeUpNextTonight = ForkBoolPref("settings/home_up_next_tonight", true)
 +    val homeAiringWeek = ForkBoolPref("settings/home_airing_week", true)
 +    val homeFinishSeries = ForkBoolPref("settings/home_finish_series", true)
++    val ratingMap = ForkBoolPref("settings/rating_map", true)
++    val fillerGuide = ForkBoolPref("settings/filler_guide", true)
++    val nuvioRead = ForkBoolPref("settings/nuvio_read", false)
 +    val subtitleShadow = ForkBoolPref("settings/subtitle_shadow", false)
 +    val subtitlesStartOff = ForkBoolPref("settings/subtitles_start_off", false)
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/HomescreenSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/HomescreenSettingsPage.kt
-index aa8b5778..29307d1e 100644
+index aa8b5778..deddf8d6 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/HomescreenSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/HomescreenSettingsPage.kt
-@@ -123,6 +123,7 @@ internal fun LazyListScope.homescreenSettingsContent(
+@@ -123,6 +123,8 @@ internal fun LazyListScope.homescreenSettingsContent(
              }
          }
      }
 +    item { ForkHomeRowsSettingsSection(isTablet = isTablet) } // fork home rows hook
++    item { ForkAboutSettingsSection(isTablet = isTablet) } // fork about hook
      item {
          val catalogOnlyItems = items.filter { !it.isCollection }
          if (heroEnabled && catalogOnlyItems.isNotEmpty()) {
@@ -858,3 +4440,300 @@ index 69c3b040..eafdfae8 100644
  
          ConnectionFitSettingsSection(isTablet = isTablet) // Nuvio fork: connection-speed fit
  
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
+index 65f8797e..025e8e53 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
+@@ -16,6 +16,7 @@ import nuvio.composeapp.generated.resources.compose_settings_page_advanced
+ import nuvio.composeapp.generated.resources.compose_settings_page_appearance
+ import nuvio.composeapp.generated.resources.compose_settings_page_content_discovery
+ import nuvio.composeapp.generated.resources.compose_settings_page_debrid
++import nuvio.composeapp.generated.resources.compose_settings_page_discord_rpc
+ import nuvio.composeapp.generated.resources.compose_settings_page_continue_watching
+ import nuvio.composeapp.generated.resources.extra_settings_title
+ import nuvio.composeapp.generated.resources.compose_settings_page_homescreen
+@@ -135,6 +136,11 @@ internal enum class SettingsPage(
+         category = SettingsCategory.General,
+         parentPage = ContentDiscovery,
+     ),
++    DiscordRpc(
++        titleRes = Res.string.compose_settings_page_discord_rpc,
++        category = SettingsCategory.General,
++        parentPage = ContentDiscovery,
++    ),
+     LiveTv(
+         titleRes = Res.string.compose_settings_page_live_tv,
+         category = SettingsCategory.General,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
+index b7f29725..51415bd3 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
+@@ -824,6 +824,7 @@ private fun MobileSettingsScreen(
+                     onMediaServersClick = { onPageChange(SettingsPage.MediaServers) },
+                     onLiveTvClick = { onPageChange(SettingsPage.LiveTv) },
+                     onCloudStreamClick = { onPageChange(SettingsPage.CloudStream) },
++                    onDiscordClick = { onPageChange(SettingsPage.DiscordRpc) },
+                 )
+                 SettingsPage.Addons -> addonsSettingsContent()
+                 SettingsPage.MediaServers -> mediaServersSettingsContent(
+@@ -831,6 +832,7 @@ private fun MobileSettingsScreen(
+                     onServerClick = { onPageChange(SettingsPage.MediaServer) },
+                 )
+                 SettingsPage.LiveTv -> liveTvSettingsContent(isTablet = false)
++                SettingsPage.DiscordRpc -> discordRpcSettingsContent(isTablet = false)
+                 SettingsPage.MediaServer -> mediaServerSettingsContent(
+                     isTablet = false,
+                     onBack = onNavigateBack,
+@@ -1273,6 +1275,7 @@ private fun TabletSettingsScreen(
+                         onMediaServersClick = { openInlinePage(SettingsPage.MediaServers) },
+                         onLiveTvClick = { openInlinePage(SettingsPage.LiveTv) },
+                         onCloudStreamClick = { openInlinePage(SettingsPage.CloudStream) },
++                        onDiscordClick = { openInlinePage(SettingsPage.DiscordRpc) },
+                     )
+                     SettingsPage.Addons -> addonsSettingsContent()
+                     SettingsPage.MediaServers -> mediaServersSettingsContent(
+@@ -1280,6 +1283,7 @@ private fun TabletSettingsScreen(
+                         onServerClick = { openInlinePage(SettingsPage.MediaServer) },
+                     )
+                     SettingsPage.LiveTv -> liveTvSettingsContent(isTablet = true)
++                    SettingsPage.DiscordRpc -> discordRpcSettingsContent(isTablet = true)
+                     SettingsPage.MediaServer -> mediaServerSettingsContent(
+                         isTablet = true,
+                         onBack = onNavigateBack,
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/discord/DiscordRpcPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/discord/DiscordRpcPlatform.ios.kt
+new file mode 100644
+index 00000000..f5ba80a3
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/discord/DiscordRpcPlatform.ios.kt
+@@ -0,0 +1,113 @@
++package com.nuvio.app.features.discord
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.DisposableEffect
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.rememberUpdatedState
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.viewinterop.UIKitView
++import io.ktor.client.HttpClient
++import io.ktor.client.engine.darwin.Darwin
++import io.ktor.client.plugins.websocket.WebSockets
++import kotlinx.cinterop.ExperimentalForeignApi
++import kotlinx.cinterop.readValue
++import platform.CoreGraphics.CGRectZero
++import kotlinx.coroutines.delay
++import platform.Foundation.NSDate
++import platform.Foundation.NSURL
++import platform.Foundation.NSURLRequest
++import platform.Foundation.distantPast
++import platform.WebKit.WKWebView
++import platform.WebKit.WKWebViewConfiguration
++import platform.WebKit.WKWebsiteDataStore
++import platform.darwin.dispatch_async
++import platform.darwin.dispatch_get_main_queue
++
++private const val TOKEN_READER_SCRIPT =
++    "(function(){try{var i=document.createElement('iframe');i.style.display='none';document.body.appendChild(i);var t=i.contentWindow.localStorage.getItem('token');i.remove();return t?JSON.parse(t):null;}catch(e){return null;}})()"
++
++private const val DESKTOP_SAFARI_USER_AGENT =
++    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
++
++private const val TOKEN_POLL_INTERVAL_MS = 750L
++
++internal actual object DiscordRpcPlatform {
++    actual val isSupported: Boolean = true
++
++    actual fun clearLoginSession() {
++        dispatch_async(dispatch_get_main_queue()) {
++            WKWebsiteDataStore.defaultDataStore().removeDataOfTypes(
++                dataTypes = WKWebsiteDataStore.allWebsiteDataTypes(),
++                modifiedSince = NSDate.distantPast,
++                completionHandler = {},
++            )
++        }
++    }
++}
++
++internal actual fun createDiscordGatewayHttpClient(): HttpClient = HttpClient(Darwin) {
++    install(WebSockets)
++}
++
++@OptIn(ExperimentalForeignApi::class)
++@Composable
++internal actual fun DiscordLoginWebView(
++    modifier: Modifier,
++    onLoginCompleted: (String) -> Unit,
++) {
++    val currentOnLoginCompleted = rememberUpdatedState(onLoginCompleted)
++    val webView = remember {
++        WKWebView(
++            frame = CGRectZero.readValue(),
++            configuration = WKWebViewConfiguration().apply {
++                websiteDataStore = WKWebsiteDataStore.defaultDataStore()
++            },
++        ).apply {
++            customUserAgent = DESKTOP_SAFARI_USER_AGENT
++            NSURL.URLWithString(DiscordRpcConfig.LOGIN_URL)?.let { url ->
++                loadRequest(NSURLRequest.requestWithURL(url))
++            }
++        }
++    }
++
++    LaunchedEffect(webView) {
++        var delivered = false
++        while (!delivered) {
++            delay(TOKEN_POLL_INTERVAL_MS)
++            if (!webView.isSignedInRoute()) continue
++            var token: String? = null
++            var done = false
++            webView.evaluateJavaScript(TOKEN_READER_SCRIPT) { result, _ ->
++                token = (result as? String)?.trim()?.removeSurrounding("\"")
++                    ?.takeIf { it.isNotBlank() && it != "null" }
++                done = true
++            }
++            while (!done) delay(50)
++            token?.let {
++                delivered = true
++                webView.setHidden(true)
++                currentOnLoginCompleted.value(it)
++            }
++        }
++    }
++
++    DisposableEffect(webView) {
++        onDispose {
++            webView.stopLoading()
++        }
++    }
++
++    UIKitView(
++        factory = { webView },
++        modifier = modifier,
++    )
++}
++
++private fun WKWebView.isSignedInRoute(): Boolean {
++    val url = URL ?: return false
++    val host = url.host.orEmpty()
++    val path = url.path.orEmpty()
++    if (!host.endsWith("discord.com")) return false
++    return !(path.isBlank() || path == "/" || path.startsWith("/login") || path.startsWith("/register"))
++}
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/discord/DiscordRpcStorage.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/discord/DiscordRpcStorage.ios.kt
+new file mode 100644
+index 00000000..71df0a14
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/discord/DiscordRpcStorage.ios.kt
+@@ -0,0 +1,112 @@
++package com.nuvio.app.features.discord
++
++import kotlinx.cinterop.ExperimentalForeignApi
++import kotlinx.cinterop.alloc
++import kotlinx.cinterop.get
++import kotlinx.cinterop.memScoped
++import kotlinx.cinterop.ptr
++import kotlinx.cinterop.refTo
++import kotlinx.cinterop.reinterpret
++import kotlinx.cinterop.value
++import platform.CoreFoundation.*
++import platform.Foundation.NSUserDefaults
++import platform.Security.*
++
++@OptIn(ExperimentalForeignApi::class)
++internal actual object DiscordRpcStorage {
++    private const val settingsKey = "discord_rpc_settings_payload"
++    private const val userKey = "discord_rpc_user_payload"
++
++    actual fun loadSettingsPayload(): String? =
++        NSUserDefaults.standardUserDefaults.stringForKey(settingsKey)
++
++    actual fun saveSettingsPayload(payload: String) {
++        NSUserDefaults.standardUserDefaults.setObject(payload, forKey = settingsKey)
++    }
++
++    actual fun loadUserPayload(): String? =
++        NSUserDefaults.standardUserDefaults.stringForKey(userKey)
++
++    actual fun saveUserPayload(payload: String?) {
++        if (payload == null) {
++            NSUserDefaults.standardUserDefaults.removeObjectForKey(userKey)
++        } else {
++            NSUserDefaults.standardUserDefaults.setObject(payload, forKey = userKey)
++        }
++    }
++
++    actual fun loadToken(): String? = runCatching { readToken() }.getOrNull()
++
++    actual fun saveToken(token: String?) {
++        runCatching { writeToken(token?.takeIf { it.isNotBlank() }) }
++    }
++
++    private fun readToken(): String? = keychainQuery { query ->
++        CFDictionarySetValue(query, kSecReturnData, kCFBooleanTrue)
++        CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitOne)
++        memScoped {
++            val result = alloc<CFTypeRefVar>()
++            val status = SecItemCopyMatching(query, result.ptr)
++            if (status == errSecItemNotFound) return@memScoped null
++            check(status == errSecSuccess) { "Unable to read Discord token (OSStatus $status)" }
++            val data: CFDataRef = result.value?.reinterpret() ?: return@memScoped null
++            try {
++                val bytes = CFDataGetBytePtr(data) ?: return@memScoped null
++                ByteArray(CFDataGetLength(data).toInt()) { bytes[it].toByte() }.decodeToString()
++            } finally {
++                CFRelease(data)
++            }
++        }
++    }
++
++    private fun writeToken(token: String?) = keychainQuery { query ->
++        if (token == null) {
++            val status = SecItemDelete(query)
++            check(status == errSecSuccess || status == errSecItemNotFound) {
++                "Unable to clear Discord token (OSStatus $status)"
++            }
++            return@keychainQuery
++        }
++        val bytes = token.encodeToByteArray().toUByteArray()
++        val data = CFDataCreate(null, bytes.refTo(0), bytes.size.toLong())
++            ?: error("Unable to encode Discord token")
++        val attributes = dictionary()
++        try {
++            CFDictionarySetValue(attributes, kSecValueData, data)
++            val update = SecItemUpdate(query, attributes)
++            if (update == errSecItemNotFound) {
++                CFDictionarySetValue(query, kSecValueData, data)
++                CFDictionarySetValue(query, kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly)
++                val added = SecItemAdd(query, null)
++                check(added == errSecSuccess) { "Unable to save Discord token (OSStatus $added)" }
++            } else {
++                check(update == errSecSuccess) { "Unable to update Discord token (OSStatus $update)" }
++            }
++        } finally {
++            CFRelease(attributes)
++            CFRelease(data)
++        }
++    }
++
++    private fun dictionary(): CFMutableDictionaryRef =
++        CFDictionaryCreateMutable(null, 0L, kCFTypeDictionaryKeyCallBacks.ptr, kCFTypeDictionaryValueCallBacks.ptr)
++            ?: error("Unable to create Keychain query")
++
++    private inline fun <T> keychainQuery(block: (CFMutableDictionaryRef) -> T): T {
++        val service = CFStringCreateWithCString(null, "com.nuvio.media.discord", kCFStringEncodingUTF8)
++            ?: error("Unable to encode Keychain service")
++        val account = CFStringCreateWithCString(null, "token", kCFStringEncodingUTF8)
++            ?: error("Unable to encode Keychain account")
++        val query = dictionary()
++        try {
++            CFDictionarySetValue(query, kSecClass, kSecClassGenericPassword)
++            CFDictionarySetValue(query, kSecAttrService, service)
++            CFDictionarySetValue(query, kSecAttrAccount, account)
++            return block(query)
++        } finally {
++            CFRelease(query)
++            CFRelease(account)
++            CFRelease(service)
++        }
++    }
++}
