@@ -2740,6 +2740,87 @@ index 00000000..aa0f9fef
 +            "primary-profile-biometric:$profileIndex:$userId",
 +        )
 +}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/settings/SettingsConfigFileLauncher.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/settings/SettingsConfigFileLauncher.android.kt
+new file mode 100644
+index 00000000..d4973272
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/settings/SettingsConfigFileLauncher.android.kt
+@@ -0,0 +1,75 @@
++package com.nuvio.app.features.settings
++
++import androidx.activity.compose.rememberLauncherForActivityResult
++import androidx.activity.result.contract.ActivityResultContracts
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.rememberUpdatedState
++import androidx.compose.ui.platform.LocalContext
++
++@Composable
++internal actual fun rememberSettingsConfigFileLauncher(
++    onSaved: () -> Unit,
++    onSaveFailed: () -> Unit,
++    onLoaded: (content: String) -> Unit,
++    onLoadFailed: () -> Unit,
++): SettingsConfigFileLauncher {
++    val context = LocalContext.current
++    val currentOnSaved by rememberUpdatedState(onSaved)
++    val currentOnSaveFailed by rememberUpdatedState(onSaveFailed)
++    val currentOnLoaded by rememberUpdatedState(onLoaded)
++    val currentOnLoadFailed by rememberUpdatedState(onLoadFailed)
++    val pendingContent = remember { mutableStateOf<String?>(null) }
++
++    val saveLauncher = rememberLauncherForActivityResult(
++        ActivityResultContracts.CreateDocument("application/json"),
++    ) { uri ->
++        val content = pendingContent.value
++        pendingContent.value = null
++        if (uri == null) return@rememberLauncherForActivityResult
++        if (content == null) {
++            currentOnSaveFailed()
++            return@rememberLauncherForActivityResult
++        }
++        runCatching {
++            val resolver = context.contentResolver
++            val stream = runCatching { resolver.openOutputStream(uri, "wt") }.getOrNull()
++                ?: resolver.openOutputStream(uri)
++                ?: error("Unable to open file")
++            stream.use { it.write(content.encodeToByteArray()) }
++        }.onSuccess {
++            currentOnSaved()
++        }.onFailure {
++            currentOnSaveFailed()
++        }
++    }
++
++    val openLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
++        if (uri == null) return@rememberLauncherForActivityResult
++        val content = runCatching {
++            context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
++        }.getOrNull()
++        if (content.isNullOrBlank()) currentOnLoadFailed() else currentOnLoaded(content)
++    }
++
++    return remember(saveLauncher, openLauncher) {
++        SettingsConfigFileLauncher(
++            launchSaver = { fileName, content ->
++                pendingContent.value = content
++                runCatching { saveLauncher.launch(fileName) }.onFailure {
++                    pendingContent.value = null
++                    currentOnSaveFailed()
++                }
++            },
++            launchPicker = {
++                runCatching {
++                    openLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
++                }.onFailure {
++                    currentOnLoadFailed()
++                }
++            },
++        )
++    }
++}
 diff --git a/composeApp/src/androidPlaystore/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.android.kt b/composeApp/src/androidPlaystore/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.android.kt
 index d7f22bd8..e0ea0fcf 100644
 --- a/composeApp/src/androidPlaystore/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.android.kt
@@ -18956,208 +19037,6 @@ index 00000000..283474fd
 +
 +private fun Double.formatPlaybackNumber(): String =
 +    if (this % 1.0 == 0.0) toInt().toString() else toString().take(6).trimEnd('0').trimEnd('.')
-diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerAnalysisPrompt.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerAnalysisPrompt.kt
-new file mode 100644
-index 00000000..1ad2f6ff
---- /dev/null
-+++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerAnalysisPrompt.kt
-@@ -0,0 +1,196 @@
-+package com.nuvio.app.features.player
-+
-+import androidx.compose.foundation.background
-+import androidx.compose.foundation.clickable
-+import androidx.compose.foundation.layout.Arrangement
-+import androidx.compose.foundation.layout.BoxScope
-+import androidx.compose.foundation.layout.Column
-+import androidx.compose.foundation.layout.Row
-+import androidx.compose.foundation.layout.fillMaxWidth
-+import androidx.compose.foundation.layout.padding
-+import androidx.compose.foundation.layout.widthIn
-+import androidx.compose.foundation.shape.RoundedCornerShape
-+import androidx.compose.material3.Checkbox
-+import androidx.compose.material3.LinearProgressIndicator
-+import androidx.compose.material3.Text
-+import androidx.compose.runtime.Composable
-+import androidx.compose.runtime.LaunchedEffect
-+import androidx.compose.runtime.collectAsState
-+import androidx.compose.runtime.getValue
-+import androidx.compose.runtime.mutableStateOf
-+import androidx.compose.runtime.remember
-+import androidx.compose.runtime.setValue
-+import androidx.compose.ui.Alignment
-+import androidx.compose.ui.Modifier
-+import androidx.compose.ui.draw.clip
-+import androidx.compose.ui.graphics.Color
-+import androidx.compose.ui.text.font.FontWeight
-+import androidx.compose.ui.unit.dp
-+import androidx.compose.ui.unit.sp
-+import com.nuvio.app.features.analysis.AnalysisJobState
-+import com.nuvio.app.features.analysis.AnalysisPlayChoice
-+import com.nuvio.app.features.analysis.ItemAnalysisStatus
-+import com.nuvio.app.features.analysis.MediaAnalysisScheduler
-+import com.nuvio.app.features.analysis.MediaAnalysisStatus
-+import com.nuvio.app.features.analysis.MediaAnalysisStore
-+import com.nuvio.app.features.downloads.DownloadItem
-+import com.nuvio.app.features.downloads.DownloadStatus
-+import com.nuvio.app.features.downloads.DownloadsRepository
-+import com.nuvio.app.features.downloads.PlaybackPriority
-+
-+/**
-+ * Playing a downloaded episode whose on-device analysis is not finished: a small card (playback
-+ * keeps going underneath) offers Play now, Finish first (pause, analyse this file at full speed
-+ * with a progress bar, then play) or Finish in background (keep playing, analyse this file next
-+ * at playback-friendly speed). Skip times found meanwhile are applied as soon as they are saved.
-+ */
-+@Composable
-+internal fun BoxScope.RenderAnalysisPlayPrompt(runtime: PlayerScreenRuntime) {
-+    runtime.run {
-+        val sourceUrl = activeSourceUrl
-+        val item = remember(sourceUrl, parentMetaId, activeSeasonNumber, activeEpisodeNumber) {
-+            playingDownload(sourceUrl, parentMetaId, activeSeasonNumber, activeEpisodeNumber)
-+        } ?: return
-+        val revision by MediaAnalysisStatus.revision.collectAsState()
-+        val job by MediaAnalysisStatus.job.collectAsState()
-+
-+        // New results for this file (skip times found in the background): use them at once.
-+        LaunchedEffect(revision, item.id) {
-+            if (revision == 0) return@LaunchedEffect
-+            skipIntervals = withOnDeviceSkips(skipIntervals.filter { it.provider != ON_DEVICE_SKIP_PROVIDER })
-+        }
-+
-+        var decided by remember(item.id) { mutableStateOf(false) }
-+        var finishing by remember(item.id) { mutableStateOf(false) }
-+        var dontAsk by remember(item.id) { mutableStateOf(false) }
-+
-+        fun choose(choice: AnalysisPlayChoice) {
-+            decided = true
-+            if (dontAsk) AnalysisPlayChoice.set(choice)
-+            when (choice) {
-+                AnalysisPlayChoice.FinishFirst -> {
-+                    finishing = true
-+                    shouldPlay = false
-+                    PlaybackPriority.boostAnalysis(true)
-+                    MediaAnalysisScheduler.prioritise(item)
-+                }
-+                AnalysisPlayChoice.Background -> MediaAnalysisScheduler.prioritise(item)
-+                else -> Unit
-+            }
-+        }
-+
-+        val needsAnalysis = remember(item.id, revision, job) {
-+            // Only a file with no stored analysis at all counts. Derived parts (recap, previews)
-+            // that are merely being recomputed after a cleanup or version bump are refreshed in
-+            // the background and must not bring up the prompt on an already-analysed episode.
-+            when (MediaAnalysisStatus.statusFor(item)) {
-+                is ItemAnalysisStatus.Queued -> true
-+                is ItemAnalysisStatus.Running -> MediaAnalysisStore.load(MediaAnalysisStore.keyFor(item)) == null
-+                else -> false
-+            }
-+        }
-+
-+        // The prompt is only for starting an episode: decide once, from the status when this file
-+        // started playing. Later changes (a Good/Wrong mark re-queues derived analysis, a season
-+        // re-match, a background pass) must never bring it up mid-playback.
-+        val askedAtStart = remember(item.id) { needsAnalysis }
-+
-+        LaunchedEffect(item.id) {
-+            if (decided || !askedAtStart) return@LaunchedEffect
-+            // Watch Party: never pause for analysis (it would pull this member out of sync).
-+            // Analyse in the background instead, without asking.
-+            if (isPartySynced) {
-+                choose(AnalysisPlayChoice.Background)
-+                return@LaunchedEffect
-+            }
-+            when (val saved = AnalysisPlayChoice.get()) {
-+                AnalysisPlayChoice.Ask -> Unit
-+                else -> choose(saved)
-+            }
-+        }
-+
-+        if (finishing) {
-+            if (!needsAnalysis) {
-+                LaunchedEffect(Unit) {
-+                    finishing = false
-+                    PlaybackPriority.boostAnalysis(false)
-+                    shouldPlay = true
-+                }
-+                return
-+            }
-+            val running = (job as? AnalysisJobState.Running)?.takeIf { it.itemId == item.id }
-+            PromptCard(Modifier.align(Alignment.TopCenter).padding(top = 72.dp)) {
-+                Text("Analysing this episode…", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-+                val progress = running?.overall?.takeIf { it >= 0 }
-+                if (progress != null) {
-+                    LinearProgressIndicator(progress = { progress.toFloat() }, modifier = Modifier.fillMaxWidth())
-+                } else {
-+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-+                }
-+                PromptButton("Play now") {
-+                    finishing = false
-+                    PlaybackPriority.boostAnalysis(false)
-+                    shouldPlay = true
-+                }
-+            }
-+            return
-+        }
-+
-+        if (decided || !askedAtStart || !needsAnalysis || AnalysisPlayChoice.get() != AnalysisPlayChoice.Ask) return
-+        PromptCard(Modifier.align(Alignment.TopCenter).padding(top = 72.dp)) {
-+            Text("This episode isn't fully analysed yet", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-+            Text(
-+                "Skip times and subtitle sync may be missing.",
-+                color = Color.White.copy(alpha = 0.7f),
-+                fontSize = 12.sp,
-+            )
-+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-+                PromptButton("Play now") { choose(AnalysisPlayChoice.PlayNow) }
-+                PromptButton("Finish first") { choose(AnalysisPlayChoice.FinishFirst) }
-+                PromptButton("In background") { choose(AnalysisPlayChoice.Background) }
-+            }
-+            Row(verticalAlignment = Alignment.CenterVertically) {
-+                Checkbox(checked = dontAsk, onCheckedChange = { dontAsk = it })
-+                Text("Don't ask again", color = Color.White.copy(alpha = 0.8f), fontSize = 12.sp)
-+            }
-+        }
-+    }
-+}
-+
-+@Composable
-+private fun PromptCard(modifier: Modifier, content: @Composable () -> Unit) {
-+    Column(
-+        modifier = modifier
-+            .widthIn(max = 420.dp)
-+            .clip(RoundedCornerShape(14.dp))
-+            .background(Color(0xFF1E1E1E).copy(alpha = 0.9f))
-+            .padding(horizontal = 14.dp, vertical = 12.dp),
-+        verticalArrangement = Arrangement.spacedBy(8.dp),
-+    ) { content() }
-+}
-+
-+@Composable
-+private fun PromptButton(label: String, onClick: () -> Unit) {
-+    Text(
-+        text = label,
-+        color = Color.White,
-+        fontSize = 13.sp,
-+        fontWeight = FontWeight.Medium,
-+        modifier = Modifier
-+            .clip(RoundedCornerShape(8.dp))
-+            .background(Color.White.copy(alpha = 0.14f))
-+            .clickable(onClick = onClick)
-+            .padding(horizontal = 10.dp, vertical = 6.dp),
-+    )
-+}
-+
-+internal fun playingDownload(sourceUrl: String?, parentMetaId: String, season: Int?, episode: Int?): DownloadItem? {
-+    val url = sourceUrl?.trim().orEmpty()
-+    if (!url.startsWith("file://") && !url.startsWith("/")) return null
-+    return DownloadsRepository.uiState.value.items.firstOrNull {
-+        it.status == DownloadStatus.Completed && it.localFileUri == url
-+    } ?: DownloadsRepository.uiState.value.items.firstOrNull {
-+        it.status == DownloadStatus.Completed && it.parentMetaId == parentMetaId &&
-+            it.seasonNumber == season && it.episodeNumber == episode
-+    }
-+}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSettingsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSettingsRepository.kt
 index fb95a348..7bbcad65 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSettingsRepository.kt
@@ -19219,10 +19098,10 @@ index fb95a348..7bbcad65 100644
              streamAutoPlayNextEpisodeFallbackEnabled = streamAutoPlayNextEpisodeFallbackEnabled,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SameCut.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SameCut.kt
 new file mode 100644
-index 00000000..262d96da
+index 00000000..b76b4fbc
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SameCut.kt
-@@ -0,0 +1,9 @@
+@@ -0,0 +1,11 @@
 +package com.nuvio.app.features.player
 +
 +import kotlin.math.abs
@@ -19232,6 +19111,8 @@ index 00000000..262d96da
 +    analysedMs <= 0L || playingMs <= 0L || abs(analysedMs - playingMs) <= SAME_CUT_TOLERANCE_MS
 +
 +private const val SAME_CUT_TOLERANCE_MS = 30_000L
++
++internal const val ON_DEVICE_SKIP_PROVIDER = "on-device"
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleSyncByEarCard.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleSyncByEarCard.kt
 new file mode 100644
 index 00000000..92d2b8f3
@@ -23991,6 +23872,97 @@ index 9bd5b0b9..feb2df0e 100644
  }
  
  @Composable
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/KeepFreeSpaceSheet.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/KeepFreeSpaceSheet.kt
+new file mode 100644
+index 00000000..60c83334
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/KeepFreeSpaceSheet.kt
+@@ -0,0 +1,85 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.verticalScroll
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
++import androidx.compose.material3.ExperimentalMaterial3Api
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.material3.rememberModalBottomSheetState
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.unit.dp
++import com.nuvio.app.core.ui.NuvioBottomSheetActionRow
++import com.nuvio.app.core.ui.NuvioModalBottomSheet
++import com.nuvio.app.core.ui.NuvioPrimaryButton
++import com.nuvio.app.core.ui.nuvio
++import com.nuvio.app.core.ui.nuvioSafeBottomPadding
++import com.nuvio.app.features.downloads.AutopilotPlan
++import com.nuvio.app.features.downloads.SmartDownloadSettings
++import com.nuvio.app.features.downloads.StorageAutopilot
++import com.nuvio.app.features.downloads.formatDownloadBytes
++
++internal fun keepFreeLabel(gb: Int): String = if (gb == 0) "Off" else "Keep $gb GB free"
++
++/**
++ * "Keep free space" picker: choosing only previews what would go; nothing is deleted until Apply,
++ * and never while the sheet is open.
++ */
++@OptIn(ExperimentalMaterial3Api::class)
++@Composable
++internal fun KeepFreeSpaceSheet(current: Int, onDismiss: () -> Unit) {
++    var selected by remember { mutableStateOf(current) }
++    var plan by remember { mutableStateOf<AutopilotPlan?>(null) }
++    LaunchedEffect(selected) {
++        plan = null
++        plan = StorageAutopilot.preview(selected)
++    }
++    NuvioModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
++        // Scrolls on short screens, so the note never runs under the button.
++        Column(
++            modifier = Modifier
++                .fillMaxWidth()
++                .verticalScroll(rememberScrollState())
++                .padding(bottom = nuvioSafeBottomPadding(16.dp)),
++        ) {
++            Text(
++                "Keep free space",
++                style = MaterialTheme.typography.titleLarge,
++                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
++            )
++            SmartDownloadSettings.KEEP_FREE_CHOICES_GB.forEach { gb ->
++                NuvioBottomSheetActionRow(title = keepFreeLabel(gb), selected = gb == selected, onClick = { selected = gb })
++            }
++            Text(
++                text = keepFreePreview(selected, plan),
++                style = MaterialTheme.typography.bodyMedium,
++                color = MaterialTheme.nuvio.colors.textSecondary,
++                modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 12.dp, bottom = 16.dp),
++            )
++            // Always enabled (a disabled label was unreadable): Done when nothing changed.
++            NuvioPrimaryButton(
++                text = if (selected == current) "Done" else "Apply",
++                modifier = Modifier.padding(horizontal = 24.dp),
++                onClick = {
++                    onDismiss()
++                    if (selected != current) SmartDownloadSettings.setKeepFreeGb(selected)
++                },
++            )
++        }
++    }
++}
++
++internal fun keepFreePreview(gb: Int, plan: AutopilotPlan?): String = when {
++    gb == 0 -> "Watched downloads are never deleted for space."
++    plan == null -> "Checking…"
++    plan.ids.isEmpty() -> "Nothing would be removed now. Later, watched downloads go oldest first when free space drops below $gb GB."
++    else -> "Would remove ${plan.ids.size} watched ${if (plan.ids.size == 1) "episode" else "episodes"}, ${formatDownloadBytes(plan.bytes)}, oldest first."
++}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PerformanceSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PerformanceSettingsPage.kt
 new file mode 100644
 index 00000000..51d106ac
@@ -24491,12 +24463,38 @@ index 00000000..fc2646f2
 +        }
 +    }
 +}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsConfigFileLauncher.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsConfigFileLauncher.kt
+new file mode 100644
+index 00000000..2ad4be60
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsConfigFileLauncher.kt
+@@ -0,0 +1,20 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.runtime.Composable
++
++internal class SettingsConfigFileLauncher internal constructor(
++    private val launchSaver: (fileName: String, content: String) -> Unit,
++    private val launchPicker: () -> Unit,
++) {
++    fun save(fileName: String, content: String) = launchSaver(fileName, content)
++
++    fun pick() = launchPicker()
++}
++
++@Composable
++internal expect fun rememberSettingsConfigFileLauncher(
++    onSaved: () -> Unit,
++    onSaveFailed: () -> Unit,
++    onLoaded: (content: String) -> Unit,
++    onLoadFailed: () -> Unit,
++): SettingsConfigFileLauncher
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsConfigTransfer.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsConfigTransfer.kt
 new file mode 100644
-index 00000000..4bd047ef
+index 00000000..3b1b925f
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsConfigTransfer.kt
-@@ -0,0 +1,883 @@
+@@ -0,0 +1,877 @@
 +package com.nuvio.app.features.settings
 +
 +import com.nuvio.app.core.build.AppFeaturePolicy
@@ -24894,9 +24892,6 @@ index 00000000..4bd047ef
 +        }
 +        return buildJsonObject {
 +            put("hero_enabled", snapshot.heroEnabled)
-+            put("hero_trailer_playback_enabled", state.heroTrailerPlaybackEnabled)
-+            put("hero_trailer_start_delay_seconds", state.heroTrailerStartDelaySeconds)
-+            put("hero_trailer_start_unmuted", state.heroTrailerStartUnmuted)
 +            put(
 +                "hero_sources",
 +                buildJsonArray {
@@ -24919,9 +24914,6 @@ index 00000000..4bd047ef
 +            )
 +        }
 +        payload.boolean("hero_enabled")?.let(HomeCatalogSettingsRepository::setHeroEnabled)
-+        payload.boolean("hero_trailer_playback_enabled")?.let(HomeCatalogSettingsRepository::setHeroTrailerPlaybackEnabled)
-+        payload.int("hero_trailer_start_delay_seconds")?.let(HomeCatalogSettingsRepository::setHeroTrailerStartDelaySeconds)
-+        payload.boolean("hero_trailer_start_unmuted")?.let(HomeCatalogSettingsRepository::setHeroTrailerStartUnmuted)
 +        if (payload["hero_sources"] is JsonArray) {
 +            val heroSources = payload.strings("hero_sources").toSet()
 +            HomeCatalogSettingsRepository.snapshot().preferences
@@ -25685,10 +25677,18 @@ index f12214c6..868de655 100644
  
      suspend fun downloadApk(
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdaterRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdaterRepository.kt
-index 3e980f01..62acc7eb 100644
+index 3e980f01..daae499c 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdaterRepository.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdaterRepository.kt
-@@ -29,6 +29,10 @@ internal data class GitHubAssetDto(
+@@ -18,6 +18,7 @@ internal data class GitHubReleaseDto(
+     val draft: Boolean = false,
+     val prerelease: Boolean = false,
+     @SerialName("html_url") val htmlUrl: String? = null,
++    @SerialName("published_at") val publishedAt: String? = null,
+     val assets: List<GitHubAssetDto> = emptyList(),
+ )
+ 
+@@ -29,6 +30,10 @@ internal data class GitHubAssetDto(
      @SerialName("content_type") val contentType: String? = null,
  )
  
@@ -27991,6 +27991,151 @@ index d7f22bd8..e0ea0fcf 100644
      actual fun deleteDownloadedApk(path: String) = Unit
  
      actual suspend fun downloadApk(
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/settings/SettingsConfigFileLauncher.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/settings/SettingsConfigFileLauncher.ios.kt
+new file mode 100644
+index 00000000..9b8f24e0
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/settings/SettingsConfigFileLauncher.ios.kt
+@@ -0,0 +1,139 @@
++@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
++
++package com.nuvio.app.features.settings
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.rememberUpdatedState
++import platform.Foundation.NSFileManager
++import platform.Foundation.NSString
++import platform.Foundation.NSTemporaryDirectory
++import platform.Foundation.NSURL
++import platform.Foundation.NSUTF8StringEncoding
++import platform.Foundation.create
++import platform.Foundation.stringWithContentsOfURL
++import platform.Foundation.writeToFile
++import platform.UIKit.UIApplication
++import platform.UIKit.UIDocumentPickerDelegateProtocol
++import platform.UIKit.UIDocumentPickerMode
++import platform.UIKit.UIDocumentPickerViewController
++import platform.UIKit.UIViewController
++import platform.darwin.NSObject
++
++@Composable
++internal actual fun rememberSettingsConfigFileLauncher(
++    onSaved: () -> Unit,
++    onSaveFailed: () -> Unit,
++    onLoaded: (content: String) -> Unit,
++    onLoadFailed: () -> Unit,
++): SettingsConfigFileLauncher {
++    val currentOnSaved by rememberUpdatedState(onSaved)
++    val currentOnSaveFailed by rememberUpdatedState(onSaveFailed)
++    val currentOnLoaded by rememberUpdatedState(onLoaded)
++    val currentOnLoadFailed by rememberUpdatedState(onLoadFailed)
++    val delegateHolder = remember { mutableStateOf<SettingsConfigDocumentPickerDelegate?>(null) }
++
++    return remember {
++        SettingsConfigFileLauncher(
++            launchSaver = launch@{ fileName, content ->
++                val presenter = settingsConfigTopViewController()
++                val path = NSTemporaryDirectory().trimEnd('/') + "/" + fileName
++                if (presenter == null || !writeUtf8File(path, content)) {
++                    currentOnSaveFailed()
++                    return@launch
++                }
++                val fileUrl = NSURL.fileURLWithPath(path)
++                val picker = UIDocumentPickerViewController(
++                    forExportingURLs = listOf(fileUrl),
++                    asCopy = true,
++                )
++                val delegate = SettingsConfigDocumentPickerDelegate(
++                    onPicked = {
++                        NSFileManager.defaultManager.removeItemAtPath(path, null)
++                        delegateHolder.value = null
++                        currentOnSaved()
++                    },
++                    onDismissed = {
++                        NSFileManager.defaultManager.removeItemAtPath(path, null)
++                        delegateHolder.value = null
++                    },
++                )
++                delegateHolder.value = delegate
++                picker.delegate = delegate
++                presenter.presentViewController(picker, animated = true, completion = null)
++            },
++            launchPicker = launch@{
++                val presenter = settingsConfigTopViewController()
++                if (presenter == null) {
++                    currentOnLoadFailed()
++                    return@launch
++                }
++                val picker = UIDocumentPickerViewController(
++                    documentTypes = listOf(
++                        "public.json",
++                        "public.plain-text",
++                        "public.text",
++                        "public.data",
++                    ),
++                    inMode = UIDocumentPickerMode.UIDocumentPickerModeImport,
++                )
++                val delegate = SettingsConfigDocumentPickerDelegate(
++                    onPicked = { url ->
++                        val didStartAccess = url.startAccessingSecurityScopedResource()
++                        try {
++                            val content = readUtf8File(url)
++                            if (content.isNullOrBlank()) currentOnLoadFailed() else currentOnLoaded(content)
++                        } catch (_: Throwable) {
++                            currentOnLoadFailed()
++                        } finally {
++                            if (didStartAccess) url.stopAccessingSecurityScopedResource()
++                            delegateHolder.value = null
++                        }
++                    },
++                    onDismissed = { delegateHolder.value = null },
++                )
++                delegateHolder.value = delegate
++                picker.delegate = delegate
++                presenter.presentViewController(picker, animated = true, completion = null)
++            },
++        )
++    }
++}
++
++private fun writeUtf8File(path: String, content: String): Boolean = runCatching {
++    NSString.create(string = content).writeToFile(path, true, NSUTF8StringEncoding, null)
++}.getOrDefault(false)
++
++private fun readUtf8File(url: NSURL): String? =
++    NSString.stringWithContentsOfURL(url, NSUTF8StringEncoding, null)?.removePrefix("\uFEFF")
++
++private class SettingsConfigDocumentPickerDelegate(
++    private val onPicked: (NSURL) -> Unit,
++    private val onDismissed: () -> Unit,
++) : NSObject(), UIDocumentPickerDelegateProtocol {
++    override fun documentPicker(
++        controller: UIDocumentPickerViewController,
++        didPickDocumentsAtURLs: List<*>,
++    ) {
++        val url = didPickDocumentsAtURLs.firstOrNull() as? NSURL
++        if (url != null) {
++            onPicked(url)
++        } else {
++            onDismissed()
++        }
++    }
++
++    override fun documentPickerWasCancelled(controller: UIDocumentPickerViewController) {
++        onDismissed()
++    }
++}
++
++private fun settingsConfigTopViewController(): UIViewController? {
++    var controller = UIApplication.sharedApplication.keyWindow?.rootViewController
++    while (controller?.presentedViewController != null) {
++        controller = controller.presentedViewController
++    }
++    return controller
++}
 diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.ios.kt
 index d7f22bd8..404a5b01 100644
 --- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.ios.kt
