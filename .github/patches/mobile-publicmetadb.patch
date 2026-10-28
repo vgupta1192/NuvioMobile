@@ -3,11 +3,7 @@ new file mode 100644
 index 00000000..87da56c4
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbPlatform.android.kt
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -0,0 +1,123 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description),
+@@ -0,0 +1,123 @@
 +package com.nuvio.app.features.publicmetadb
 +
 +import android.content.Context
@@ -136,11 +132,7 @@ new file mode 100644
 index 00000000..dd653656
 --- /dev/null
 +++ b/composeApp/src/commonMain/composeResources/drawable/publicmetadb_logo.xml
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -0,0 +1,18 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description),
+@@ -0,0 +1,18 @@
 +<vector xmlns:android="http://schemas.android.com/apk/res/android"
 +    android:width="24dp"
 +    android:height="24dp"
@@ -164,11 +156,7 @@ new file mode 100644
 index 00000000..f6e2377d
 --- /dev/null
 +++ b/composeApp/src/commonMain/composeResources/values/strings_publicmetadb.xml
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -0,0 +1,36 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description),
+@@ -0,0 +1,36 @@
 +<resources>
 +    <string name="tracking_source_publicmetadb">PublicMetaDB</string>
 +    <string name="settings_publicmetadb_library_description">Your PublicMetaDB watchlist and custom lists.</string>
@@ -209,11 +197,7 @@ diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/
 index 866ff2fe..4b893fec 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -1329,6 +1329,7 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), internal fun MainAppContent(
+@@ -1329,6 +1329,7 @@ internal fun MainAppContent(
                                      LibrarySourceMode.MDBLIST -> stringResource(Res.string.library_mdblist_title)
              LibrarySourceMode.ANILIST -> stringResource(Res.string.library_anilist_title)
              LibrarySourceMode.WETRAKR -> stringResource(Res.string.library_wetrakr_title)
@@ -225,11 +209,7 @@ diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/tracking/Tracki
 index 297615c9..6ff25e5f 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/tracking/TrackingProviderBootstrap.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/tracking/TrackingProviderBootstrap.kt
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -19,11 +19,13 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), import com.nuvio.app.features.trakt.TraktTrackingLibraryProvider
+@@ -19,11 +19,13 @@ import com.nuvio.app.features.trakt.TraktTrackingLibraryProvider
  import com.nuvio.app.features.trakt.TraktTrackingProgressProvider
  import com.nuvio.app.features.watching.sync.TraktWatchedSyncAdapter
  import com.nuvio.app.features.wetrakr.WeTrakrTracker
@@ -247,11 +227,7 @@ diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/Lib
 index 4d022bdf..3694aec1 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryModels.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryModels.kt
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -56,6 +56,7 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), enum class LibrarySourceMode {
+@@ -56,6 +56,7 @@ enum class LibrarySourceMode {
      MDBLIST,
      ANILIST,
      WETRAKR,
@@ -263,11 +239,7 @@ diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/Lib
 index fd254ce9..4112bb7c 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryScreen.kt
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -330,6 +330,7 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), fun LibraryScreen(
+@@ -330,6 +330,7 @@ fun LibraryScreen(
                                      LibrarySourceMode.MDBLIST -> stringResource(Res.string.library_mdblist_title)
                                      LibrarySourceMode.ANILIST -> stringResource(Res.string.library_anilist_title)
                                      LibrarySourceMode.WETRAKR -> stringResource(Res.string.library_wetrakr_title)
@@ -275,11 +247,7 @@ index fd254ce9..4112bb7c 100644
                                  }
                              },
                              modifier = Modifier.padding(horizontal = 16.dp),
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -461,6 +462,7 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), fun LibraryScreen(
+@@ -461,6 +462,7 @@ fun LibraryScreen(
                                          LibrarySourceMode.MDBLIST -> stringResource(Res.string.library_mdblist_load_failed)
                                          LibrarySourceMode.ANILIST -> stringResource(Res.string.library_anilist_load_failed)
                                          LibrarySourceMode.WETRAKR -> stringResource(Res.string.library_wetrakr_load_failed)
@@ -287,11 +255,7 @@ index fd254ce9..4112bb7c 100644
                                      },
                                      message = uiState.errorMessage.orEmpty(),
                                      actionLabel = stringResource(Res.string.action_retry),
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -481,6 +483,7 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), fun LibraryScreen(
+@@ -481,6 +483,7 @@ fun LibraryScreen(
                                      LibrarySourceMode.MDBLIST -> stringResource(Res.string.library_mdblist_empty_title)
                                      LibrarySourceMode.ANILIST -> stringResource(Res.string.library_anilist_empty_title)
                                      LibrarySourceMode.WETRAKR -> stringResource(Res.string.library_wetrakr_empty_title)
@@ -299,11 +263,7 @@ index fd254ce9..4112bb7c 100644
                                  },
                                  message = when (uiState.sourceMode) {
                                      LibrarySourceMode.LOCAL -> stringResource(Res.string.library_empty_message)
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -489,6 +492,7 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), fun LibraryScreen(
+@@ -489,6 +492,7 @@ fun LibraryScreen(
                                      LibrarySourceMode.MDBLIST -> stringResource(Res.string.library_mdblist_empty_message)
                                      LibrarySourceMode.ANILIST -> stringResource(Res.string.library_anilist_empty_message)
                                      LibrarySourceMode.WETRAKR -> stringResource(Res.string.library_wetrakr_empty_message)
@@ -316,11 +276,7 @@ new file mode 100644
 index 00000000..6977cd6e
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbApiClient.kt
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -0,0 +1,267 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description),
+@@ -0,0 +1,267 @@
 +package com.nuvio.app.features.publicmetadb
 +
 +import com.nuvio.app.core.network.createApiHttpClient
@@ -593,11 +549,7 @@ new file mode 100644
 index 00000000..2deb33ef
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbAuthStore.kt
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -0,0 +1,142 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description),
+@@ -0,0 +1,142 @@
 +package com.nuvio.app.features.publicmetadb
 +
 +import kotlinx.atomicfu.locks.SynchronizedObject
@@ -745,11 +697,7 @@ new file mode 100644
 index 00000000..5d4d26ab
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbIdResolver.kt
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -0,0 +1,224 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description),
+@@ -0,0 +1,224 @@
 +package com.nuvio.app.features.publicmetadb
 +
 +import com.nuvio.app.features.tmdb.TmdbService
@@ -979,11 +927,7 @@ new file mode 100644
 index 00000000..7531b04d
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbModels.kt
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -0,0 +1,342 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description),
+@@ -0,0 +1,342 @@
 +package com.nuvio.app.features.publicmetadb
 +
 +import com.nuvio.app.core.time.parseZonedIsoDateTimeToEpochMs
@@ -1331,11 +1275,7 @@ new file mode 100644
 index 00000000..65886c39
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbProjection.kt
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -0,0 +1,366 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description),
+@@ -0,0 +1,366 @@
 +package com.nuvio.app.features.publicmetadb
 +
 +import com.nuvio.app.features.home.PosterShape
@@ -1707,11 +1647,7 @@ new file mode 100644
 index 00000000..d1b7ee05
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbSyncRepository.kt
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -0,0 +1,650 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description),
+@@ -0,0 +1,650 @@
 +package com.nuvio.app.features.publicmetadb
 +
 +import com.nuvio.app.features.addons.httpGetText
@@ -2367,11 +2303,7 @@ new file mode 100644
 index 00000000..9f0e3c7b
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbTracker.kt
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -0,0 +1,523 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description),
+@@ -0,0 +1,523 @@
 +package com.nuvio.app.features.publicmetadb
 +
 +import com.nuvio.app.features.library.LibraryItem
@@ -2900,11 +2832,7 @@ new file mode 100644
 index 00000000..a7bc027b
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbTrackingWrites.kt
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -0,0 +1,625 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description),
+@@ -0,0 +1,625 @@
 +package com.nuvio.app.features.publicmetadb
 +
 +import com.nuvio.app.features.tracking.TRACKING_RATING_MAX
@@ -3535,11 +3463,7 @@ new file mode 100644
 index 00000000..07f6dd94
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PublicMetaDbProviderCard.kt
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -0,0 +1,182 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description),
+@@ -0,0 +1,182 @@
 +package com.nuvio.app.features.settings
 +
 +import androidx.compose.foundation.layout.fillMaxWidth
@@ -3726,11 +3650,7 @@ diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/Tr
 index 1a54ab92..161c12db 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/TrackingProviderCards.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/TrackingProviderCards.kt
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -89,6 +89,8 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), import nuvio.composeapp.generated.resources.settings_anilist_disconnect_descript
+@@ -89,6 +89,8 @@ import nuvio.composeapp.generated.resources.settings_anilist_disconnect_descript
  import nuvio.composeapp.generated.resources.anilist_logo
  import nuvio.composeapp.generated.resources.settings_wetrakr_disconnect_description
  import nuvio.composeapp.generated.resources.wetrakr_logo
@@ -3739,11 +3659,7 @@ index 1a54ab92..161c12db 100644
  import nuvio.composeapp.generated.resources.Res
  import nuvio.composeapp.generated.resources.action_cancel
  import nuvio.composeapp.generated.resources.action_collapse
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -137,6 +139,7 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), internal enum class TrackingBrand(val displayName: String) {
+@@ -137,6 +139,7 @@ internal enum class TrackingBrand(val displayName: String) {
      TMDB("TMDB"),
      ANILIST("AniList"),
      WETRAKR("WeTrakr"),
@@ -3751,11 +3667,7 @@ index 1a54ab92..161c12db 100644
  }
  
  internal enum class TrackingConnectionCardMode {
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -152,6 +155,7 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), internal fun isTrackingBrandAvailable(
+@@ -152,6 +155,7 @@ internal fun isTrackingBrandAvailable(
      mdblistConnected: Boolean = false,
      anilistConnected: Boolean = false,
      wetrakrConnected: Boolean = false,
@@ -3763,11 +3675,7 @@ index 1a54ab92..161c12db 100644
  ): Boolean = when (brand) {
      TrackingBrand.NUVIO,
      TrackingBrand.TMDB,
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -161,6 +165,7 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), internal fun isTrackingBrandAvailable(
+@@ -161,6 +165,7 @@ internal fun isTrackingBrandAvailable(
      TrackingBrand.MDBLIST -> mdblistConnected
      TrackingBrand.ANILIST -> anilistConnected
      TrackingBrand.WETRAKR -> wetrakrConnected
@@ -3775,11 +3683,7 @@ index 1a54ab92..161c12db 100644
  }
  
  internal fun TraktConnectionMode.toTrackingConnectionCardMode(): TrackingConnectionCardMode = when (this) {
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -220,6 +225,7 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), internal fun TrackingProviderCards(
+@@ -220,6 +225,7 @@ internal fun TrackingProviderCards(
          MdbListProviderCard(Modifier.fillMaxWidth())
          AniListProviderCard(Modifier.fillMaxWidth())
          WeTrakrProviderCard(Modifier.fillMaxWidth())
@@ -3787,11 +3691,7 @@ index 1a54ab92..161c12db 100644
      }
  
      if (showSyncInfo) {
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -695,6 +701,7 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), private fun TrackingDisconnectDialog(
+@@ -695,6 +701,7 @@ private fun TrackingDisconnectDialog(
                  TrackingBrand.MDBLIST -> stringResource(Res.string.settings_mdblist_disconnect_description)
                  TrackingBrand.ANILIST -> stringResource(Res.string.settings_anilist_disconnect_description)
                  TrackingBrand.WETRAKR -> stringResource(Res.string.settings_wetrakr_disconnect_description)
@@ -3799,11 +3699,7 @@ index 1a54ab92..161c12db 100644
                  TrackingBrand.NUVIO,
                  TrackingBrand.TMDB,
                  -> stringResource(
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -762,6 +769,12 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), internal fun TrackingBrandGlyph(
+@@ -762,6 +769,12 @@ internal fun TrackingBrandGlyph(
              modifier = modifier,
              contentScale = ContentScale.Fit,
          )
@@ -3816,11 +3712,7 @@ index 1a54ab92..161c12db 100644
          TrackingBrand.NUVIO -> Icon(
              imageVector = Icons.Rounded.Sync,
              contentDescription = contentDescription,
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -782,11 +795,12 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), private fun TrackingBrandWordmark(
+@@ -782,11 +795,12 @@ private fun TrackingBrandWordmark(
          TrackingBrand.MDBLIST -> integrationLogoPainter(IntegrationLogo.MdbList)
          TrackingBrand.ANILIST -> painterResource(Res.drawable.anilist_logo)
          TrackingBrand.WETRAKR -> painterResource(Res.drawable.wetrakr_logo)
@@ -3834,11 +3726,7 @@ index 1a54ab92..161c12db 100644
          Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
              Image(painter, contentDescription = null, modifier = Modifier.size(32.dp))
              Text(contentDescription, style = MaterialTheme.typography.titleLarge, color = Color.White, fontWeight = FontWeight.Bold)
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -806,6 +820,7 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), private fun TrackingBrandWordmark(
+@@ -806,6 +820,7 @@ private fun TrackingBrandWordmark(
              TrackingBrand.MDBLIST,
              TrackingBrand.ANILIST,
              TrackingBrand.WETRAKR,
@@ -3846,11 +3734,7 @@ index 1a54ab92..161c12db 100644
              -> Modifier.width(130.dp).height(32.dp)
              TrackingBrand.NUVIO,
              TrackingBrand.TMDB,
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -832,6 +847,9 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), private fun TrackingBrand.cardBrush(): Brush = when (this) {
+@@ -832,6 +847,9 @@ private fun TrackingBrand.cardBrush(): Brush = when (this) {
      TrackingBrand.WETRAKR -> Brush.linearGradient(
          colors = listOf(Color(0xFF0A0A0C), Color(0xFF1F1C0A), Color(0xFF0A0A0C)),
      )
@@ -3864,11 +3748,7 @@ diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/Tr
 index 830f78e9..7cd2bbfa 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/TrackingSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/TrackingSettingsPage.kt
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -45,6 +45,7 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), import com.nuvio.app.features.trakt.TraktContinueWatchingDaysOptions
+@@ -45,6 +45,7 @@ import com.nuvio.app.features.trakt.TraktContinueWatchingDaysOptions
  import com.nuvio.app.features.trakt.normalizeTraktContinueWatchingDaysCap
  import com.nuvio.app.features.watchprogress.WatchProgressSourceCoordinator
  import com.nuvio.app.features.wetrakr.WeTrakrTracker
@@ -3876,11 +3756,7 @@ index 830f78e9..7cd2bbfa 100644
  import kotlinx.coroutines.launch
  import nuvio.composeapp.generated.resources.Res
  import nuvio.composeapp.generated.resources.tracking_source_mdblist
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -52,6 +53,9 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), import nuvio.composeapp.generated.resources.tracking_source_anilist
+@@ -52,6 +53,9 @@ import nuvio.composeapp.generated.resources.tracking_source_anilist
  import nuvio.composeapp.generated.resources.tracking_source_wetrakr
  import nuvio.composeapp.generated.resources.settings_wetrakr_library_description
  import nuvio.composeapp.generated.resources.settings_wetrakr_progress_description
@@ -3890,11 +3766,7 @@ index 830f78e9..7cd2bbfa 100644
  import nuvio.composeapp.generated.resources.settings_anilist_library_description
  import nuvio.composeapp.generated.resources.settings_anilist_progress_description
  import nuvio.composeapp.generated.resources.settings_anilist_anime_section
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -228,12 +232,14 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), private fun TrackingDataSources(
+@@ -228,12 +232,14 @@ private fun TrackingDataSources(
      val mdblistConnected by remember { MdbListTracker.ensureLoaded(); MdbListTracker.isAuthenticated }.collectAsStateWithLifecycle()
      val anilistConnected by remember { AniListTracker.ensureLoaded(); AniListTracker.isAuthenticated }.collectAsStateWithLifecycle()
      val wetrakrConnected by remember { WeTrakrTracker.ensureLoaded(); WeTrakrTracker.isAuthenticated }.collectAsStateWithLifecycle()
@@ -3909,11 +3781,7 @@ index 830f78e9..7cd2bbfa 100644
      }
      val effectiveLibrarySource = effectiveLibrarySourceMode(settingsUiState.librarySourceMode) { provider ->
          provider in connectedProviders
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -323,7 +329,7 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), private fun TrackingDataSources(
+@@ -323,7 +329,7 @@ private fun TrackingDataSources(
              title = stringResource(Res.string.trakt_library_source_dialog_title),
              subtitle = stringResource(Res.string.trakt_library_source_dialog_subtitle),
              selectedValue = effectiveLibrarySource,
@@ -3922,11 +3790,7 @@ index 830f78e9..7cd2bbfa 100644
              onSelected = TrackingSettingsRepository::setLibrarySourceMode,
              onDismiss = { activePickerName = null },
          )
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -332,7 +338,7 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), private fun TrackingDataSources(
+@@ -332,7 +338,7 @@ private fun TrackingDataSources(
              title = stringResource(Res.string.trakt_watch_progress_dialog_title),
              subtitle = stringResource(Res.string.tracking_watch_progress_dialog_subtitle),
              selectedValue = effectiveProgressSource,
@@ -3935,11 +3799,7 @@ index 830f78e9..7cd2bbfa 100644
              onSelected = { source ->
                  scope.launch {
                      WatchProgressSourceCoordinator.selectSource(
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -499,6 +505,7 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), private fun librarySourceOptions(
+@@ -499,6 +505,7 @@ private fun librarySourceOptions(
      mdblistConnected: Boolean,
      anilistConnected: Boolean,
      wetrakrConnected: Boolean,
@@ -3947,11 +3807,7 @@ index 830f78e9..7cd2bbfa 100644
  ): List<TrackingPickerOption<LibrarySourceMode>> {
      val traktAvailable = isTrackingBrandAvailable(TrackingBrand.TRAKT, traktConnected, simklConnected)
      val simklAvailable = isTrackingBrandAvailable(TrackingBrand.SIMKL, traktConnected, simklConnected)
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -543,6 +550,13 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), private fun librarySourceOptions(
+@@ -543,6 +550,13 @@ private fun librarySourceOptions(
              enabled = wetrakrConnected,
              unavailableReason = trackingUnavailableReason(TrackingBrand.WETRAKR, wetrakrConnected),
          ),
@@ -3965,11 +3821,7 @@ index 830f78e9..7cd2bbfa 100644
      )
  }
  
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -553,6 +567,7 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), private fun watchProgressSourceOptions(
+@@ -553,6 +567,7 @@ private fun watchProgressSourceOptions(
      mdblistConnected: Boolean,
      anilistConnected: Boolean,
      wetrakrConnected: Boolean,
@@ -3977,11 +3829,7 @@ index 830f78e9..7cd2bbfa 100644
  ): List<TrackingPickerOption<WatchProgressSource>> {
      val traktAvailable = isTrackingBrandAvailable(TrackingBrand.TRAKT, traktConnected, simklConnected)
      val simklAvailable = isTrackingBrandAvailable(TrackingBrand.SIMKL, traktConnected, simklConnected)
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -597,6 +612,13 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), private fun watchProgressSourceOptions(
+@@ -597,6 +612,13 @@ private fun watchProgressSourceOptions(
              enabled = wetrakrConnected,
              unavailableReason = trackingUnavailableReason(TrackingBrand.WETRAKR, wetrakrConnected),
          ),
@@ -3995,11 +3843,7 @@ index 830f78e9..7cd2bbfa 100644
      )
  }
  
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -660,6 +682,7 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), private fun librarySourceModeLabel(source: LibrarySourceMode): String = when (so
+@@ -660,6 +682,7 @@ private fun librarySourceModeLabel(source: LibrarySourceMode): String = when (so
      LibrarySourceMode.MDBLIST -> stringResource(Res.string.tracking_source_mdblist)
      LibrarySourceMode.ANILIST -> stringResource(Res.string.tracking_source_anilist)
      LibrarySourceMode.WETRAKR -> stringResource(Res.string.tracking_source_wetrakr)
@@ -4007,11 +3851,7 @@ index 830f78e9..7cd2bbfa 100644
  }
  
  @Composable
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -670,6 +693,7 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), private fun watchProgressSourceLabel(source: WatchProgressSource): String = when
+@@ -670,6 +693,7 @@ private fun watchProgressSourceLabel(source: WatchProgressSource): String = when
      WatchProgressSource.MDBLIST -> stringResource(Res.string.tracking_source_mdblist)
      WatchProgressSource.ANILIST -> stringResource(Res.string.tracking_source_anilist)
      WatchProgressSource.WETRAKR -> stringResource(Res.string.tracking_source_wetrakr)
@@ -4023,11 +3863,7 @@ diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tracking/Tr
 index 8e1ab432..a0279ebd 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tracking/TrackingProvider.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tracking/TrackingProvider.kt
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -21,7 +21,8 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), enum class TrackingProviderId(
+@@ -21,7 +21,8 @@ enum class TrackingProviderId(
      SIMKL("simkl", "Simkl"),
      MDBLIST("mdblist", "MDBList"),
      ANILIST("anilist", "AniList"),
@@ -4041,11 +3877,7 @@ diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tracking/Tr
 index 79d293b1..a9a692a3 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tracking/TrackingSources.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tracking/TrackingSources.kt
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -10,7 +10,8 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), enum class WatchProgressSource {
+@@ -10,7 +10,8 @@ enum class WatchProgressSource {
      NUVIO_SYNC,
      MDBLIST,
      ANILIST,
@@ -4055,11 +3887,7 @@ index 79d293b1..a9a692a3 100644
  
      val providerId: TrackingProviderId?
          get() = when (this) {
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -19,6 +20,7 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), enum class WatchProgressSource {
+@@ -19,6 +20,7 @@ enum class WatchProgressSource {
              MDBLIST -> TrackingProviderId.MDBLIST
              ANILIST -> TrackingProviderId.ANILIST
              WETRAKR -> TrackingProviderId.WETRAKR
@@ -4067,11 +3895,7 @@ index 79d293b1..a9a692a3 100644
              NUVIO_SYNC -> null
          }
  
-+            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), -42,6 +44,7 +            value = LibrarySourceMode.PUBLICMETADB,
-+            title = stringResource(Res.string.tracking_source_publicmetadb),
-+            description = stringResource(Res.string.settings_publicmetadb_library_description), val LibrarySourceMode.providerId: TrackingProviderId?
+@@ -42,6 +44,7 @@ val LibrarySourceMode.providerId: TrackingProviderId?
          LibrarySourceMode.MDBLIST -> TrackingProviderId.MDBLIST
          LibrarySourceMode.ANILIST -> TrackingProviderId.ANILIST
          LibrarySourceMode.WETRAKR -> TrackingProviderId.WETRAKR
