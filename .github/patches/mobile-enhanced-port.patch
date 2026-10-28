@@ -8963,6 +8963,67 @@ index 00000000..2fa0406f
 +    DebridSettingsRepository.setCloudLibraryEnabled(true)
 +    CloudLibraryRepository.refresh()
 +}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsRepository.kt
+index 6eeca165..06e334c7 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsRepository.kt
+@@ -14,6 +14,10 @@ import com.nuvio.app.features.mdblist.MdbListMetadataService
+ import com.nuvio.app.features.mdblist.MdbListSettingsRepository
+ import com.nuvio.app.features.servers.ServerCatalog
+ import com.nuvio.app.features.servers.ServerItemRef
++import com.nuvio.app.features.cloudstream.CloudStreamRepository
++import com.nuvio.app.features.cloudstream.CloudStreamRouteData
++import com.nuvio.app.features.cloudstream.parseCloudStreamRouteId
++import com.nuvio.app.features.cloudstream.toMetaDetails
+ import com.nuvio.app.features.servers.ServerUserStateProjection
+ import com.nuvio.app.features.servers.message
+ import com.nuvio.app.features.servers.serverFailure
+@@ -62,6 +66,10 @@ object MetaDetailsRepository {
+             loadServerMeta(requestKey, ref)
+             return
+         }
++        parseCloudStreamRouteId(id)?.let { route ->
++            loadCloudStreamMeta(requestKey, route)
++            return
++        }
+         val currentState = _uiState.value
+         val mdbListSettings = MdbListSettingsRepository.snapshot()
+         val metaScreenSettingsFingerprint = buildMetaScreenSettingsFingerprint(mdbListSettings)
+@@ -238,6 +246,34 @@ object MetaDetailsRepository {
+         }
+     }
+ 
++    private fun loadCloudStreamMeta(requestKey: String, route: CloudStreamRouteData) {
++        cachedMetaByRequestKey[requestKey]?.baseMeta?.let { cached ->
++            _uiState.value = MetaDetailsUiState(meta = cached)
++            activeRequestKey = requestKey
++            return
++        }
++        if (_uiState.value.isLoading && activeRequestKey == requestKey) return
++        activeRequestKey = requestKey
++        _uiState.value = MetaDetailsUiState(isLoading = true)
++        scope.launch {
++            CloudStreamRepository.initialize()
++            val result = withContext(Dispatchers.Default) {
++                CloudStreamRepository.load(route.providerId, route.data)
++            }
++            if (activeRequestKey != requestKey) return@launch
++            val item = result.getOrNull()
++            if (item == null) {
++                log.w { "CloudStream meta failed: ${result.exceptionOrNull()?.message}" }
++                _uiState.value = MetaDetailsUiState(errorMessage = getString(Res.string.details_load_failed_all_addons))
++                activeRequestKey = null
++                return@launch
++            }
++            val meta = item.toMetaDetails()
++            cachedMetaByRequestKey[requestKey] = CachedMetaEntry(baseMeta = meta)
++            _uiState.value = MetaDetailsUiState(meta = meta)
++        }
++    }
++
+     private fun loadServerMeta(requestKey: String, ref: ServerItemRef) {
+         if (_uiState.value.isLoading && activeRequestKey == requestKey) return
+         activeRequestKey = requestKey
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
 index f1a48251..a3838882 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
@@ -19399,6 +19460,19 @@ index 00000000..283474fd
 +
 +private fun Double.formatPlaybackNumber(): String =
 +    if (this % 1.0 == 0.0) toInt().toString() else toString().take(6).trimEnd('0').trimEnd('.')
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+index 140b1d80..bd7ad739 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+@@ -354,7 +354,7 @@ internal fun PlayerControlsShell(
+                         onRateClick = onRateClick,
+                         userRating = userRating,
+                         onChaptersClick = onChaptersClick,
+-                        onSwitchEngineClick = onSwitchEngineClick,
++                        onSwitchEngineClick = null,
+                     )
+                 }
+             }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt
 index 93bb6999..32786346 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt
@@ -19420,10 +19494,21 @@ index 93bb6999..32786346 100644
          onAutoSyncCueSelected = onAutoSyncCueSelected,
          onAutoSyncReload = onAutoSyncReload,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
-index a8c72885..5a2fdb2d 100644
+index a8c72885..bc7886a1 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
-@@ -241,6 +241,9 @@ internal class PlayerScreenRuntime(
+@@ -29,6 +29,10 @@ internal class PlayerScreenRuntime(
+ ) {
+     var args by mutableStateOf(args)
+ 
++    init {
++        PlayerStreamsRepository.titleHint = args.title.takeIf { it.isNotBlank() }
++    }
++
+     val title: String get() = args.title
+     val profileId: Int get() = args.profileId
+     val sourceUrl: String get() = args.sourceUrl
+@@ -241,6 +245,9 @@ internal class PlayerScreenRuntime(
      var autoFetchedAddonSubtitlesForKey by mutableStateOf<String?>(null)
      var trackPreferenceRestoreApplied by mutableStateOf(false)
      var subtitleDelayMs by mutableStateOf(0)
@@ -19575,6 +19660,29 @@ index fb95a348..7bbcad65 100644
              introSubmitEnabled = introSubmitEnabled,
              streamAutoPlayNextEpisodeEnabled = streamAutoPlayNextEpisodeEnabled,
              streamAutoPlayNextEpisodeFallbackEnabled = streamAutoPlayNextEpisodeFallbackEnabled,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerStreamsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerStreamsRepository.kt
+index 1ac82087..8f552cff 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerStreamsRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerStreamsRepository.kt
+@@ -60,6 +60,9 @@ object PlayerStreamsRepository {
+     private val log = Logger.withTag("PlayerStreamsRepo")
+     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+ 
++    /** Fork: show title of the playing content, so CloudStream searches work when meta is not cached. */
++    var titleHint: String? = null
++
+     private val cloudStreamSemaphore = Semaphore(4)
+     private const val PLAYER_STREAM_PROVIDER_TIMEOUT_MS = 35_000L
+ 
+@@ -227,7 +230,7 @@ object PlayerStreamsRepository {
+             parentMetaType = parentMetaType,
+             season = season,
+             episode = episode,
+-            searchTitle = searchTitle,
++            searchTitle = searchTitle ?: titleHint,
+         )
+         val cloudStreamProviderGroups = if (AppFeaturePolicy.pluginsEnabled) {
+             cloudStreamProviderGroupsForRequest(type, cloudStreamSearchRequest)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SameCut.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SameCut.kt
 new file mode 100644
 index 00000000..b76b4fbc
