@@ -648,7 +648,7 @@ index 82aecfd4..f1a48251 100644
                              }
  
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailMetaInfo.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailMetaInfo.kt
-index 3ef2d083..a2490fdd 100644
+index 3ef2d083..45884bef 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailMetaInfo.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailMetaInfo.kt
 @@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Arrangement
@@ -659,7 +659,15 @@ index 3ef2d083..a2490fdd 100644
  import androidx.compose.foundation.layout.Spacer
  import androidx.compose.foundation.layout.fillMaxWidth
  import androidx.compose.foundation.layout.height
-@@ -454,6 +455,9 @@ private fun formatWhole(value: Double): String = value.roundToInt().toString()
+@@ -29,6 +30,7 @@ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.remember
+ import androidx.lifecycle.compose.collectAsStateWithLifecycle
+ import androidx.compose.runtime.getValue
++import androidx.compose.runtime.setValue
+ import androidx.compose.ui.draw.clip
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+@@ -454,6 +456,9 @@ private fun formatWhole(value: Double): String = value.roundToInt().toString()
  private fun formatPercent(value: Double): String = "${value.roundToInt()}%"
  
  
@@ -669,7 +677,7 @@ index 3ef2d083..a2490fdd 100644
  @Composable
  private fun ForkNuvioReadCard(
      meta: MetaDetails,
-@@ -558,6 +562,41 @@ private fun ForkNuvioReadCard(
+@@ -558,6 +563,41 @@ private fun ForkNuvioReadCard(
                      }
                  }
              }
