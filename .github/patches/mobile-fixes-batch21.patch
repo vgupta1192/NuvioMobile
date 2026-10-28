@@ -1,0 +1,35 @@
+diff --git a/composeApp/src/commonTest/kotlin/com/nuvio/app/features/streams/PlaybackAvailabilityTest.kt b/composeApp/src/commonTest/kotlin/com/nuvio/app/features/streams/PlaybackAvailabilityTest.kt
+index 308882082..9687d9794 100644
+--- a/composeApp/src/commonTest/kotlin/com/nuvio/app/features/streams/PlaybackAvailabilityTest.kt
++++ b/composeApp/src/commonTest/kotlin/com/nuvio/app/features/streams/PlaybackAvailabilityTest.kt
+@@ -34,7 +34,7 @@ class PlaybackAvailabilityTest {
+ 
+     @Test
+     fun `an enabled compatible plugin enables playback without addons`() {
+-        val plugins = PluginsUiState(scrapers = listOf(scraper()))
++        val plugins = PluginsUiState(pluginsEnabled = true, scrapers = listOf(scraper()))
+         assertTrue(available(plugins = plugins))
+         assertTrue(available(plugins = plugins, type = "series"))
+         assertFalse(available(plugins = plugins, type = "channel"))
+@@ -46,7 +46,7 @@ class PlaybackAvailabilityTest {
+     fun `either source can enable playback independently`() {
+         assertTrue(available(
+             addons = listOf(addon(resource = "catalog")),
+-            plugins = PluginsUiState(scrapers = listOf(scraper())),
++            plugins = PluginsUiState(pluginsEnabled = true, scrapers = listOf(scraper())),
+         ))
+         assertTrue(available(
+             addons = listOf(addon()),
+diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/plugins/PluginRepository.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/plugins/PluginRepository.kt
+index f9c7cefac..76d68b4d4 100644
+--- a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/plugins/PluginRepository.kt
++++ b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/plugins/PluginRepository.kt
+@@ -612,7 +612,7 @@ actual object PluginRepository {
+             ?: emptyList()
+         return LoadedPluginState(
+             state = PluginsUiState(
+-                pluginsEnabled = stored?.pluginsEnabled ?: true,
++                pluginsEnabled = stored?.pluginsEnabled ?: false,
+                 groupStreamsByRepository = stored?.groupStreamsByRepository ?: false,
+                 repositories = stored?.repositories
+                     ?.map {
