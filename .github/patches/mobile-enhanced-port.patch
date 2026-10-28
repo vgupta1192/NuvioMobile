@@ -19726,7 +19726,7 @@ index daf4ccba..da788ff7 100644
 +    subtitleSyncSawPositionMs = null
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index d28c6e8d..9b34bace 100644
+index d28c6e8d..644b4642 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 @@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
@@ -19857,7 +19857,15 @@ index d28c6e8d..9b34bace 100644
  
          RenderPlayerControls(
              displayedPositionMs = displayedPositionMs,
-@@ -645,6 +743,10 @@ private fun BoxScope.RenderPlaybackOverlays(
+@@ -288,7 +386,6 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+             )
+         }
+         if (!isInPip) AutoSyncBubbleToastHost(controlsVisible) // AutoSync hook: bubble toast
+-        if (!isMiniPresentation) {
+         Box(modifier = panelModifier) {
+             RenderPlayerModals(displayedPositionMs = displayedPositionMs)
+             RenderParty(runtime = runtime)
+@@ -645,6 +742,10 @@ private fun BoxScope.RenderPlaybackOverlays(
                      scheduleProgressSyncAfterSeek()
                      publishPartyPlayback(positionMs = seekMs)
                      skipIntervalDismissed = true
@@ -19868,7 +19876,7 @@ index d28c6e8d..9b34bace 100644
                  }
              }
          },
-@@ -780,6 +882,7 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
+@@ -780,6 +881,7 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
          onSubtitleStyleChanged = PlayerSettingsRepository::setSubtitleStyle,
          onSubtitleDelayChanged = { delayMs -> setSubtitleDelay(delayMs) },
          onSubtitleDelayReset = { setSubtitleDelay(0) },
@@ -19876,7 +19884,7 @@ index d28c6e8d..9b34bace 100644
          onAutoSyncCapture = { captureSubtitleAutoSyncTime() },
          onAutoSyncCueSelected = { cue -> applySubtitleAutoSyncCue(cue) },
          onAutoSyncReload = { loadSubtitleAutoSyncCues(force = true) },
-@@ -935,3 +1038,5 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
+@@ -935,3 +1037,5 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
          )
      }
  }
