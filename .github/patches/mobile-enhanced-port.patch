@@ -4510,6 +4510,29 @@ index da0c0ac7..e1cbde7a 100644
                  entry<CollectionsRoute> { route ->
                      CollectionsDestination(
                          route = route,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/PlayerDestination.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/PlayerDestination.kt
+index ad2bd3ac..b06cc07a 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/PlayerDestination.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/PlayerDestination.kt
+@@ -15,6 +15,7 @@ import com.nuvio.app.features.player.PlayerLaunchStore
+ import com.nuvio.app.features.player.PlayerScreen
+ import com.nuvio.app.features.watchprogress.ResumePromptRepository
+ import com.nuvio.app.navigation.NuvioNavigator
++import com.nuvio.app.navigation.DetailRoute
+ import com.nuvio.app.navigation.PlayerRoute
+ 
+ @Composable
+@@ -80,6 +81,10 @@ internal fun PlayerDestination(
+         sourceFilename = launch.sourceFilename,
+         stream = launch.stream,
+         onBack = onBack,
++        onOpenMetaDetails = { type, id, name ->
++            onBack()
++            navController.navigate(DetailRoute(type = type, id = id, title = name))
++        },
+         onOpenInExternalPlayer = { request ->
+             val playerLaunch = PlayerLaunch(
+                 profileId = launch.profileId,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/format/CountText.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/format/CountText.kt
 new file mode 100644
 index 00000000..a9600836
@@ -9237,6 +9260,38 @@ index 12884be6..cbc5cf01 100644
                      val sharedTransitionKey = person.tmdbId
                          ?.takeIf { it > 0 }
                          ?.let { castAvatarSharedTransitionKey(it, occurrenceIndex = index) }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailFloatingHeader.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailFloatingHeader.kt
+index b5cec37a..a3104c0c 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailFloatingHeader.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailFloatingHeader.kt
+@@ -39,6 +39,8 @@ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.lerp
+ import coil3.compose.AsyncImage
+ import com.nuvio.app.core.ui.NuvioBackButton
++import com.nuvio.app.core.ui.glass.LocalLiquidGlassBackdrop
++import com.nuvio.app.core.ui.glass.ambientLiquidGlass
+ import com.nuvio.app.core.ui.platformPhysicalTopInset
+ import com.nuvio.app.features.details.MetaDetails
+ import com.nuvio.app.isIos
+@@ -89,7 +91,17 @@ fun DetailFloatingHeader(
+             modifier = Modifier
+                 .fillMaxWidth()
+                 .clipToBounds()
+-                .background(surfaceColor),
++                .then(
++                    if (LocalLiquidGlassBackdrop.current != null) {
++                        Modifier.ambientLiquidGlass(
++                            shape = RectangleShape,
++                            tint = surfaceColor.copy(alpha = 0.55f),
++                            fallback = surfaceColor,
++                        )
++                    } else {
++                        Modifier.background(surfaceColor)
++                    },
++                ),
+         ) {
+             Row(
+                 modifier = Modifier
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/EpisodeWatchedActionSheet.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/EpisodeWatchedActionSheet.kt
 index d2f61799..56a5077a 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/EpisodeWatchedActionSheet.kt
@@ -19460,6 +19515,71 @@ index 00000000..283474fd
 +
 +private fun Double.formatPlaybackNumber(): String =
 +    if (this % 1.0 == 0.0) toInt().toString() else toString().take(6).trimEnd('0').trimEnd('.')
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlaybackStallHint.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlaybackStallHint.kt
+new file mode 100644
+index 00000000..f38785e8
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlaybackStallHint.kt
+@@ -0,0 +1,59 @@
++package com.nuvio.app.features.player
++
++import androidx.compose.foundation.background
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import com.nuvio.app.core.ui.glass.ambientLiquidGlass
++
++/** Shown when playback has been buffering for several seconds: offers the sources list. */
++@Composable
++fun PlaybackStallHint(
++    onTryAnotherSource: () -> Unit,
++    onDismiss: () -> Unit,
++    modifier: Modifier = Modifier,
++) {
++    val shape = RoundedCornerShape(14.dp)
++    Row(
++        modifier = modifier
++            .clip(shape)
++            .ambientLiquidGlass(
++                shape = shape,
++                tint = Color.Black.copy(alpha = 0.45f),
++                fallback = Color.Black.copy(alpha = 0.72f),
++            )
++            .padding(horizontal = 12.dp, vertical = 8.dp),
++        verticalAlignment = Alignment.CenterVertically,
++        horizontalArrangement = Arrangement.spacedBy(10.dp),
++    ) {
++        Text("Playback is stalling", color = Color.White, fontSize = 13.sp)
++        Text(
++            "Try another source",
++            color = Color.Black,
++            fontSize = 12.sp,
++            fontWeight = FontWeight.SemiBold,
++            modifier = Modifier
++                .clip(RoundedCornerShape(10.dp))
++                .background(Color.White)
++                .clickable(onClick = onTryAnotherSource)
++                .padding(horizontal = 10.dp, vertical = 5.dp),
++        )
++        Text(
++            "✕",
++            color = Color.White,
++            fontSize = 13.sp,
++            modifier = Modifier.clickable(onClick = onDismiss).padding(4.dp),
++        )
++    }
++}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
 index 140b1d80..bd7ad739 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
@@ -19473,6 +19593,37 @@ index 140b1d80..bd7ad739 100644
                      )
                  }
              }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreen.kt
+index 9160de7c..42e32618 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreen.kt
+@@ -23,6 +23,7 @@ fun PlayerScreen(
+     onOpenInExternalPlayer: ((ExternalPlayerPlaybackRequest) -> Unit)? = null,
+     onOpenExternalUrl: ((String) -> Unit)? = null,
+     onOpenPartyMedia: (PartyMedia) -> Unit = {},
++    onOpenMetaDetails: ((type: String, id: String, name: String) -> Unit)? = null,
+     modifier: Modifier = Modifier,
+     logo: String? = null,
+     poster: String? = null,
+@@ -88,6 +89,7 @@ fun PlayerScreen(
+             launchId = launchId,
+             sourceFilename = sourceFilename,
+             onOpenPartyMedia = onOpenPartyMedia,
++            onOpenMetaDetails = onOpenMetaDetails,
+             stream = stream,
+         )
+     )
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenArgs.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenArgs.kt
+index 81581c8a..2fe3d86c 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenArgs.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenArgs.kt
+@@ -43,5 +43,6 @@ internal data class PlayerScreenArgs(
+     val launchId: Long? = null,
+     val sourceFilename: String? = null,
+     val onOpenPartyMedia: (PartyMedia) -> Unit = {},
++    val onOpenMetaDetails: ((type: String, id: String, name: String) -> Unit)? = null,
+     val stream: com.nuvio.app.features.streams.StreamItem? = null,
+ )
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt
 index 93bb6999..32786346 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt
@@ -19493,8 +19644,22 @@ index 93bb6999..32786346 100644
          onAutoSyncCapture = onAutoSyncCapture,
          onAutoSyncCueSelected = onAutoSyncCueSelected,
          onAutoSyncReload = onAutoSyncReload,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
+index 0aac2e78..129b9d10 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
+@@ -527,6 +527,9 @@ private fun PlayerScreenRuntime.BindPlayerMetadataAndSkipEffects() {
+         lastManualSkipSeekPositions = null
+         activeSkipInterval = null
+         skipIntervalDismissed = false
++        skipFeedbackInterval = null
++        skipFeedbackNudging = false
++        movieRecommendationDismissedStage = 0
+         showNextEpisodeCard = false
+         nextEpisodeCardDismissed = false
+         cancelNextEpisodeAutoPlay()
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
-index a8c72885..bc7886a1 100644
+index a8c72885..c0d59045 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
 @@ -29,6 +29,10 @@ internal class PlayerScreenRuntime(
@@ -19508,7 +19673,20 @@ index a8c72885..bc7886a1 100644
      val title: String get() = args.title
      val profileId: Int get() = args.profileId
      val sourceUrl: String get() = args.sourceUrl
-@@ -241,6 +245,9 @@ internal class PlayerScreenRuntime(
+@@ -182,6 +186,12 @@ internal class PlayerScreenRuntime(
+     var lastManualSkipSeekPositions by mutableStateOf<Pair<Long, Long>?>(null)
+     var activeSkipInterval by mutableStateOf<SkipInterval?>(null)
+     var skipIntervalDismissed by mutableStateOf(false)
++    var skipFeedbackInterval by mutableStateOf<SkipInterval?>(null)
++    var skipFeedbackNudging by mutableStateOf(false)
++    var skipFeedbackReady by mutableStateOf(false)
++    var stallHintVisible by mutableStateOf(false)
++    var stallHintDismissed by mutableStateOf(false)
++    var movieRecommendationDismissedStage by mutableStateOf(0)
+     var parentalWarnings by mutableStateOf<List<ParentalWarning>>(emptyList())
+     var showParentalGuide by mutableStateOf(false)
+     var parentalGuideHasShown by mutableStateOf(false)
+@@ -241,6 +251,9 @@ internal class PlayerScreenRuntime(
      var autoFetchedAddonSubtitlesForKey by mutableStateOf<String?>(null)
      var trackPreferenceRestoreApplied by mutableStateOf(false)
      var subtitleDelayMs by mutableStateOf(0)
@@ -19561,7 +19739,7 @@ index daf4ccba..da788ff7 100644
 +    subtitleSyncSawPositionMs = null
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index 59e86821..e5117aae 100644
+index 59e86821..3554d465 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 @@ -7,6 +7,9 @@ import androidx.compose.animation.fadeOut
@@ -19574,7 +19752,19 @@ index 59e86821..e5117aae 100644
  import androidx.compose.runtime.Composable
  import com.nuvio.app.core.i18n.localizedSeasonEpisodeCode
  import com.nuvio.app.features.ratings.UserRatingPlayerOverlay
-@@ -260,6 +263,18 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+@@ -31,6 +34,11 @@ import com.nuvio.app.features.p2p.formatP2pMegabytes
+ import com.nuvio.app.features.p2p.formatP2pSpeed
+ import com.nuvio.app.features.autosync.bubble.AutoSyncBubbleToastHost
+ import com.nuvio.app.features.player.skip.internalSkipAction
++import com.nuvio.app.features.player.skip.MovieRecommendationCard
++import com.nuvio.app.features.player.skip.PlayerNextEpisodeRules
++import com.nuvio.app.features.player.skip.SkipFeedbackPrompt
++import com.nuvio.app.features.analysis.MediaAnalysisSettings
++import com.nuvio.app.features.details.MetaDetailsRepository
+ import com.nuvio.app.features.servers.ServerStreams
+ import com.nuvio.app.features.streams.streamAddonInstanceId
+ import com.nuvio.app.isIos
+@@ -260,6 +268,98 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
          }
  
          SubtitleSyncStatusPanel(horizontalSafePadding) // AutoSync hook: audio sync fallback status
@@ -19590,10 +19780,101 @@ index 59e86821..e5117aae 100644
 +                .align(Alignment.TopCenter)
 +                .padding(top = 16.dp, start = horizontalSafePadding, end = horizontalSafePadding),
 +        )
++
++        LaunchedEffect(playbackSnapshot.isLoading, playbackSnapshot.isEnded, initialLoadCompleted, activeSourceUrl) {
++            stallHintDismissed = false
++            stallHintVisible = false
++            if (initialLoadCompleted && playbackSnapshot.isLoading && !playbackSnapshot.isEnded) {
++                delay(STALL_HINT_DELAY_MS)
++                stallHintVisible = true
++            }
++        }
++        if (stallHintVisible && !stallHintDismissed && playbackSnapshot.isLoading) {
++            PlaybackStallHint(
++                onTryAnotherSource = {
++                    stallHintDismissed = true
++                    openSourcesPanel()
++                },
++                onDismiss = { stallHintDismissed = true },
++                modifier = Modifier
++                    .align(Alignment.TopCenter)
++                    .padding(top = 72.dp, start = horizontalSafePadding, end = horizontalSafePadding),
++            )
++        }
++
++        val feedbackInterval = skipFeedbackInterval
++        if (feedbackInterval != null) {
++            LaunchedEffect(feedbackInterval) {
++                skipFeedbackReady = false
++                delay(4_000L)
++                skipFeedbackReady = true
++            }
++            if (skipFeedbackReady) {
++                SkipFeedbackPrompt(
++                    interval = feedbackInterval,
++                    nudging = skipFeedbackNudging,
++                    durationSec = playbackSnapshot.durationMs / 1000.0,
++                    onGood = { skipFeedbackInterval = null },
++                    onWrong = { skipFeedbackNudging = true },
++                    onRewind = { playerController?.seekTo((playbackSnapshot.positionMs - 5_000L).coerceAtLeast(0L)) },
++                    onSave = { startSec, endSec ->
++                        skipIntervals = skipIntervals.map {
++                            if (it == feedbackInterval) it.copy(startTime = startSec, endTime = endSec) else it
++                        }
++                        skipFeedbackInterval = null
++                        skipFeedbackNudging = false
++                    },
++                    onDismiss = {
++                        skipFeedbackInterval = null
++                        skipFeedbackNudging = false
++                    },
++                    modifier = Modifier
++                        .align(Alignment.BottomStart)
++                        .padding(start = horizontalSafePadding + 16.dp, bottom = 96.dp),
++                )
++            }
++        }
++
++        if (!isSeries && args.onOpenMetaDetails != null) {
++            val movieRecommendations = remember(parentMetaType, parentMetaId, playerMeta) {
++                (playerMeta ?: MetaDetailsRepository.peek(parentMetaType ?: "movie", parentMetaId))
++                    ?.moreLikeThis.orEmpty()
++            }
++            val movieStage = PlayerNextEpisodeRules.movieRecommendationStage(
++                positionMs = playbackSnapshot.positionMs,
++                durationMs = playbackSnapshot.durationMs,
++                isEnded = playbackSnapshot.isEnded,
++            )
++            MovieRecommendationCard(
++                recommendations = movieRecommendations,
++                stage = movieStage,
++                dismissed = movieRecommendationDismissedStage >= movieStage,
++                controlsVisible = controlsVisible,
++                onOpen = { item ->
++                    flushWatchProgress()
++                    args.onOpenMetaDetails?.invoke(item.type, item.id, item.name)
++                },
++                onDismiss = { movieRecommendationDismissedStage = movieStage },
++                modifier = Modifier
++                    .align(Alignment.BottomEnd)
++                    .padding(end = horizontalSafePadding + 16.dp, bottom = 96.dp),
++            )
++        }
  
          RenderPlayerControls(displayedPositionMs = displayedPositionMs, isEpisode = isEpisode)
          RenderPlaybackOverlays(
-@@ -735,6 +750,7 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
+@@ -611,6 +711,10 @@ private fun BoxScope.RenderPlaybackOverlays(
+                     scheduleProgressSyncAfterSeek()
+                     publishPartyPlayback(positionMs = seekMs)
+                     skipIntervalDismissed = true
++                    if (MediaAnalysisSettings.isEnabled(MediaAnalysisSettings.Flag.SkipFeedbackPrompt)) {
++                        skipFeedbackNudging = false
++                        skipFeedbackInterval = interval
++                    }
+                 }
+             }
+         },
+@@ -735,6 +839,7 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
          onSubtitleStyleChanged = PlayerSettingsRepository::setSubtitleStyle,
          onSubtitleDelayChanged = { delayMs -> setSubtitleDelay(delayMs) },
          onSubtitleDelayReset = { setSubtitleDelay(0) },
@@ -19601,6 +19882,12 @@ index 59e86821..e5117aae 100644
          onAutoSyncCapture = { captureSubtitleAutoSyncTime() },
          onAutoSyncCueSelected = { cue -> applySubtitleAutoSyncCue(cue) },
          onAutoSyncReload = { loadSubtitleAutoSyncCues(force = true) },
+@@ -890,3 +995,5 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
+         )
+     }
+ }
++
++private const val STALL_HINT_DELAY_MS = 10_000L
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSettingsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSettingsRepository.kt
 index fb95a348..7bbcad65 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSettingsRepository.kt
@@ -24137,6 +24424,34 @@ index 863b2173..5f176b96 100644
              colors = SwitchDefaults.colors(
                  checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
                  checkedTrackColor = MaterialTheme.colorScheme.primary,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfilePopupContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfilePopupContent.kt
+index 43393ed8..8dacff2c 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfilePopupContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfilePopupContent.kt
+@@ -10,6 +10,8 @@ import androidx.compose.animation.fadeIn
+ import androidx.compose.animation.fadeOut
+ import androidx.compose.animation.togetherWith
+ import androidx.compose.foundation.background
++import com.nuvio.app.core.ui.glass.LocalLiquidGlassBackdrop
++import com.nuvio.app.core.ui.glass.ambientLiquidGlass
+ import androidx.compose.foundation.border
+ import androidx.compose.foundation.gestures.detectTapGestures
+ import androidx.compose.foundation.layout.Arrangement
+@@ -109,7 +111,13 @@ internal fun ProfilePopupContent(
+                     .shadow(12.dp, shape)
+                     .clip(shape)
+                     .then(
+-                        if (hazeState != null) {
++                        if (LocalLiquidGlassBackdrop.current != null) {
++                            Modifier.ambientLiquidGlass(
++                                shape = shape,
++                                tint = Color(0xFF1C1C1E).copy(alpha = 0.45f),
++                                fallback = Color(0xFF1C1C1E).copy(alpha = 0.94f),
++                            )
++                        } else if (hazeState != null) {
+                             Modifier.hazeEffect(hazeState) {
+                                 blurRadius = 24.dp
+                                 backgroundColor = Color(0xFF1C1C1E)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileRepository.kt
 index f82b09ff..49e35f57 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileRepository.kt
