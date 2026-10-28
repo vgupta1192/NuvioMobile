@@ -93,3 +93,35 @@ index cfc1f9d1..4c116dde 100644
              Spacer(Modifier.height(10.dp))
              Button(
                  modifier = Modifier
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt
+index baecfeeb..93bb6999 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt
+@@ -6,6 +6,9 @@ import com.nuvio.app.features.details.MetaVideo
+ import com.nuvio.app.features.downloads.DownloadsRepository
+ import com.nuvio.app.features.p2p.P2pConsentDialog
+ import com.nuvio.app.features.p2p.P2pSettingsRepository
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import androidx.compose.runtime.getValue
++import com.nuvio.app.features.streams.withMergedCloudStreamGroups
+ import com.nuvio.app.features.streams.StreamItem
+ import com.nuvio.app.features.streams.StreamsUiState
+ import com.nuvio.app.features.watchprogress.WatchProgressEntry
+@@ -184,9 +187,16 @@ internal fun PlayerScreenModalHosts(
+     )
+ 
+     androidx.compose.runtime.CompositionLocalProvider(LocalSyncedSubtitleVideoId provides activeVideoId) { // Synced subtitles hook
++    val forkCs3Group by androidx.compose.runtime.remember {
++        com.nuvio.app.features.settings.ForkPrefs.cloudStreamGroupTab.ensureLoaded()
++        com.nuvio.app.features.settings.ForkPrefs.cloudStreamGroupTab.value
++    }.collectAsStateWithLifecycle()
++    val forkSourcesState = androidx.compose.runtime.remember(sourceStreamsState, forkCs3Group) {
++        if (forkCs3Group) sourceStreamsState.withMergedCloudStreamGroups() else sourceStreamsState
++    }
+     PlayerSourcesPanel(
+         visible = showSourcesPanel,
+-        streamsUiState = sourceStreamsState,
++        streamsUiState = forkSourcesState,
+         contentTitle = contentTitle,
+         currentSeason = activeSeasonNumber,
+         currentEpisode = activeEpisodeNumber,
