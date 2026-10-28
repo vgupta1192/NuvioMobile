@@ -1,0 +1,439 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerPictureInPictureManager.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerPictureInPictureManager.android.kt
+index 36bd2f405..3690df9f6 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerPictureInPictureManager.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerPictureInPictureManager.android.kt
+@@ -94,6 +94,8 @@ internal object PlayerPictureInPictureManager {
+             val returnedToForeground = activity.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+             if (!returnedToForeground || activity.isFinishing || activity.isDestroyed) {
+                 pausePlaybackCallback?.invoke()
++                // The close (X) button in the mini player: close Nuvio as well so it does not reopen on the player.
++                if (!activity.isFinishing && !activity.isDestroyed) activity.finishAndRemoveTask()
+             }
+         }
+         pendingPictureInPictureExitCheck = exitCheck
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/EpisodeExtraRatings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/EpisodeExtraRatings.kt
+new file mode 100644
+index 000000000..13935950b
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/EpisodeExtraRatings.kt
+@@ -0,0 +1,75 @@
++package com.nuvio.app.features.details
++
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.setValue
++import com.nuvio.app.features.addons.httpGetTextWithHeaders
++import com.nuvio.app.features.tmdb.TmdbMetadataService
++import com.nuvio.app.features.trakt.TraktConfig
++import kotlinx.coroutines.CancellationException
++import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.doubleOrNull
++import kotlinx.serialization.json.intOrNull
++import kotlinx.serialization.json.jsonArray
++import kotlinx.serialization.json.jsonObject
++import kotlinx.serialization.json.jsonPrimitive
++
++/** Per-episode ratings from services other than IMDb (TMDB, Trakt), keyed by (season, episode). */
++object EpisodeExtraRatings {
++    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
++    private val cache = mutableMapOf<String, Map<Pair<Int, Int>, List<Pair<String, Double>>>>()
++
++    var current by mutableStateOf<Map<Pair<Int, Int>, List<Pair<String, Double>>>>(emptyMap())
++        private set
++
++    fun clear() {
++        current = emptyMap()
++    }
++
++    suspend fun load(imdbId: String?, tmdbId: Int?, seasons: List<Int>) {
++        val seasonList = seasons.filter { it > 0 }.distinct().sorted()
++        if (seasonList.isEmpty() || (imdbId == null && tmdbId == null)) {
++            current = emptyMap()
++            return
++        }
++        val key = "${imdbId ?: ""}:${tmdbId ?: ""}:${seasonList.joinToString(",")}"
++        cache[key]?.let { current = it; return }
++        val tmdb = tmdbId?.let { runCatching { TmdbMetadataService.fetchEpisodeVoteAverages(it, seasonList) }.getOrNull() }
++            .orEmpty()
++        val trakt = (imdbId ?: tmdbId?.toString())?.let { fetchTrakt(it) }.orEmpty()
++        val merged = mutableMapOf<Pair<Int, Int>, MutableList<Pair<String, Double>>>()
++        tmdb.forEach { (k, v) -> merged.getOrPut(k) { mutableListOf() }.add("TMDB" to v) }
++        trakt.forEach { (k, v) -> merged.getOrPut(k) { mutableListOf() }.add("Trakt" to v) }
++        if (merged.isNotEmpty()) cache[key] = merged
++        current = merged
++    }
++
++    private suspend fun fetchTrakt(showId: String): Map<Pair<Int, Int>, Double> {
++        return try {
++            val text = httpGetTextWithHeaders(
++                url = "https://api.trakt.tv/shows/$showId/seasons?extended=episodes,full",
++                headers = mapOf(
++                    "trakt-api-version" to "2",
++                    "trakt-api-key" to TraktConfig.CLIENT_ID,
++                    "Content-Type" to "application/json",
++                ),
++            )
++            val out = mutableMapOf<Pair<Int, Int>, Double>()
++            json.parseToJsonElement(text).jsonArray.forEach { seasonEl ->
++                val season = seasonEl.jsonObject
++                val sn = season["number"]?.jsonPrimitive?.intOrNull ?: return@forEach
++                season["episodes"]?.jsonArray?.forEach { epEl ->
++                    val ep = epEl.jsonObject
++                    val en = ep["number"]?.jsonPrimitive?.intOrNull ?: return@forEach
++                    val r = ep["rating"]?.jsonPrimitive?.doubleOrNull ?: return@forEach
++                    if (r > 0.0) out[sn to en] = r
++                }
++            }
++            out
++        } catch (cancelled: CancellationException) {
++            throw cancelled
++        } catch (_: Exception) {
++            emptyMap()
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
+index a38388822..e9ab6206c 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
+@@ -388,6 +388,7 @@ fun MetaDetailsScreen(
+     ) {
+         if (!metaScreenSettingsUiState.episodeRatingsVisibility.showRatings) {
+             episodeImdbRatings = emptyMap()
++            EpisodeExtraRatings.clear()
+             return@LaunchedEffect
+         }
+         val metaForRatings = displayedMeta
+@@ -413,6 +414,11 @@ fun MetaDetailsScreen(
+             tmdbId = tmdbId,
+         )
+         episodeImdbRatings = baseRatings
++        EpisodeExtraRatings.load(
++            imdbId = imdbId,
++            tmdbId = tmdbId,
++            seasons = metaForRatings.videos.mapNotNull { it.season },
++        )
+         if (imdbId != null && OmdbEpisodeRatings.savedKey().isNotBlank()) {
+             val seasonList = metaForRatings.videos.mapNotNull { it.season }.filter { it > 0 }.distinct()
+             val missing = seasonList.filter { s -> baseRatings.keys.none { it.first == s } }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailSeriesContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailSeriesContent.kt
+index 65ab52411..c1fed4b2f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailSeriesContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailSeriesContent.kt
+@@ -74,6 +74,7 @@ import com.nuvio.app.core.ui.NuvioProgressBar
+ import com.nuvio.app.core.ui.nuvioCardDepth
+ import com.nuvio.app.core.ui.nuvioHorizontalScrollBleed
+ import com.nuvio.app.core.ui.posterCardClickable
++import com.nuvio.app.features.details.EpisodeExtraRatings
+ import com.nuvio.app.features.details.MetaDetails
+ import com.nuvio.app.features.details.EpisodeRatingsVisibility
+ import com.nuvio.app.features.details.MetaEpisodeCardStyle
+@@ -902,6 +903,11 @@ private fun EpisodeHorizontalCard(
+         imdbRating?.takeIf { it > 0.0 && episodeRatingsVisibility.showRating(isWatched) }
+             ?.let(::formatEpisodeRating)
+     }
++    val extraRatings = if (episodeRatingsVisibility.showRating(isWatched)) {
++        video.seasonEpisodeKey()?.let { EpisodeExtraRatings.current[it] }.orEmpty()
++    } else {
++        emptyList()
++    }
+     val formattedDate = remember(video.released) { video.released?.let { formatReleaseDateForDisplay(it) } }
+     val runtimeLabel = remember(video.runtime) { video.runtime?.takeIf { it > 0 }?.let(::formatEpisodeRuntime) }
+     val imageUrl = video.thumbnail ?: fallbackImage
+@@ -1012,7 +1018,7 @@ private fun EpisodeHorizontalCard(
+                 )
+             }
+ 
+-            if (runtimeLabel != null || ratingLabel != null || formattedDate != null) {
++            if (runtimeLabel != null || ratingLabel != null || extraRatings.isNotEmpty() || formattedDate != null) {
+                 Row(
+                     modifier = Modifier.fillMaxWidth(),
+                     horizontalArrangement = Arrangement.spacedBy(12.dp),
+@@ -1034,6 +1040,14 @@ private fun EpisodeHorizontalCard(
+                             textSize = metrics.metaTextSize,
+                         )
+                     }
++                    extraRatings.forEach { (label, value) ->
++                        Text(
++                            text = "$label ${formatEpisodeRating(value)}",
++                            style = MaterialTheme.typography.labelSmall.copy(fontSize = metrics.metaTextSize, fontWeight = FontWeight.SemiBold),
++                            color = Color.White.copy(alpha = 0.78f),
++                            maxLines = 1,
++                        )
++                    }
+                     Spacer(modifier = Modifier.weight(1f))
+                     formattedDate?.let { date ->
+                         Text(
+@@ -1290,6 +1304,11 @@ private fun EpisodeListCard(
+         imdbRating?.takeIf { it > 0.0 && episodeRatingsVisibility.showRating(isWatched) }
+             ?.let(::formatEpisodeRating)
+     }
++    val extraRatings = if (episodeRatingsVisibility.showRating(isWatched)) {
++        video.seasonEpisodeKey()?.let { EpisodeExtraRatings.current[it] }.orEmpty()
++    } else {
++        emptyList()
++    }
+     val formattedDate = remember(video.released) { video.released?.let { formatReleaseDateForDisplay(it) } }
+     Box(
+         modifier = modifier
+@@ -1382,7 +1401,7 @@ private fun EpisodeListCard(
+                     overflow = TextOverflow.Ellipsis,
+                 )
+ 
+-                if (formattedDate != null || ratingLabel != null) {
++                if (formattedDate != null || ratingLabel != null || extraRatings.isNotEmpty()) {
+                     Row(
+                         horizontalArrangement = Arrangement.spacedBy(12.dp),
+                         verticalAlignment = Alignment.CenterVertically,
+@@ -1407,6 +1426,14 @@ private fun EpisodeListCard(
+                                 textSize = sizing.metaTextSize,
+                             )
+                         }
++                        extraRatings.forEach { (label, value) ->
++                            Text(
++                                text = "$label ${formatEpisodeRating(value)}",
++                                style = MaterialTheme.typography.labelSmall.copy(fontSize = sizing.metaTextSize, fontWeight = FontWeight.SemiBold),
++                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
++                                maxLines = 1,
++                            )
++                        }
+                     }
+                 }
+ 
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/CloudStreamHomeSetting.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/CloudStreamHomeSetting.kt
+new file mode 100644
+index 000000000..ba84de291
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/CloudStreamHomeSetting.kt
+@@ -0,0 +1,29 @@
++package com.nuvio.app.features.home
++
++import com.nuvio.app.core.storage.AppFileCache
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++
++/** Shows the CS3 provider dot and the CloudStream catalogues on Home. Per device, on by default. */
++object CloudStreamHomeSetting {
++    private const val PATH = "settings/cloudstream_home"
++
++    private val _enabled = MutableStateFlow(true)
++    val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
++
++    private var loaded = false
++
++    fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        AppFileCache.read(PATH)?.trim()?.let { _enabled.value = it == "1" }
++    }
++
++    fun set(value: Boolean) {
++        ensureLoaded()
++        if (_enabled.value == value) return
++        _enabled.value = value
++        runCatching { AppFileCache.write(PATH, if (value) "1" else "0") }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeRepository.kt
+index 6f9706059..6ab5d84cb 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeRepository.kt
+@@ -104,7 +104,12 @@ object HomeRepository {
+         CloudStreamRepository.initialize()
+         val cloudState = CloudStreamRepository.uiState.value
+         val selectedProviderId = _selectedCloudStreamProviderId.value
+-        val runnableCloudPlugins = cloudState.plugins.filter(CloudStreamPluginItem::isRunnable)
++        CloudStreamHomeSetting.ensureLoaded()
++        val runnableCloudPlugins = if (CloudStreamHomeSetting.enabled.value) {
++            cloudState.plugins.filter(CloudStreamPluginItem::isRunnable)
++        } else {
++            emptyList()
++        }
+         val effectiveSelectedProviderId = selectedProviderId?.takeIf { id ->
+             runnableCloudPlugins.any { it.metadata.id.value == id }
+         } ?: runnableCloudPlugins.firstOrNull()?.metadata?.id?.value
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt
+index ff56275a1..25f906db5 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt
+@@ -164,8 +164,10 @@ fun HomeScreen(
+         HomeCatalogSettingsRepository.uiState
+     }.collectAsStateWithLifecycle()
+     val cloudStreamUiState by CloudStreamRepository.uiState.collectAsStateWithLifecycle()
+-    val runnableCloudStreamProviders = remember(cloudStreamUiState.plugins) {
+-        cloudStreamUiState.plugins.filter(CloudStreamPluginItem::isRunnable)
++    LaunchedEffect(Unit) { CloudStreamHomeSetting.ensureLoaded() }
++    val cloudStreamHomeEnabled by CloudStreamHomeSetting.enabled.collectAsStateWithLifecycle()
++    val runnableCloudStreamProviders = remember(cloudStreamUiState.plugins, cloudStreamHomeEnabled) {
++        if (cloudStreamHomeEnabled) cloudStreamUiState.plugins.filter(CloudStreamPluginItem::isRunnable) else emptyList()
+     }
+     val selectedCloudStreamProviderId by HomeRepository.selectedCloudStreamProviderId.collectAsStateWithLifecycle()
+     var cloudStreamProviderMenuExpanded by remember { mutableStateOf(false) }
+@@ -200,11 +202,19 @@ fun HomeScreen(
+             ) {
+                 HomeRepository.setSelectedCloudStreamProvider(runnableCloudStreamProviders.first().metadata.id.value)
+             }
+-        } else if (selectedCloudStreamProviderId != null) {
++        } else if (selectedCloudStreamProviderId != null && cloudStreamHomeEnabled) {
+             HomeRepository.setSelectedCloudStreamProvider(null)
+         }
+     }
+ 
++    var cloudStreamHomeSeen by remember { mutableStateOf(cloudStreamHomeEnabled) }
++    LaunchedEffect(cloudStreamHomeEnabled) {
++        if (cloudStreamHomeSeen != cloudStreamHomeEnabled) {
++            cloudStreamHomeSeen = cloudStreamHomeEnabled
++            HomeRepository.refresh(addonsUiState.addons.enabledAddons(), force = true)
++        }
++    }
++
+     ScreenActivityEffect(scrollToTopRequests) { active ->
+         if (!active) return@ScreenActivityEffect
+         scrollToTopRequests.collect {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AudioTrackModal.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AudioTrackModal.kt
+index 08b120323..cc91b0335 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AudioTrackModal.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AudioTrackModal.kt
+@@ -105,21 +105,6 @@ fun AudioTrackModal(
+                     }
+                 }
+ 
+-                if (castAvailable) {
+-                    Text(
+-                        text = stringResource(Res.string.player_cast),
+-                        color = Color.White,
+-                        style = MaterialTheme.typography.headlineMedium,
+-                        modifier = Modifier.padding(top = 12.dp, bottom = 8.dp),
+-                    )
+-                    QualityRow(
+-                        label = castDeviceName?.let { stringResource(Res.string.player_cast_casting_to, it) }
+-                            ?: stringResource(Res.string.player_cast),
+-                        isSelected = castDeviceName != null,
+-                        onClick = { videoController?.showCastDialog() },
+-                    )
+-                }
+-
+                 if (qualities.size > 1) {
+                     Text(
+                         text = stringResource(Res.string.player_video_quality),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+index d23ca0140..9c7ae7004 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+@@ -201,10 +201,7 @@ internal fun PlayerControlsShell(
+     var timelineHeight by remember { mutableStateOf(0.dp) }
+     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+         val centerControlHeight = metrics.playIconSize + maxOf(metrics.playButtonPadding, metrics.sideButtonPadding) * 2
+-        val centerBottomPadding = if (useLegacyLayout) metrics.centerLift else maxOf(
+-            metrics.centerLift,
+-            timelineHeight * 2 + centerControlHeight + 16.dp - maxHeight,
+-        )
++        val centerBottomPadding = metrics.centerLift
+         Box(
+             modifier = Modifier
+                 .fillMaxWidth()
+@@ -331,6 +328,21 @@ internal fun PlayerControlsShell(
+                 }
+             }
+ 
++            if (showPlaybackControls && isPortraitPlayback && onOrientationToggleClick != null) {
++                // The portrait header row overflows and hides its rotate button, so keep one always reachable.
++                PlayerHeaderIconButton(
++                    icon = Icons.Rounded.StayCurrentLandscape,
++                    contentDescription = stringResource(Res.string.player_action_rotate_landscape),
++                    buttonSize = metrics.headerIconSize + 16.dp,
++                    iconSize = metrics.headerIconSize,
++                    onClick = onOrientationToggleClick,
++                    modifier = Modifier
++                        .align(Alignment.TopEnd)
++                        .windowInsetsPadding(WindowInsets.safeContent.only(WindowInsetsSides.Top))
++                        .padding(top = metrics.headerIconSize + 40.dp, end = metrics.horizontalPadding),
++                )
++            }
++
+             if (showPlaybackControls && useLegacyLayout) {
+                 ProgressControls(
+                     playbackSnapshot = playbackSnapshot,
+@@ -643,9 +655,10 @@ internal fun PlayerHeaderIconButton(
+     iconSize: androidx.compose.ui.unit.Dp,
+     onClick: () -> Unit,
+     tint: Color = Color.White,
++    modifier: Modifier = Modifier,
+ ) {
+     Box(
+-        modifier = Modifier
++        modifier = modifier
+             .size(buttonSize)
+             .clip(CircleShape)
+             .background(Color.Black.copy(alpha = 0.35f))
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/FeaturesSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/FeaturesSettingsPage.kt
+index 29760af50..0e2abf51d 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/FeaturesSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/FeaturesSettingsPage.kt
+@@ -129,6 +129,8 @@ private fun ForkLookSettingsSection(isTablet: Boolean) {
+     val dynamicArtworkBackground by com.nuvio.app.core.ui.DynamicArtworkBackgroundSetting.enabled.collectAsStateWithLifecycle()
+     LaunchedEffect(Unit) { com.nuvio.app.core.ui.DynamicArtworkBackgroundSetting.ensureLoaded() }
+     LaunchedEffect(Unit) { com.nuvio.app.core.ui.glass.LiquidGlassSettings.ensureLoaded() }
++    LaunchedEffect(Unit) { com.nuvio.app.features.home.CloudStreamHomeSetting.ensureLoaded() }
++    val cloudStreamHome by com.nuvio.app.features.home.CloudStreamHomeSetting.enabled.collectAsStateWithLifecycle()
+     val streamSettings by remember {
+         StreamBadgeSettingsRepository.ensureLoaded()
+         StreamBadgeSettingsRepository.uiState
+@@ -151,6 +153,14 @@ private fun ForkLookSettingsSection(isTablet: Boolean) {
+                 onCheckedChange = com.nuvio.app.core.ui.DynamicArtworkBackgroundSetting::set,
+             )
+             SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "CS3 dot and catalogues on Home",
++                description = "Show the CS3 provider dot and the CloudStream catalogue rows on the home screen. Streams stay available.",
++                checked = cloudStreamHome,
++                isTablet = isTablet,
++                onCheckedChange = com.nuvio.app.features.home.CloudStreamHomeSetting::set,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
+             SettingsSwitchRow(
+                 title = stringResource(Res.string.settings_stream_search_title),
+                 description = stringResource(Res.string.settings_stream_search_description),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tmdb/TmdbMetadataService.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tmdb/TmdbMetadataService.kt
+index 5a47e9983..f1beaaf3e 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tmdb/TmdbMetadataService.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tmdb/TmdbMetadataService.kt
+@@ -1162,6 +1162,28 @@ object TmdbMetadataService {
+         }
+     }
+ 
++    suspend fun fetchEpisodeVoteAverages(
++        tmdbId: Int,
++        seasonNumbers: List<Int>,
++    ): Map<Pair<Int, Int>, Double> = withContext(Dispatchers.Default) {
++        coroutineScope {
++            seasonNumbers.distinct().take(40).map { season ->
++                async {
++                    val details = fetch<TmdbSeasonDetailsResponse>(
++                        endpoint = "tv/$tmdbId/season/$season",
++                        query = emptyMap(),
++                    ) ?: return@async emptyMap<Pair<Int, Int>, Double>()
++                    details.episodes.mapNotNull { episode ->
++                        val number = episode.episodeNumber ?: return@mapNotNull null
++                        val vote = episode.voteAverage?.takeIf { it > 0.0 && (episode.voteCount ?: 1) > 0 }
++                            ?: return@mapNotNull null
++                        (season to number) to vote
++                    }.toMap()
++                }
++            }.awaitAll().fold(emptyMap<Pair<Int, Int>, Double>()) { acc, m -> acc + m }
++        }
++    }
++
+     private suspend fun fetchEpisodeEnrichment(
+         tmdbId: String,
+         seasonNumbers: List<Int>,
+@@ -2106,6 +2128,8 @@ private data class TmdbEpisodeResponse(
+     @SerialName("air_date") val airDate: String? = null,
+     val runtime: Int? = null,
+     @SerialName("episode_number") val episodeNumber: Int? = null,
++    @SerialName("vote_average") val voteAverage: Double? = null,
++    @SerialName("vote_count") val voteCount: Int? = null,
+ )
+ 
+ // ─── Person Detail Models ───
