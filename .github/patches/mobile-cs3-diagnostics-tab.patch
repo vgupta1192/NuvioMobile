@@ -1,0 +1,65 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/ProviderFilterRow.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/ProviderFilterRow.kt
+index 023f7924..492f58b4 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/ProviderFilterRow.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/ProviderFilterRow.kt
+@@ -80,7 +80,7 @@ internal fun ProviderFilterRow(
+     },
+     filterChip: (@Composable (AddonStreamGroup?, Boolean, () -> Unit) -> Unit)? = null,
+ ) {
+-    val addonGroups = groups.filter { it.streams.isNotEmpty() || it.isLoading }
++    val addonGroups = groups.filter { it.streams.isNotEmpty() || it.isLoading || it.addonId == CLOUDSTREAM_DIAGNOSTICS_ID }
+     val pinnedSourceIds by rememberPinnedStreamSourceIds()
+     var pinSheetTarget by remember { mutableStateOf<PinTarget?>(null) }
+     val chip: @Composable (AddonStreamGroup?, Boolean, () -> Unit) -> Unit =
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamFetchSupport.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamFetchSupport.kt
+index 0212aca3..71a10320 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamFetchSupport.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamFetchSupport.kt
+@@ -142,13 +142,20 @@ internal fun cloudStreamDiagnosticsGroup(
+     }
+     return AddonStreamGroup(
+         addonName = "CS3 diagnostics",
+-        addonId = "cloudstream-diagnostics",
+-        streams = emptyList(),
++        addonId = CLOUDSTREAM_DIAGNOSTICS_ID,
++        streams = lines.map(::cloudStreamDiagnosticsStream),
+         isLoading = false,
+-        error = lines.joinToString("\n"),
+     )
+ }
+ 
++internal const val CLOUDSTREAM_DIAGNOSTICS_ID = "cloudstream-diagnostics"
++
++internal fun cloudStreamDiagnosticsStream(line: String): StreamItem = StreamItem(
++    name = line,
++    addonName = "CS3 diagnostics",
++    addonId = CLOUDSTREAM_DIAGNOSTICS_ID,
++)
++
+ internal suspend fun resolveCloudStreamProviderStreams(
+     providerGroup: CloudStreamProviderGroup,
+     request: CloudStreamSearchRequest?,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
+index 1a650e1e..005c8d69 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
+@@ -650,6 +650,19 @@ object StreamsRepository {
+                         isLoading = false,
+                         error = "${providerGroup.addonName} timed out",
+                     )
++                    val resultLine = "${group.addonName}: ${group.streams.size} streams" +
++                        group.error?.let { ", $it" }.orEmpty()
++                    _uiState.update { current ->
++                        current.copy(
++                            groups = current.groups.map { currentGroup ->
++                                if (currentGroup.addonId == CLOUDSTREAM_DIAGNOSTICS_ID) {
++                                    currentGroup.copy(streams = currentGroup.streams + cloudStreamDiagnosticsStream(resultLine))
++                                } else {
++                                    currentGroup
++                                }
++                            },
++                        )
++                    }
+                     publishCompletion(StreamLoadCompletion.Addon(group))
+                 }
+             }
