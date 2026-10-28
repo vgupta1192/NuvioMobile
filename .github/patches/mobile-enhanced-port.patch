@@ -3856,10 +3856,18 @@ index a61a6627..2c8365fd 100644
 +    <string name="submit_intro_segment_preview">Preview</string>
  </resources>
 diff --git a/composeApp/src/commonMain/composeResources/values/strings.xml b/composeApp/src/commonMain/composeResources/values/strings.xml
-index 3f909a93..c73fd2cc 100644
+index 3f909a93..452458c2 100644
 --- a/composeApp/src/commonMain/composeResources/values/strings.xml
 +++ b/composeApp/src/commonMain/composeResources/values/strings.xml
-@@ -2476,4 +2476,351 @@
+@@ -624,6 +624,7 @@
+     <string name="detail_tab_trailer">Trailer</string>
+     <string name="detail_trailer_category_count">%1$s (%2$d)</string>
+     <string name="detail_trailers_title">Trailers</string>
++    <string name="details_download_season">Download %1$s</string>
+     <string name="downloads_empty_episodes">No completed episodes</string>
+     <string name="downloads_empty_title">No downloads yet</string>
+     <string name="downloads_episode_count">%1$d downloaded episode(s)</string>
+@@ -2476,4 +2477,362 @@
      <string name="compose_settings_page_cloudstream">CloudStream / CS3</string>
      <string name="settings_content_discovery_cloudstream_description">Install CloudStream repositories and manage the providers they make available.</string>
  
@@ -4210,7 +4218,89 @@ index 3f909a93..c73fd2cc 100644
 +    <string name="performance_root_description">Optimization switches with launch, playback and memory readouts</string>
 +    <string name="whats_new_root_description">See what&apos;s changed in recent releases</string>
 +    <string name="download_quality_not_enough_space">Not enough free space for this quality.</string>
++    <string name="profile_biometric_unlock">Biometric unlock</string>
++    <string name="profile_biometric_enabled_description">Fingerprint or face unlock is on for your primary profile. Your PIN is still available as a fallback.</string>
++    <string name="profile_biometric_disabled_description">Use your fingerprint or face recognition to unlock your primary profile instead of entering your PIN.</string>
++    <string name="profile_biometric_requires_pin">Turn on PIN lock first to use fingerprint or face unlock.</string>
++    <string name="profile_biometric_privacy_note">Your biometric data stays on your device. Biometric unlock can use any biometric enrolled when this feature is enabled. Adding or removing biometrics invalidates biometric unlock and requires your profile PIN to enable it again.</string>
++    <string name="profile_biometric_unavailable">Fingerprint or face unlock isn\'t available on this device.</string>
++    <string name="profile_biometric_setup_title">Biometric unlock</string>
++    <string name="profile_biometric_setup_failed">Biometric unlock couldn\'t be enabled. Your PIN is unchanged and remains available.</string>
++    <string name="profile_biometric_disable_failed">Nuvio couldn\'t confirm removal of the biometric unlock credential. Biometric unlock may still be enabled; try again.</string>
++    <string name="profile_enable_biometric_for">Enable biometric unlock for %1$s</string>
++    <string name="profile_disable_biometric_for">Disable biometric unlock for %1$s</string>
  </resources>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/AppGate.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/AppGate.kt
+index 227fd839..01910b73 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/AppGate.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/AppGate.kt
+@@ -1,5 +1,8 @@
+ package com.nuvio.app
+ 
++import com.nuvio.app.features.profiles.ProfileBiometricAuth
++import com.nuvio.app.features.profiles.ProfileBiometricResult
++import kotlinx.coroutines.CancellationException
+ import androidx.compose.animation.AnimatedContent
+ import androidx.compose.animation.core.MutableTransitionState
+ import androidx.compose.animation.core.tween
+@@ -148,6 +151,7 @@ internal fun AppGate(
+     var gateScreen by rememberSaveable { mutableStateOf(AppGateScreen.Loading.name) }
+     var editingProfile by remember { mutableStateOf<NuvioProfile?>(null) }
+     var autoSkipProfileSelection by rememberSaveable { mutableStateOf(false) }
++    var startupBiometricInProgress by remember { mutableStateOf(false) }
+     var profileSelectionLoading by rememberSaveable { mutableStateOf(false) }
+     var profileSelectionTransitionActive by rememberSaveable { mutableStateOf(false) }
+     var skipProfileSelectionEnterAnimation by remember { mutableStateOf(false) }
+@@ -268,7 +272,7 @@ internal fun AppGate(
+         }
+     }
+ 
+-    fun enterProfileGate(profiles: List<NuvioProfile>, syncOnEnter: Boolean) {
++    suspend fun enterProfileGate(profiles: List<NuvioProfile>, syncOnEnter: Boolean) {
+         profileSelectionLoading = false
+         profileSelectionTransitionActive = false
+         if (profiles.isEmpty()) {
+@@ -284,6 +288,40 @@ internal fun AppGate(
+             return
+         }
+ 
++        if (
++            !startupBiometricInProgress &&
++            ProfileRepository.state.value.rememberLastProfileEnabled &&
++            ProfileRepository.state.value.hasEverSelectedProfile
++        ) {
++            val rememberedLockedProfile = profiles.find {
++                it.profileIndex == ProfileRepository.activeProfileId
++            }
++            if (
++                rememberedLockedProfile?.pinEnabled == true &&
++                rememberedLockedProfile.profileIndex == 1
++            ) {
++                startupBiometricInProgress = true
++                try {
++                    val biometricResult = try {
++                        ProfileBiometricAuth.authenticate(1, rememberedLockedProfile.userId)
++                    } catch (e: CancellationException) {
++                        throw e
++                    } catch (_: Exception) {
++                        // A platform or storage exception is an authentication failure, never a bypass.
++                        ProfileBiometricResult.Failed
++                    }
++                    if (biometricResult == ProfileBiometricResult.Success) {
++                        selectProfile(rememberedLockedProfile, sync = syncOnEnter)
++                        gateScreen = AppGateScreen.Main.name
++                        autoSkipProfileSelection = false
++                        return
++                    }
++                } finally {
++                    startupBiometricInProgress = false
++                }
++            }
++        }
++
+         autoSkipProfileSelection = true
+         if (profiles.size == 1) {
+             val onlyProfile = profiles.first()
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt
 index 5d07fd20..322f8240 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt
@@ -4342,7 +4432,7 @@ index 5fca4c1f..2dbb0ea4 100644
 +    title: String,
 +): DownloadsSettingsRoute? = if (useNativeNavigation) DownloadsSettingsRoute(title) else null
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index da0c0ac7..474caef4 100644
+index da0c0ac7..e1cbde7a 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 @@ -389,6 +389,7 @@ internal fun MainAppContent(
@@ -4353,7 +4443,27 @@ index da0c0ac7..474caef4 100644
      val collectionsTitle = stringResource(Res.string.collections_header)
      val newCollectionTitle = stringResource(Res.string.collections_new)
      val detailsFallbackTitle = stringResource(Res.string.meta_section_details_title)
-@@ -1656,6 +1657,9 @@ internal fun MainAppContent(
+@@ -523,6 +524,9 @@ internal fun MainAppContent(
+         )
+     }
+     launchOverlayState.targetState = launchOverlayVisible
++    com.nuvio.app.features.whatsnew.WhatsNewLaunchHost(
++        enabled = ownsAppRuntime && rootContentReady && currentRoute is TabsRoute,
++    )
+ 
+     LaunchedEffect(
+         rootContentReady,
+@@ -531,6 +535,9 @@ internal fun MainAppContent(
+     ) {
+         if (ownsAppRuntime) {
+             onRootContentReady?.invoke(rootContentReady)
++            if (rootContentReady) {
++                com.nuvio.app.core.perf.PerformanceMetrics.recordLaunchReady(fromCachedHome = false)
++            }
+         }
+     }
+ 
+@@ -1656,6 +1663,9 @@ internal fun MainAppContent(
                                  onLicensesAttributionsSettingsClick = {
                                      navController.navigate(LicensesAttributionsSettingsRoute(licensesSettingsTitle))
                                  },
@@ -4363,7 +4473,7 @@ index da0c0ac7..474caef4 100644
                                  onCheckForUpdatesClick = if (AppFeaturePolicy.inAppUpdaterEnabled) {
                                      {
                                          appUpdaterController.checkForUpdates(
-@@ -1869,6 +1873,18 @@ internal fun MainAppContent(
+@@ -1869,6 +1879,18 @@ internal fun MainAppContent(
                          onOpenDownload = ::openDownloadedItem,
                      )
                  }
@@ -4382,7 +4492,7 @@ index da0c0ac7..474caef4 100644
                  entry<AddonsSettingsRoute> { route ->
                      SettingsDestination(route, navController) { onBack ->
                          AddonsSettingsScreen(onBack = onBack)
-@@ -1909,6 +1925,11 @@ internal fun MainAppContent(
+@@ -1909,6 +1931,11 @@ internal fun MainAppContent(
                          LicensesAttributionsSettingsScreen(onBack = onBack)
                      }
                  }
@@ -5275,6 +5385,31 @@ index 00000000..6570e830
 +
 +/** [LenientJson] that also writes default values. */
 +internal val LenientDefaultsJson: Json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/storage/LocalAccountDataCleaner.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/storage/LocalAccountDataCleaner.kt
+index 8e62353e..ea999230 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/storage/LocalAccountDataCleaner.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/storage/LocalAccountDataCleaner.kt
+@@ -21,6 +21,7 @@ import com.nuvio.app.features.player.PlayerSettingsRepository
+ import com.nuvio.app.features.p2p.P2pSettingsRepository
+ import com.nuvio.app.features.plugins.PluginRepository
+ import com.nuvio.app.features.player.SubtitleRepository
++import com.nuvio.app.features.profiles.ProfileBiometricAuth
+ import com.nuvio.app.features.profiles.ProfileRepository
+ import com.nuvio.app.features.profiles.MAX_PROFILES
+ import com.nuvio.app.features.search.SearchRepository
+@@ -42,6 +43,12 @@ import com.nuvio.app.features.watched.WatchedRepository
+ 
+ internal object LocalAccountDataCleaner {
+     fun wipe() {
++        // Drop the biometric credential of the primary profile before the profile list is cleared.
++        ProfileRepository.state.value.profiles
++            .firstOrNull { it.profileIndex == 1 }
++            ?.userId
++            ?.takeIf { it.isNotBlank() }
++            ?.let { userId -> runCatching { ProfileBiometricAuth.disable(1, userId) } }
+         ensureTrackingProvidersRegistered()
+         TrackingProviderRegistry.removeStoredProfiles(1..MAX_PROFILES)
+         SyncManager.cancelAccountSync()
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/NuvioSearchField.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/NuvioSearchField.kt
 new file mode 100644
 index 00000000..b4ddf0ed
@@ -8805,6 +8940,111 @@ index 00000000..2fa0406f
 +    DebridSettingsRepository.setCloudLibraryEnabled(true)
 +    CloudLibraryRepository.refresh()
 +}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
+index f1a48251..a3838882 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
+@@ -119,6 +119,8 @@ import com.nuvio.app.features.details.components.LocalReadCardRatingMap
+ import com.nuvio.app.features.details.components.DetailPosterRailSection
+ import com.nuvio.app.features.details.components.DetailProductionSection
+ import com.nuvio.app.features.details.components.DetailSeriesContent
++import com.nuvio.app.features.downloads.SeasonDownloadSheet
++import com.nuvio.app.features.streams.NextEpisodeStreamPrefetch
+ import com.nuvio.app.features.details.components.DetailSeriesListEpisode
+ import com.nuvio.app.features.details.components.DetailSeriesListHeader
+ import com.nuvio.app.features.details.components.DetailTrailersSection
+@@ -262,6 +264,7 @@ fun MetaDetailsScreen(
+     var selectedEpisodeZoomAnchor by remember(type, id) { mutableStateOf<PosterZoomAnchor?>(null) }
+     val episodeOverlayHazeState = rememberHazeState()
+     var selectedSeasonForActions by remember(type, id) { mutableStateOf<Int?>(null) }
++    var seasonDownloadFor by remember(type, id) { mutableStateOf<Int?>(null) }
+     val commentsEnabled by remember {
+         TraktCommentsSettings.ensureLoaded()
+         TraktCommentsSettings.enabled
+@@ -721,6 +724,20 @@ fun MetaDetailsScreen(
+                 val currentEpisodeListSeason = selectedEpisodeListSeason
+                     ?.takeIf { it in episodeListGroupedEpisodes }
+                     ?: defaultEpisodeListSeason
++                val prefetchVideoId = seriesStreamVideoId ?: seriesAction?.videoId
++                LaunchedEffect(meta.type, meta.id, prefetchVideoId, hasEpisodes) {
++                    val action = seriesAction ?: return@LaunchedEffect
++                    if (prefetchVideoId == null || (meta.type != "series" && !hasEpisodes)) return@LaunchedEffect
++                    // Let the details screen finish its own requests first.
++                    delay(1_500L)
++                    NextEpisodeStreamPrefetch.warm(
++                        type = meta.type,
++                        videoId = prefetchVideoId,
++                        parentMetaId = meta.id,
++                        season = action.seasonNumber,
++                        episode = action.episodeNumber,
++                    )
++                }
+                 val hasProductionSection = remember(meta) {
+                     meta.productionCompanies.isNotEmpty() || meta.networks.isNotEmpty()
+                 }
+@@ -1661,9 +1678,62 @@ fun MetaDetailsScreen(
+                                         areCurrentlyWatched = false,
+                                     )
+                                 },
++                                onDownloadSeason = onDownload?.takeIf { seasonEpisodes.isNotEmpty() }?.let {
++                                    { seasonDownloadFor = selectedSeason }
++                                },
+                             )
+                         }
+ 
++                        seasonDownloadFor?.let { downloadSeason ->
++                            val downloadEpisodes = remember(meta, downloadSeason, todayIsoDate) {
++                                meta.releasedEpisodesForSeason(
++                                    seasonNumber = downloadSeason,
++                                    todayIsoDate = todayIsoDate,
++                                )
++                            }
++                            if (onDownload != null && downloadEpisodes.isNotEmpty()) {
++                                SeasonDownloadSheet(
++                                    meta = meta,
++                                    seasonLabel = selectedSeasonLabel(downloadSeason),
++                                    episodes = downloadEpisodes,
++                                    isEpisodeWatched = { episode ->
++                                        isEpisodeWatchedForActions(
++                                            meta = meta,
++                                            episode = episode,
++                                            watchedKeys = watchedUiState.watchedKeys,
++                                            progressByVideoId = progressByVideoId,
++                                        )
++                                    },
++                                    onOpenEpisode = { video ->
++                                        seasonDownloadFor = null
++                                        val playbackVideoId = buildPlaybackVideoId(
++                                            parentMetaId = meta.id,
++                                            seasonNumber = video.season,
++                                            episodeNumber = video.episode,
++                                            fallbackVideoId = video.id,
++                                        )
++                                        onDownload(
++                                            meta.type,
++                                            video.id.takeIf { it.isNotBlank() } ?: playbackVideoId,
++                                            meta.id,
++                                            meta.type,
++                                            meta.name,
++                                            meta.logo,
++                                            meta.poster,
++                                            meta.background,
++                                            video.season,
++                                            video.episode,
++                                            video.title,
++                                            video.thumbnail,
++                                            video.overview,
++                                            null,
++                                        )
++                                    },
++                                    onDismiss = { seasonDownloadFor = null },
++                                )
++                            }
++                        }
++
+                         if (inAppTrailerPlaybackEnabled) {
+                             TrailerPlayerPopup(
+                                 visible = selectedTrailer != null,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/OmdbSettingsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/OmdbSettingsRepository.kt
 new file mode 100644
 index 00000000..5ae802b6
@@ -8853,6 +9093,105 @@ index 00000000..7db62be4
 +    if (query.isBlank()) return cast
 +    return cast.filter { (_, person) -> matchesSearch(person.name, query) || matchesSearch(person.role, query) }
 +}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailCastSection.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailCastSection.kt
+index 12884be6..cbc5cf01 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailCastSection.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailCastSection.kt
+@@ -20,7 +20,13 @@ import androidx.compose.ui.draw.clip
+ import androidx.compose.material3.MaterialTheme
+ import androidx.compose.material3.Text
+ import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
+ import androidx.compose.runtime.remember
++import androidx.compose.runtime.saveable.rememberSaveable
++import androidx.compose.runtime.setValue
++import androidx.compose.foundation.layout.padding
++import com.nuvio.app.core.ui.NuvioSearchField
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.layout.ContentScale
+@@ -60,6 +66,25 @@ fun DetailCastSection(
+         modifier = modifier,
+         showHeader = showHeader,
+     ) {
++        var query by rememberSaveable { mutableStateOf("") }
++        val indexed = remember(cast) { cast.withIndex().toList() }
++        val shown = remember(indexed, query) { filterCast(indexed, query) }
++        // Find an actor or a character: case and accents are ignored ("zoe" finds "Zoë").
++        NuvioSearchField(
++            query = query,
++            onQueryChange = { query = it },
++            placeholder = "Search actor or character",
++            modifier = Modifier.fillMaxWidth(),
++        )
++        if (shown.isEmpty()) {
++            Text(
++                text = "No cast matches \"${query.trim()}\"",
++                modifier = Modifier.padding(vertical = 8.dp),
++                style = MaterialTheme.typography.bodySmall,
++                color = MaterialTheme.colorScheme.onSurfaceVariant,
++            )
++            return@DetailSection
++        }
+         BoxWithConstraints {
+             val sizing = castSectionSizing(maxWidth.value)
+ 
+@@ -71,9 +96,12 @@ fun DetailCastSection(
+                 horizontalArrangement = Arrangement.spacedBy(sizing.avatarGap),
+             ) {
+                 itemsIndexed(
+-                    items = cast,
+-                    key = { index, person -> "${person.name}-${person.role.orEmpty()}-${person.photo.orEmpty()}-$index" },
+-                ) { index, person ->
++                    items = shown,
++                    key = { _, entry -> "${entry.value.name}-${entry.value.role.orEmpty()}-${entry.value.photo.orEmpty()}-${entry.index}" },
++                ) { _, entry ->
++                    // Index in the full list keeps shared-element keys stable while filtering.
++                    val index = entry.index
++                    val person = entry.value
+                     val sharedTransitionKey = person.tmdbId
+                         ?.takeIf { it > 0 }
+                         ?.let { castAvatarSharedTransitionKey(it, occurrenceIndex = index) }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/EpisodeWatchedActionSheet.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/EpisodeWatchedActionSheet.kt
+index d2f61799..56a5077a 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/EpisodeWatchedActionSheet.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/EpisodeWatchedActionSheet.kt
+@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.padding
+ import androidx.compose.material.icons.Icons
+ import androidx.compose.material.icons.filled.CheckCircle
+ import androidx.compose.material.icons.filled.DoneAll
++import androidx.compose.material.icons.filled.Download
+ import androidx.compose.material.icons.filled.PlayArrow
+ import androidx.compose.material.icons.filled.PlaylistAddCheckCircle
+ import androidx.compose.material3.ExperimentalMaterial3Api
+@@ -136,6 +137,7 @@ fun SeasonWatchedActionSheet(
+     onDismiss: () -> Unit,
+     onToggleSeasonWatched: () -> Unit,
+     onMarkPreviousSeasonsWatched: () -> Unit,
++    onDownloadSeason: (() -> Unit)? = null,
+ ) {
+     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+     val coroutineScope = rememberCoroutineScope()
+@@ -177,6 +179,18 @@ fun SeasonWatchedActionSheet(
+                     }
+                 },
+             )
++            if (onDownloadSeason != null) {
++                NuvioBottomSheetActionRow(
++                    icon = Icons.Default.Download,
++                    title = stringResource(Res.string.details_download_season, seasonLabel),
++                    onClick = {
++                        coroutineScope.launch {
++                            dismissNuvioBottomSheet(sheetState = sheetState, onDismiss = onDismiss)
++                        }
++                        onDownloadSeason()
++                    },
++                )
++            }
+             if (canMarkPreviousSeasons) {
+                 NuvioBottomSheetActionRow(
+                     icon = Icons.Default.DoneAll,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/ActiveDownloadGroups.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/ActiveDownloadGroups.kt
 new file mode 100644
 index 00000000..41f6329d
@@ -23234,6 +23573,413 @@ index 00000000..2832dce1
 +    suspend fun authenticate(profileIndex: Int, userId: String): ProfileBiometricResult
 +    fun disable(profileIndex: Int, userId: String): Boolean
 +}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileEditScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileEditScreen.kt
+index 863b2173..f5a32d5b 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileEditScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileEditScreen.kt
+@@ -51,7 +51,10 @@ import com.nuvio.app.core.ui.themePalette
+ import com.nuvio.app.features.membership.CosmeticEntitlement
+ import com.nuvio.app.features.membership.MemberAccessRepository
+ import com.nuvio.app.features.membership.ProfileBackgroundRepository
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.launch
++import kotlinx.coroutines.withContext
+ import nuvio.composeapp.generated.resources.*
+ import org.jetbrains.compose.resources.stringResource
+ 
+@@ -82,6 +85,31 @@ fun ProfileEditScreen(
+     var showDeleteConfirm by remember { mutableStateOf(false) }
+     var showPinSetup by remember { mutableStateOf(false) }
+     var showPinClear by remember { mutableStateOf(false) }
++    var showBiometricEnablePin by remember { mutableStateOf(false) }
++    var showBiometricDisablePin by remember { mutableStateOf(false) }
++    var biometricConfigured by remember(
++        currentProfile?.profileIndex,
++        currentProfile?.userId,
++    ) {
++        mutableStateOf(false)
++    }
++    var biometricSetupFailed by remember { mutableStateOf(false) }
++    var biometricDisableFailed by remember { mutableStateOf(false) }
++
++    LaunchedEffect(currentProfile?.profileIndex, currentProfile?.userId) {
++        val profile = currentProfile
++        biometricConfigured = when {
++            profile == null || profile.profileIndex != 1 || profile.userId.isBlank() -> false
++            else -> try {
++                ProfileBiometricAuth.isConfigured(1, profile.userId)
++            } catch (e: CancellationException) {
++                throw e
++            } catch (_: Exception) {
++                // Do not show biometric unlock as disabled when its state could not be read.
++                true
++            }
++        }
++    }
+     val memberAccess by remember {
+         MemberAccessRepository.ensureStarted()
+         MemberAccessRepository.access
+@@ -263,6 +291,40 @@ fun ProfileEditScreen(
+                                 onClick = { showPinSetup = true },
+                             )
+                         }
++
++                        if (currentProfile?.profileIndex == 1) {
++                            val pinEnabled = currentProfile.pinEnabled
++                            val biometricAvailable = remember(currentProfile.userId, biometricConfigured) {
++                                val platformAvailable = try {
++                                    ProfileBiometricAuth.isAvailable()
++                                } catch (_: Exception) {
++                                    false
++                                }
++                                platformAvailable || biometricConfigured
++                            }
++                            ProfileOptionRow(
++                                title = stringResource(Res.string.profile_biometric_unlock),
++                                description = when {
++                                    !pinEnabled -> stringResource(Res.string.profile_biometric_requires_pin)
++                                    !biometricAvailable -> stringResource(Res.string.profile_biometric_unavailable)
++                                    biometricConfigured -> stringResource(Res.string.profile_biometric_enabled_description)
++                                    else -> stringResource(Res.string.profile_biometric_disabled_description)
++                                },
++                                checked = biometricConfigured,
++                                enabled = pinEnabled && biometricAvailable,
++                                onCheckedChange = { enabled ->
++                                    if (enabled) showBiometricEnablePin = true
++                                    else showBiometricDisablePin = true
++                                },
++                            )
++                            if (biometricConfigured) {
++                                Text(
++                                    text = stringResource(Res.string.profile_biometric_privacy_note),
++                                    style = MaterialTheme.typography.bodySmall,
++                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
++                                )
++                            }
++                        }
+                     }
+                 }
+             }
+@@ -354,6 +416,79 @@ fun ProfileEditScreen(
+         onDismiss = { showDeleteConfirm = false },
+     )
+ 
++    if (showBiometricEnablePin && currentProfile?.profileIndex == 1) {
++        PinEntryDialog(
++            profileName = stringResource(Res.string.profile_enable_biometric_for, currentProfile.name),
++            onVerify = { pin -> ProfileRepository.verifyPin(currentProfile.profileIndex, pin) },
++            onVerified = {
++                showBiometricEnablePin = false
++                scope.launch {
++                    val result = try {
++                        ProfileBiometricAuth.enable(1, currentProfile.userId)
++                    } catch (e: CancellationException) {
++                        throw e
++                    } catch (_: Exception) {
++                        ProfileBiometricResult.Failed
++                    }
++                    when (result) {
++                        ProfileBiometricResult.Success -> biometricConfigured = true
++                        ProfileBiometricResult.Cancelled,
++                        ProfileBiometricResult.FallbackRequested,
++                        -> Unit
++                        else -> biometricSetupFailed = true
++                    }
++                }
++            },
++            onDismiss = { showBiometricEnablePin = false },
++        )
++    }
++
++    if (showBiometricDisablePin && currentProfile?.profileIndex == 1) {
++        PinEntryDialog(
++            profileName = stringResource(Res.string.profile_disable_biometric_for, currentProfile.name),
++            onVerify = { pin -> ProfileRepository.verifyPin(currentProfile.profileIndex, pin) },
++            onVerified = {
++                showBiometricDisablePin = false
++                scope.launch {
++                    val removed = try {
++                        withContext(Dispatchers.IO) {
++                            ProfileBiometricAuth.disable(1, currentProfile.userId)
++                        }
++                    } catch (e: CancellationException) {
++                        throw e
++                    } catch (_: Exception) {
++                        false
++                    }
++                    biometricConfigured = !removed
++                    biometricDisableFailed = !removed
++                }
++            },
++            onDismiss = { showBiometricDisablePin = false },
++        )
++    }
++
++    if (biometricSetupFailed) {
++        NuvioStatusModal(
++            title = stringResource(Res.string.profile_biometric_setup_title),
++            message = stringResource(Res.string.profile_biometric_setup_failed),
++            isVisible = true,
++            confirmText = stringResource(Res.string.action_ok),
++            onConfirm = { biometricSetupFailed = false },
++            onDismiss = { biometricSetupFailed = false },
++        )
++    }
++
++    if (biometricDisableFailed) {
++        NuvioStatusModal(
++            title = stringResource(Res.string.profile_security),
++            message = stringResource(Res.string.profile_biometric_disable_failed),
++            isVisible = true,
++            confirmText = stringResource(Res.string.action_ok),
++            onConfirm = { biometricDisableFailed = false },
++            onDismiss = { biometricDisableFailed = false },
++        )
++    }
++
+     if (showPinSetup && currentProfile != null) {
+         PinSetupDialog(
+             profileIndex = currentProfile.profileIndex,
+@@ -371,6 +506,8 @@ fun ProfileEditScreen(
+             onVerify = { pin -> ProfileRepository.clearPin(currentProfile.profileIndex, pin) },
+             onVerified = {
+                 showPinClear = false
++                // ProfileRepository.clearPin drops the biometric credential; re-read the state.
++                if (currentProfile.profileIndex == 1) biometricConfigured = false
+             },
+             onDismiss = {
+                 showPinClear = false
+@@ -520,6 +657,7 @@ private fun ProfileOptionRow(
+     title: String,
+     description: String,
+     checked: Boolean,
++    enabled: Boolean = true,
+     onCheckedChange: (Boolean) -> Unit,
+ ) {
+     Row(
+@@ -534,19 +672,28 @@ private fun ProfileOptionRow(
+             Text(
+                 text = title,
+                 style = MaterialTheme.typography.bodyLarge,
+-                color = MaterialTheme.colorScheme.onSurface,
++                color = if (enabled) {
++                    MaterialTheme.colorScheme.onSurface
++                } else {
++                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
++                },
+                 fontWeight = FontWeight.Medium,
+             )
+             Text(
+                 text = description,
+                 style = MaterialTheme.typography.bodyMedium,
+-                color = MaterialTheme.colorScheme.onSurfaceVariant,
++                color = if (enabled) {
++                    MaterialTheme.colorScheme.onSurfaceVariant
++                } else {
++                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
++                },
+             )
+         }
+         Spacer(modifier = Modifier.width(12.dp))
+         Switch(
+             checked = checked,
+             onCheckedChange = onCheckedChange,
++            enabled = enabled,
+             colors = SwitchDefaults.colors(
+                 checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                 checkedTrackColor = MaterialTheme.colorScheme.primary,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileRepository.kt
+index f82b09ff..8a17179a 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileRepository.kt
+@@ -287,6 +287,13 @@ object ProfileRepository {
+         pushProfiles(allPayloads)
+     }
+ 
++    private fun disableBiometricUnlock(profileIndex: Int) {
++        if (profileIndex != 1) return
++        val userId = _state.value.profiles.firstOrNull { it.profileIndex == 1 }?.userId.orEmpty()
++        if (userId.isBlank()) return
++        runCatching { ProfileBiometricAuth.disable(1, userId) }
++    }
++
+     suspend fun deleteProfile(profileIndex: Int) {
+         if (AuthRepository.state.value.isAnonymous) {
+             val remaining = _state.value.profiles.filter { it.profileIndex != profileIndex }
+@@ -372,6 +379,7 @@ object ProfileRepository {
+                 currentPin?.let { put("p_current_pin", it) }
+             }
+             SupabaseProvider.client.postgrest.rpc("clear_profile_pin", params)
++            disableBiometricUnlock(profileIndex)
+             pullProfiles()
+             ProfilePinCacheStorage.removePayload(profileIndex)
+             PinVerifyResult(unlocked = true)
+@@ -389,6 +397,7 @@ object ProfileRepository {
+                 put("p_profile_id", profileIndex)
+             }
+             SupabaseProvider.client.postgrest.rpc("clear_profile_pin_with_account_password", params)
++            disableBiometricUnlock(profileIndex)
+             pullProfiles()
+             ProfilePinCacheStorage.removePayload(profileIndex)
+         }.onFailure { e ->
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileSelectionScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileSelectionScreen.kt
+index 3b05dddd..77a87d77 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileSelectionScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileSelectionScreen.kt
+@@ -64,6 +64,7 @@ import com.nuvio.app.core.ui.NuvioToastHost
+ import com.nuvio.app.core.ui.LocalVerticalBarPadding
+ import com.nuvio.app.features.membership.CosmeticEntitlement
+ import com.nuvio.app.features.settings.MemberBrandWordmark
++import kotlinx.coroutines.CancellationException
+ import kotlinx.coroutines.delay
+ import kotlinx.coroutines.launch
+ import nuvio.composeapp.generated.resources.*
+@@ -84,19 +85,43 @@ fun ProfileSelectionScreen(
+     val scope = rememberCoroutineScope()
+     var pinDialogProfile by remember { mutableStateOf<NuvioProfile?>(null) }
+     var isEditMode by remember { mutableStateOf(false) }
++    var biometricAuthenticating by remember { mutableStateOf(false) }
+ 
+     val titleAlpha = remember { Animatable(0f) }
+     val titleOffset = remember { Animatable(20f) }
+     val manageAlpha = remember { Animatable(0f) }
+     val onProfileClick: (NuvioProfile) -> Unit = { profile ->
+-        if (interactionEnabled) {
++        if (interactionEnabled && !biometricAuthenticating) {
+             routeProfileSelection(
+                 profile = profile,
+                 isEditMode = isEditMode,
+                 activeProfileIndex = activeProfileIndex,
+                 onEditProfile = onEditProfile,
+                 onActiveProfileSelected = { scope.launch { showAlreadyActiveProfileToast(it) } },
+-                onPinRequired = { pinDialogProfile = it },
++                onPinRequired = { locked ->
++                    if (locked.profileIndex == 1) {
++                        biometricAuthenticating = true
++                        scope.launch {
++                            val result = try {
++                                ProfileBiometricAuth.authenticate(locked.profileIndex, locked.userId)
++                            } catch (e: CancellationException) {
++                                biometricAuthenticating = false
++                                throw e
++                            } catch (_: Exception) {
++                                // A platform failure is not authentication: fall back to the PIN.
++                                ProfileBiometricResult.Failed
++                            }
++                            biometricAuthenticating = false
++                            when (result) {
++                                ProfileBiometricResult.Success -> onProfileSelected(locked)
++                                ProfileBiometricResult.Cancelled -> Unit
++                                else -> pinDialogProfile = locked
++                            }
++                        }
++                    } else {
++                        pinDialogProfile = locked
++                    }
++                },
+                 onProfileSelected = onProfileSelected,
+             )
+         }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileSwitcherTab.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileSwitcherTab.kt
+index 3749edc3..fa476bd7 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileSwitcherTab.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileSwitcherTab.kt
+@@ -76,6 +76,7 @@ import com.nuvio.app.core.ui.NuvioTokens
+ import com.nuvio.app.core.ui.nuvio
+ import dev.chrisbanes.haze.HazeState
+ import com.nuvio.app.isIos
++import kotlinx.coroutines.CancellationException
+ import kotlinx.coroutines.delay
+ import kotlinx.coroutines.launch
+ import nuvio.composeapp.generated.resources.*
+@@ -111,6 +112,7 @@ fun ProfileSwitcherTab(
+     // Keep popup composed while exit animation plays
+     var popupVisible by remember { mutableStateOf(false) }
+     var pinProfile by remember { mutableStateOf<NuvioProfile?>(null) }
++    var biometricAuthenticating by remember { mutableStateOf(false) }
+     var dragTargetProfileIndex by remember { mutableStateOf<Int?>(null) }
+     var triggerCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+     val profileBubbleBounds = remember(profiles.map { it.profileIndex }) {
+@@ -154,7 +156,33 @@ fun ProfileSwitcherTab(
+                     showPopup = false
+                 }
+             },
+-            onPinRequired = { pinProfile = it },
++            onPinRequired = { locked ->
++                if (locked.profileIndex == 1 && locked.userId.isNotBlank() && !biometricAuthenticating) {
++                    biometricAuthenticating = true
++                    scope.launch {
++                        val result = try {
++                            ProfileBiometricAuth.authenticate(locked.profileIndex, locked.userId)
++                        } catch (error: CancellationException) {
++                            biometricAuthenticating = false
++                            throw error
++                        } catch (_: Exception) {
++                            ProfileBiometricResult.Failed
++                        }
++                        biometricAuthenticating = false
++                        when (result) {
++                            ProfileBiometricResult.Success -> {
++                                pinProfile = null
++                                showPopup = false
++                                onProfileSelected(locked)
++                            }
++                            ProfileBiometricResult.Cancelled -> Unit
++                            else -> pinProfile = locked
++                        }
++                    }
++                } else if (!biometricAuthenticating) {
++                    pinProfile = locked
++                }
++            },
+             onProfileSelected = {
+                 showPopup = false
+                 onProfileSelected(it)
+@@ -327,6 +355,7 @@ fun NativeProfileSwitcherPopup(
+     var showPopup by remember { mutableStateOf(false) }
+     var popupVisible by remember { mutableStateOf(false) }
+     var pinProfile by remember { mutableStateOf<NuvioProfile?>(null) }
++    var biometricAuthenticating by remember { mutableStateOf(false) }
+ 
+     LaunchedEffect(Unit) {
+         AvatarRepository.refreshAvatars()
+@@ -359,7 +388,34 @@ fun NativeProfileSwitcherPopup(
+                     onDismissRequest()
+                 }
+             },
+-            onPinRequired = { pinProfile = it },
++            onPinRequired = { locked ->
++                if (locked.profileIndex == 1 && locked.userId.isNotBlank() && !biometricAuthenticating) {
++                    biometricAuthenticating = true
++                    scope.launch {
++                        val result = try {
++                            ProfileBiometricAuth.authenticate(locked.profileIndex, locked.userId)
++                        } catch (error: CancellationException) {
++                            biometricAuthenticating = false
++                            throw error
++                        } catch (_: Exception) {
++                            ProfileBiometricResult.Failed
++                        }
++                        biometricAuthenticating = false
++                        when (result) {
++                            ProfileBiometricResult.Success -> {
++                                pinProfile = null
++                                showPopup = false
++                                onDismissRequest()
++                                onProfileSelected(locked)
++                            }
++                            ProfileBiometricResult.Cancelled -> Unit
++                            else -> pinProfile = locked
++                        }
++                    }
++                } else if (!biometricAuthenticating) {
++                    pinProfile = locked
++                }
++            },
+             onProfileSelected = {
+                 showPopup = false
+                 onDismissRequest()
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AdvancedSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AdvancedSettingsPage.kt
 index 05e91bbf..02f2d8a5 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AdvancedSettingsPage.kt
@@ -25661,6 +26407,86 @@ index 00000000..39869ae9
 +        return StreamLinkCacheRepository.getValid(key, settings.streamReuseLastLinkCacheHours * 60L * 60L * 1000L) != null
 +    }
 +}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamCard.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamCard.kt
+index 109be6d9..2d3d7e38 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamCard.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamCard.kt
+@@ -37,6 +37,7 @@ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.draw.clip
+ import androidx.compose.ui.draw.shadow
+ import androidx.compose.ui.graphics.Color
++import com.nuvio.app.core.ui.glass.ambientLiquidGlass
+ import androidx.compose.ui.layout.ContentScale
+ import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.text.style.TextOverflow
+@@ -91,11 +92,15 @@ internal fun StreamCard(
+                 spotColor = Color.Black.copy(alpha = 0.04f),
+             )
+             .clip(cardShape)
+-            .background(
++            .then(
+                 if (isCurrent) {
+-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
++                    Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                 } else {
+-                    Color.White.copy(alpha = 0.05f)
++                    Modifier.ambientLiquidGlass(
++                        shape = cardShape,
++                        tint = Color.Black.copy(alpha = 0.28f),
++                        fallback = Color.White.copy(alpha = 0.05f),
++                    )
+                 },
+             )
+             .then(
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt
+index f90b5baf..aaeca3e3 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt
+@@ -77,6 +77,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
+ import coil3.compose.AsyncImage
+ import com.nuvio.app.core.ui.nuvioSafeBottomPadding
+ import com.nuvio.app.core.ui.shimmer
++import com.nuvio.app.core.ui.glass.nuvioBackdropSource
+ import com.nuvio.app.core.ui.LocalVerticalBarPadding
+ import com.nuvio.app.core.ui.centeredVerticalBarPadding
+ import com.nuvio.app.features.debrid.DebridSettingsRepository
+@@ -453,6 +454,14 @@ private fun MobileStreamsLayout(
+     onRefresh: () -> Unit,
+     modifier: Modifier = Modifier,
+ ) {
++    val streamsGlassBackdrop = com.nuvio.app.core.ui.glass.rememberNuvioBackdrop()
++    val streamsGlassActive = backgroundMode == StreamBackgroundMode.Cinematic &&
++        heroArtwork != null &&
++        com.nuvio.app.core.ui.glass.isLiquidGlassSupported()
++    androidx.compose.runtime.CompositionLocalProvider(
++        com.nuvio.app.core.ui.glass.LocalLiquidGlassBackdrop provides
++            (if (streamsGlassActive) streamsGlassBackdrop else null),
++    ) {
+     Box(modifier = modifier.fillMaxSize()) {
+         if (backgroundMode == StreamBackgroundMode.Cinematic && heroArtwork != null) {
+             AsyncImage(
+@@ -460,6 +469,13 @@ private fun MobileStreamsLayout(
+                 contentDescription = null,
+                 modifier = Modifier
+                     .fillMaxSize()
++                    .then(
++                        if (streamsGlassActive) {
++                            Modifier.nuvioBackdropSource(streamsGlassBackdrop)
++                        } else {
++                            Modifier
++                        },
++                    )
+                     .blur(22.dp),
+                 contentScale = ContentScale.Crop,
+             )
+@@ -547,6 +563,7 @@ private fun MobileStreamsLayout(
+             }
+         }
+     }
++    }
+ }
+ 
+ internal data class StreamResumeState(
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.kt
 index f12214c6..868de655 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/AppUpdaterPlatform.kt
