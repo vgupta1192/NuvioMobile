@@ -1,0 +1,99 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamFetchSupport.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamFetchSupport.kt
+index 1d858795..0212aca3 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamFetchSupport.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamFetchSupport.kt
+@@ -116,6 +116,39 @@ internal fun cloudStreamProviderGroupsForRequest(
+         .distinctBy { it.providerId }
+ }
+ 
++internal fun cloudStreamDiagnosticsGroup(
++    type: String,
++    request: CloudStreamSearchRequest?,
++    matchedProviderIds: Set<String>,
++): AddonStreamGroup? {
++    CloudStreamRepository.initialize()
++    val plugins = CloudStreamRepository.uiState.value.plugins.filter { it.isInstalled }
++    if (plugins.isEmpty()) return null
++    val runnable = plugins.filter(CloudStreamPluginItem::isRunnable)
++    val lines = buildList {
++        add("Installed ${plugins.size}, runnable ${runnable.size}, matching $type ${matchedProviderIds.size}")
++        add("Search title: ${request?.title ?: "unavailable"}")
++        plugins.take(40).forEach { plugin ->
++            val reason = when {
++                !plugin.enabled -> "disabled"
++                !plugin.verified -> "not verified"
++                !plugin.compatibility.isRunnable -> "incompatible: ${plugin.compatibility.reason}"
++                plugin.metadata.id.value in matchedProviderIds -> "queried"
++                else -> "skipped, types ${plugin.metadata.rawTvTypes.joinToString("/").ifBlank { "none" }} do not fit $type"
++            }
++            add("${plugin.metadata.name}: $reason")
++        }
++        if (plugins.size > 40) add("... ${plugins.size - 40} more")
++    }
++    return AddonStreamGroup(
++        addonName = "CS3 diagnostics",
++        addonId = "cloudstream-diagnostics",
++        streams = emptyList(),
++        isLoading = false,
++        error = lines.joinToString("\n"),
++    )
++}
++
+ internal suspend fun resolveCloudStreamProviderStreams(
+     providerGroup: CloudStreamProviderGroup,
+     request: CloudStreamSearchRequest?,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
+index 6a3861cd..1a650e1e 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
+@@ -297,7 +297,18 @@ object StreamsRepository {
+                 streams = emptyList(),
+                 isLoading = true,
+             )
+-        } + serverSources.map { it.loadingGroup() }, installedAddonOrder, preferredGroupIds)
++        } + serverSources.map { it.loadingGroup() }, installedAddonOrder, preferredGroupIds) +
++            listOfNotNull(
++                if (AppFeaturePolicy.pluginsEnabled) {
++                    cloudStreamDiagnosticsGroup(
++                        type = type,
++                        request = cloudStreamSearchRequest,
++                        matchedProviderIds = cloudStreamProviderGroups.map { it.providerId }.toSet(),
++                    )
++                } else {
++                    null
++                },
++            )
+         val isInitiallyLoading = initialGroups.any { it.isLoading }
+         _uiState.value = StreamsUiState(
+             requestToken = requestToken,
+diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/plugins/CloudStreamSettingsSection.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/plugins/CloudStreamSettingsSection.kt
+index 4df7e151..cfc1f9d1 100644
+--- a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/plugins/CloudStreamSettingsSection.kt
++++ b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/plugins/CloudStreamSettingsSection.kt
+@@ -387,6 +387,26 @@ internal fun CloudStreamSettingsSection() {
+                     overflow = TextOverflow.Ellipsis,
+                 )
+             }
++            val enabledPlugins = state.plugins.filter { it.isInstalled && it.enabled }
++            Spacer(Modifier.height(10.dp))
++            Button(
++                modifier = Modifier
++                    .fillMaxWidth()
++                    .height(52.dp),
++                enabled = !isBulkInstalling && enabledPlugins.isNotEmpty(),
++                onClick = {
++                    enabledPlugins.forEach { CloudStreamRepository.setPluginEnabled(it.metadata.id.value, false) }
++                    bulkInstallMessage = "Disabled ${enabledPlugins.size} plugins."
++                },
++            ) {
++                Text(
++                    text = if (enabledPlugins.isEmpty()) "No plugins enabled" else "Disable all (${enabledPlugins.size})",
++                    style = MaterialTheme.typography.titleMedium,
++                    fontWeight = FontWeight.Bold,
++                    maxLines = 1,
++                    overflow = TextOverflow.Ellipsis,
++                )
++            }
+             bulkInstallMessage?.let {
+                 Spacer(Modifier.height(10.dp))
+                 Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
