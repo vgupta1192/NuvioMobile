@@ -1,0 +1,20 @@
+diff --git a/composeApp/proguard-rules.pro b/composeApp/proguard-rules.pro
+index 8251f92c1..3f149032c 100644
+--- a/composeApp/proguard-rules.pro
++++ b/composeApp/proguard-rules.pro
+@@ -46,6 +46,15 @@
+ -keep class com.nuvio.app.features.cloudstream.** { *; }
+ -keep interface com.nuvio.app.features.cloudstream.** { *; }
+ 
++# CloudStream .cs3 plugins link against these AndroidX classes by original name
++# (for example AppCompatActivity); R8 must not rename or remove them.
++-keep class androidx.appcompat.app.** { *; }
++-keep class androidx.fragment.app.** { *; }
++-keep class androidx.preference.** { *; }
++-keep class androidx.recyclerview.widget.** { *; }
++-keep class androidx.lifecycle.** { *; }
++-dontwarn androidx.preference.**
++
+ -keep class com.fasterxml.jackson.** { *; }
+ -keep interface com.fasterxml.jackson.** { *; }
+ -keep class org.jsoup.** { *; }
