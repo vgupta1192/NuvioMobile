@@ -2365,7 +2365,7 @@ index 00000000..bc62e5f7
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/profiles/ProfileBiometricAuth.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/profiles/ProfileBiometricAuth.android.kt
 new file mode 100644
-index 00000000..aa0f9fef
+index 00000000..72705056
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/profiles/ProfileBiometricAuth.android.kt
 @@ -0,0 +1,371 @@
@@ -2430,7 +2430,7 @@ index 00000000..aa0f9fef
 +    }
 +
 +    actual suspend fun isConfigured(profileIndex: Int, userId: String): Boolean {
-+        if (profileIndex != 1 || userId.isBlank()) return false
++        if (profileIndex < 1 || userId.isBlank()) return false
 +
 +        return withContext(Dispatchers.IO) {
 +            try {
@@ -2461,7 +2461,7 @@ index 00000000..aa0f9fef
 +    }
 +
 +    actual suspend fun enable(profileIndex: Int, userId: String): ProfileBiometricResult {
-+        if (profileIndex != 1 || userId.isBlank() || !isAvailable()) {
++        if (profileIndex < 1 || userId.isBlank() || !isAvailable()) {
 +            return ProfileBiometricResult.Unavailable
 +        }
 +
@@ -2502,7 +2502,7 @@ index 00000000..aa0f9fef
 +    }
 +
 +    actual suspend fun authenticate(profileIndex: Int, userId: String): ProfileBiometricResult {
-+        if (profileIndex != 1 || userId.isBlank()) return ProfileBiometricResult.Unavailable
++        if (profileIndex < 1 || userId.isBlank()) return ProfileBiometricResult.Unavailable
 +        if (!isConfigured(profileIndex, userId)) return ProfileBiometricResult.NotConfigured
 +
 +        return try {
@@ -2520,7 +2520,7 @@ index 00000000..aa0f9fef
 +    }
 +
 +    actual fun disable(profileIndex: Int, userId: String): Boolean {
-+        if (profileIndex != 1) return true
++        if (profileIndex < 1) return true
 +
 +        // The legacy alias is global, not account-scoped, so it can be removed even
 +        // when the current account ID is unavailable. Never guess an account alias.
@@ -3856,7 +3856,7 @@ index a61a6627..2c8365fd 100644
 +    <string name="submit_intro_segment_preview">Preview</string>
  </resources>
 diff --git a/composeApp/src/commonMain/composeResources/values/strings.xml b/composeApp/src/commonMain/composeResources/values/strings.xml
-index 3f909a93..452458c2 100644
+index 3f909a93..a31fe38b 100644
 --- a/composeApp/src/commonMain/composeResources/values/strings.xml
 +++ b/composeApp/src/commonMain/composeResources/values/strings.xml
 @@ -624,6 +624,7 @@
@@ -3867,7 +3867,16 @@ index 3f909a93..452458c2 100644
      <string name="downloads_empty_episodes">No completed episodes</string>
      <string name="downloads_empty_title">No downloads yet</string>
      <string name="downloads_episode_count">%1$d downloaded episode(s)</string>
-@@ -2476,4 +2477,362 @@
+@@ -693,6 +694,8 @@
+     <string name="settings_nav_bar_style_compact">Always Compact</string>
+     <string name="settings_nav_bar_style_classic">Classic</string>
+     <string name="settings_appearance_continue_watching_description">Settings for the Continue Watching section.</string>
++    <string name="settings_appearance_glass_effects">Glass effects</string>
++    <string name="settings_appearance_glass_effects_description">Frosted glass on stream cards, filter chips and the navigation bar.</string>
+     <string name="settings_appearance_liquid_glass">Liquid Glass</string>
+     <string name="settings_appearance_liquid_glass_description">Use the native iPhone tab bar on iOS 26 and later.</string>
+     <string name="settings_appearance_poster_customization_description">Tune card width and corner radius.</string>
+@@ -2476,4 +2479,362 @@
      <string name="compose_settings_page_cloudstream">CloudStream / CS3</string>
      <string name="settings_content_discovery_cloudstream_description">Install CloudStream repositories and manage the providers they make available.</string>
  
@@ -4231,7 +4240,7 @@ index 3f909a93..452458c2 100644
 +    <string name="profile_disable_biometric_for">Disable biometric unlock for %1$s</string>
  </resources>
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/AppGate.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/AppGate.kt
-index 227fd839..01910b73 100644
+index 227fd839..a2cd0769 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/AppGate.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/AppGate.kt
 @@ -1,5 +1,8 @@
@@ -4260,7 +4269,7 @@ index 227fd839..01910b73 100644
          profileSelectionLoading = false
          profileSelectionTransitionActive = false
          if (profiles.isEmpty()) {
-@@ -284,6 +288,40 @@ internal fun AppGate(
+@@ -284,6 +288,37 @@ internal fun AppGate(
              return
          }
  
@@ -4272,14 +4281,11 @@ index 227fd839..01910b73 100644
 +            val rememberedLockedProfile = profiles.find {
 +                it.profileIndex == ProfileRepository.activeProfileId
 +            }
-+            if (
-+                rememberedLockedProfile?.pinEnabled == true &&
-+                rememberedLockedProfile.profileIndex == 1
-+            ) {
++            if (rememberedLockedProfile?.pinEnabled == true) {
 +                startupBiometricInProgress = true
 +                try {
 +                    val biometricResult = try {
-+                        ProfileBiometricAuth.authenticate(1, rememberedLockedProfile.userId)
++                        ProfileBiometricAuth.authenticate(rememberedLockedProfile.profileIndex, rememberedLockedProfile.userId)
 +                    } catch (e: CancellationException) {
 +                        throw e
 +                    } catch (_: Exception) {
@@ -5386,7 +5392,7 @@ index 00000000..6570e830
 +/** [LenientJson] that also writes default values. */
 +internal val LenientDefaultsJson: Json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/storage/LocalAccountDataCleaner.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/storage/LocalAccountDataCleaner.kt
-index 8e62353e..ea999230 100644
+index 8e62353e..e4446cfb 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/storage/LocalAccountDataCleaner.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/storage/LocalAccountDataCleaner.kt
 @@ -21,6 +21,7 @@ import com.nuvio.app.features.player.PlayerSettingsRepository
@@ -5397,16 +5403,14 @@ index 8e62353e..ea999230 100644
  import com.nuvio.app.features.profiles.ProfileRepository
  import com.nuvio.app.features.profiles.MAX_PROFILES
  import com.nuvio.app.features.search.SearchRepository
-@@ -42,6 +43,12 @@ import com.nuvio.app.features.watched.WatchedRepository
+@@ -42,6 +43,10 @@ import com.nuvio.app.features.watched.WatchedRepository
  
  internal object LocalAccountDataCleaner {
      fun wipe() {
-+        // Drop the biometric credential of the primary profile before the profile list is cleared.
++        // Drop every biometric credential before the profile list is cleared.
 +        ProfileRepository.state.value.profiles
-+            .firstOrNull { it.profileIndex == 1 }
-+            ?.userId
-+            ?.takeIf { it.isNotBlank() }
-+            ?.let { userId -> runCatching { ProfileBiometricAuth.disable(1, userId) } }
++            .filter { it.userId.isNotBlank() }
++            .forEach { profile -> runCatching { ProfileBiometricAuth.disable(profile.profileIndex, profile.userId) } }
          ensureTrackingProvidersRegistered()
          TrackingProviderRegistry.removeStoredProfiles(1..MAX_PROFILES)
          SyncManager.cancelAccountSync()
@@ -5597,10 +5601,10 @@ index 00000000..7ab02935
 +internal fun Modifier.spoilerBlur(enabled: Boolean): Modifier = if (enabled) blur(6.dp) else this
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/glass/LiquidGlass.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/glass/LiquidGlass.kt
 new file mode 100644
-index 00000000..315a2db9
+index 00000000..5b4d6649
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/glass/LiquidGlass.kt
-@@ -0,0 +1,364 @@
+@@ -0,0 +1,383 @@
 +package com.nuvio.app.core.ui.glass
 +
 +import androidx.compose.foundation.background
@@ -5644,6 +5648,7 @@ index 00000000..315a2db9
 +import androidx.compose.ui.unit.Dp
 +import androidx.compose.ui.unit.dp
 +import com.kyant.backdrop.Backdrop
++import com.nuvio.app.core.storage.AppFileCache
 +import com.kyant.backdrop.drawBackdrop
 +import com.kyant.backdrop.drawPlainBackdrop
 +import com.kyant.backdrop.effects.blur
@@ -5656,12 +5661,30 @@ index 00000000..315a2db9
 +import com.kyant.backdrop.shadow.Shadow
 +
 +object LiquidGlassSettings {
++    private const val PATH = "settings/liquid_glass_effects"
++    private var loaded = false
++
 +    var enabled: Boolean by mutableStateOf(true)
++
++    fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        AppFileCache.read(PATH)?.trim()?.let { enabled = it == "1" }
++    }
++
++    fun set(value: Boolean) {
++        ensureLoaded()
++        enabled = value
++        runCatching { AppFileCache.write(PATH, if (value) "1" else "0") }
++    }
 +}
 +
 +fun isLiquidGlassAvailable(): Boolean = isRenderEffectSupported()
 +
-+fun isLiquidGlassSupported(): Boolean = LiquidGlassSettings.enabled && isLiquidGlassAvailable()
++fun isLiquidGlassSupported(): Boolean {
++    LiquidGlassSettings.ensureLoaded()
++    return LiquidGlassSettings.enabled && isLiquidGlassAvailable()
++}
 +
 +fun isLiquidRefractionSupported(): Boolean = isRuntimeShaderSupported()
 +
@@ -19376,6 +19399,123 @@ index 00000000..283474fd
 +
 +private fun Double.formatPlaybackNumber(): String =
 +    if (this % 1.0 == 0.0) toInt().toString() else toString().take(6).trimEnd('0').trimEnd('.')
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt
+index 93bb6999..32786346 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenModalHosts.kt
+@@ -54,6 +54,7 @@ internal fun PlayerScreenModalHosts(
+     onSubtitleStyleChanged: (SubtitleStyleState) -> Unit,
+     onSubtitleDelayChanged: (Int) -> Unit,
+     onSubtitleDelayReset: () -> Unit,
++    onSyncByEarClick: () -> Unit = {},
+     onAutoSyncCapture: () -> Unit,
+     onAutoSyncCueSelected: (SubtitleSyncCue) -> Unit,
+     onAutoSyncReload: () -> Unit,
+@@ -173,6 +174,7 @@ internal fun PlayerScreenModalHosts(
+         onStyleChanged = onSubtitleStyleChanged,
+         onSubtitleDelayChanged = onSubtitleDelayChanged,
+         onSubtitleDelayReset = onSubtitleDelayReset,
++        onSyncByEarClick = onSyncByEarClick,
+         onAutoSyncCapture = onAutoSyncCapture,
+         onAutoSyncCueSelected = onAutoSyncCueSelected,
+         onAutoSyncReload = onAutoSyncReload,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
+index a8c72885..5a2fdb2d 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
+@@ -241,6 +241,9 @@ internal class PlayerScreenRuntime(
+     var autoFetchedAddonSubtitlesForKey by mutableStateOf<String?>(null)
+     var trackPreferenceRestoreApplied by mutableStateOf(false)
+     var subtitleDelayMs by mutableStateOf(0)
++    var showSubtitleSyncByEar by mutableStateOf(false)
++    var subtitleSyncHeardPositionMs by mutableStateOf<Long?>(null)
++    var subtitleSyncSawPositionMs by mutableStateOf<Long?>(null)
+     var subtitleAutoSyncState by mutableStateOf(SubtitleAutoSyncUiState())
+ 
+     var lastSyncedSettingsResizeMode: PlayerResizeMode? = null
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSubtitleActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSubtitleActions.kt
+index daf4ccba..da788ff7 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSubtitleActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSubtitleActions.kt
+@@ -68,3 +68,37 @@ internal fun PlayerScreenRuntime.applySubtitleAutoSyncCue(cue: SubtitleSyncCue)
+         .coerceIn(SUBTITLE_DELAY_MIN_MS, SUBTITLE_DELAY_MAX_MS)
+     setSubtitleDelay(newDelayMs)
+ }
++
++internal fun PlayerScreenRuntime.openSubtitleSyncByEar() {
++    subtitleSyncHeardPositionMs = null
++    subtitleSyncSawPositionMs = null
++    showSubtitleModal = false
++    showSubtitleSyncByEar = true
++}
++
++internal fun PlayerScreenRuntime.closeSubtitleSyncByEar() {
++    showSubtitleSyncByEar = false
++    subtitleSyncHeardPositionMs = null
++    subtitleSyncSawPositionMs = null
++}
++
++internal fun PlayerScreenRuntime.captureSubtitleSyncHeard() {
++    subtitleSyncHeardPositionMs = playbackSnapshot.positionMs.coerceAtLeast(0L)
++    applySubtitleSyncByEarIfReady()
++}
++
++internal fun PlayerScreenRuntime.captureSubtitleSyncSaw() {
++    subtitleSyncSawPositionMs = playbackSnapshot.positionMs.coerceAtLeast(0L)
++    applySubtitleSyncByEarIfReady()
++}
++
++private fun PlayerScreenRuntime.applySubtitleSyncByEarIfReady() {
++    val heardMs = subtitleSyncHeardPositionMs ?: return
++    val sawMs = subtitleSyncSawPositionMs ?: return
++    val newDelayMs = (subtitleDelayMs.toLong() + heardMs - sawMs)
++        .coerceIn(SUBTITLE_DELAY_MIN_MS.toLong(), SUBTITLE_DELAY_MAX_MS.toLong())
++        .toInt()
++    setSubtitleDelay(newDelayMs)
++    subtitleSyncHeardPositionMs = null
++    subtitleSyncSawPositionMs = null
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+index 59e86821..e5117aae 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+@@ -7,6 +7,9 @@ import androidx.compose.animation.fadeOut
+ import androidx.compose.foundation.layout.Box
+ import androidx.compose.foundation.layout.BoxScope
+ import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.padding
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.unit.dp
+ import androidx.compose.runtime.Composable
+ import com.nuvio.app.core.i18n.localizedSeasonEpisodeCode
+ import com.nuvio.app.features.ratings.UserRatingPlayerOverlay
+@@ -260,6 +263,18 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+         }
+ 
+         SubtitleSyncStatusPanel(horizontalSafePadding) // AutoSync hook: audio sync fallback status
++        SubtitleSyncByEarCard(
++            visible = showSubtitleSyncByEar,
++            subtitleDelayMs = subtitleDelayMs,
++            heardCaptured = subtitleSyncHeardPositionMs != null,
++            sawCaptured = subtitleSyncSawPositionMs != null,
++            onHeard = { captureSubtitleSyncHeard() },
++            onSaw = { captureSubtitleSyncSaw() },
++            onClose = { closeSubtitleSyncByEar() },
++            modifier = Modifier
++                .align(Alignment.TopCenter)
++                .padding(top = 16.dp, start = horizontalSafePadding, end = horizontalSafePadding),
++        )
+ 
+         RenderPlayerControls(displayedPositionMs = displayedPositionMs, isEpisode = isEpisode)
+         RenderPlaybackOverlays(
+@@ -735,6 +750,7 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
+         onSubtitleStyleChanged = PlayerSettingsRepository::setSubtitleStyle,
+         onSubtitleDelayChanged = { delayMs -> setSubtitleDelay(delayMs) },
+         onSubtitleDelayReset = { setSubtitleDelay(0) },
++        onSyncByEarClick = { openSubtitleSyncByEar() },
+         onAutoSyncCapture = { captureSubtitleAutoSyncTime() },
+         onAutoSyncCueSelected = { cue -> applySubtitleAutoSyncCue(cue) },
+         onAutoSyncReload = { loadSubtitleAutoSyncCues(force = true) },
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSettingsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSettingsRepository.kt
 index fb95a348..7bbcad65 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSettingsRepository.kt
@@ -19452,6 +19592,106 @@ index 00000000..b76b4fbc
 +private const val SAME_CUT_TOLERANCE_MS = 30_000L
 +
 +internal const val ON_DEVICE_SKIP_PROVIDER = "on-device"
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt
+index 408b3457..84b15967 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt
+@@ -83,6 +83,7 @@ fun SubtitleModal(
+     onStyleChanged: (SubtitleStyleState) -> Unit,
+     onSubtitleDelayChanged: (Int) -> Unit,
+     onSubtitleDelayReset: () -> Unit,
++    onSyncByEarClick: () -> Unit = {},
+     onAutoSyncCapture: () -> Unit,
+     onAutoSyncCueSelected: (SubtitleSyncCue) -> Unit,
+     onAutoSyncReload: () -> Unit,
+@@ -312,6 +313,7 @@ fun SubtitleModal(
+                                     onStyleChanged = onStyleChanged,
+                                     onSubtitleDelayChanged = onSubtitleDelayChanged,
+                                     onSubtitleDelayReset = onSubtitleDelayReset,
++                                    onSyncByEarClick = onSyncByEarClick,
+                                     onAutoSyncCapture = onAutoSyncCapture,
+                                     onAutoSyncCueSelected = onAutoSyncCueSelected,
+                                     onAutoSyncReload = onAutoSyncReload,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleStylePanel.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleStylePanel.kt
+index 3abe9832..b310252f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleStylePanel.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleStylePanel.kt
+@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
+ import androidx.compose.foundation.shape.RoundedCornerShape
+ import androidx.compose.material.icons.Icons
+ import androidx.compose.material.icons.rounded.Add
++import androidx.compose.material.icons.rounded.Hearing
+ import androidx.compose.material.icons.rounded.Remove
+ import androidx.compose.material3.Icon
+ import androidx.compose.material3.MaterialTheme
+@@ -49,6 +50,7 @@ import nuvio.composeapp.generated.resources.compose_player_outline
+ import nuvio.composeapp.generated.resources.compose_player_outline_color
+ import nuvio.composeapp.generated.resources.compose_player_reload
+ import nuvio.composeapp.generated.resources.compose_player_reset
++import nuvio.composeapp.generated.resources.compose_player_sync_by_ear
+ import nuvio.composeapp.generated.resources.compose_player_reset_defaults
+ import nuvio.composeapp.generated.resources.compose_player_select_addon_subtitle_first
+ import nuvio.composeapp.generated.resources.compose_player_style
+@@ -69,6 +71,7 @@ fun SubtitleStylePanel(
+     onStyleChanged: (SubtitleStyleState) -> Unit,
+     onSubtitleDelayChanged: (Int) -> Unit,
+     onSubtitleDelayReset: () -> Unit,
++    onSyncByEarClick: () -> Unit = {},
+     onAutoSyncCapture: () -> Unit,
+     onAutoSyncCueSelected: (SubtitleSyncCue) -> Unit,
+     onAutoSyncReload: () -> Unit,
+@@ -105,6 +108,10 @@ fun SubtitleStylePanel(
+                 label = stringResource(Res.string.compose_player_reset),
+                 onClick = onSubtitleDelayReset,
+             )
++            SubtitleSyncByEarAction(
++                label = stringResource(Res.string.compose_player_sync_by_ear),
++                onClick = onSyncByEarClick,
++            )
+         }
+ 
+         SubtitleStyleSection(title = stringResource(Res.string.compose_player_font_size)) {
+@@ -489,3 +496,40 @@ private val SubtitleOutlineColorSwatches = listOf(
+     Color(0xFF00E5FF),
+     Color(0xFFFF5C5C),
+ )
++
++@Composable
++private fun SubtitleSyncByEarAction(
++    label: String,
++    onClick: () -> Unit,
++) {
++    val tokens = MaterialTheme.nuvio
++
++    Row(
++        modifier = Modifier
++            .fillMaxWidth()
++            .clip(RoundedCornerShape(14.dp))
++            .background(tokens.colors.accent.copy(alpha = 0.16f))
++            .border(
++                width = 1.dp,
++                color = tokens.colors.accent.copy(alpha = 0.45f),
++                shape = RoundedCornerShape(14.dp),
++            )
++            .clickable(onClick = onClick)
++            .padding(horizontal = 14.dp, vertical = 12.dp),
++        horizontalArrangement = Arrangement.spacedBy(10.dp),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        Icon(
++            imageVector = Icons.Rounded.Hearing,
++            contentDescription = null,
++            tint = tokens.colors.accent,
++            modifier = Modifier.size(20.dp),
++        )
++        Text(
++            text = label,
++            color = Color.White,
++            style = MaterialTheme.typography.labelLarge,
++            fontWeight = FontWeight.SemiBold,
++        )
++    }
++}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleSyncByEarCard.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleSyncByEarCard.kt
 new file mode 100644
 index 00000000..92d2b8f3
@@ -23574,7 +23814,7 @@ index 00000000..2832dce1
 +    fun disable(profileIndex: Int, userId: String): Boolean
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileEditScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileEditScreen.kt
-index 863b2173..f5a32d5b 100644
+index 863b2173..5f176b96 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileEditScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileEditScreen.kt
 @@ -51,7 +51,10 @@ import com.nuvio.app.core.ui.themePalette
@@ -23606,9 +23846,9 @@ index 863b2173..f5a32d5b 100644
 +    LaunchedEffect(currentProfile?.profileIndex, currentProfile?.userId) {
 +        val profile = currentProfile
 +        biometricConfigured = when {
-+            profile == null || profile.profileIndex != 1 || profile.userId.isBlank() -> false
++            profile == null || profile.userId.isBlank() -> false
 +            else -> try {
-+                ProfileBiometricAuth.isConfigured(1, profile.userId)
++                ProfileBiometricAuth.isConfigured(profile.profileIndex, profile.userId)
 +            } catch (e: CancellationException) {
 +                throw e
 +            } catch (_: Exception) {
@@ -23625,7 +23865,7 @@ index 863b2173..f5a32d5b 100644
                              )
                          }
 +
-+                        if (currentProfile?.profileIndex == 1) {
++                        if (currentProfile != null) {
 +                            val pinEnabled = currentProfile.pinEnabled
 +                            val biometricAvailable = remember(currentProfile.userId, biometricConfigured) {
 +                                val platformAvailable = try {
@@ -23665,7 +23905,7 @@ index 863b2173..f5a32d5b 100644
          onDismiss = { showDeleteConfirm = false },
      )
  
-+    if (showBiometricEnablePin && currentProfile?.profileIndex == 1) {
++    if (showBiometricEnablePin && currentProfile != null) {
 +        PinEntryDialog(
 +            profileName = stringResource(Res.string.profile_enable_biometric_for, currentProfile.name),
 +            onVerify = { pin -> ProfileRepository.verifyPin(currentProfile.profileIndex, pin) },
@@ -23673,7 +23913,7 @@ index 863b2173..f5a32d5b 100644
 +                showBiometricEnablePin = false
 +                scope.launch {
 +                    val result = try {
-+                        ProfileBiometricAuth.enable(1, currentProfile.userId)
++                        ProfileBiometricAuth.enable(currentProfile.profileIndex, currentProfile.userId)
 +                    } catch (e: CancellationException) {
 +                        throw e
 +                    } catch (_: Exception) {
@@ -23692,7 +23932,7 @@ index 863b2173..f5a32d5b 100644
 +        )
 +    }
 +
-+    if (showBiometricDisablePin && currentProfile?.profileIndex == 1) {
++    if (showBiometricDisablePin && currentProfile != null) {
 +        PinEntryDialog(
 +            profileName = stringResource(Res.string.profile_disable_biometric_for, currentProfile.name),
 +            onVerify = { pin -> ProfileRepository.verifyPin(currentProfile.profileIndex, pin) },
@@ -23701,7 +23941,7 @@ index 863b2173..f5a32d5b 100644
 +                scope.launch {
 +                    val removed = try {
 +                        withContext(Dispatchers.IO) {
-+                            ProfileBiometricAuth.disable(1, currentProfile.userId)
++                            ProfileBiometricAuth.disable(currentProfile.profileIndex, currentProfile.userId)
 +                        }
 +                    } catch (e: CancellationException) {
 +                        throw e
@@ -23746,7 +23986,7 @@ index 863b2173..f5a32d5b 100644
              onVerified = {
                  showPinClear = false
 +                // ProfileRepository.clearPin drops the biometric credential; re-read the state.
-+                if (currentProfile.profileIndex == 1) biometricConfigured = false
++                biometricConfigured = false
              },
              onDismiss = {
                  showPinClear = false
@@ -23790,24 +24030,23 @@ index 863b2173..f5a32d5b 100644
                  checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
                  checkedTrackColor = MaterialTheme.colorScheme.primary,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileRepository.kt
-index f82b09ff..8a17179a 100644
+index f82b09ff..49e35f57 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileRepository.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileRepository.kt
-@@ -287,6 +287,13 @@ object ProfileRepository {
+@@ -287,6 +287,12 @@ object ProfileRepository {
          pushProfiles(allPayloads)
      }
  
 +    private fun disableBiometricUnlock(profileIndex: Int) {
-+        if (profileIndex != 1) return
-+        val userId = _state.value.profiles.firstOrNull { it.profileIndex == 1 }?.userId.orEmpty()
++        val userId = _state.value.profiles.firstOrNull { it.profileIndex == profileIndex }?.userId.orEmpty()
 +        if (userId.isBlank()) return
-+        runCatching { ProfileBiometricAuth.disable(1, userId) }
++        runCatching { ProfileBiometricAuth.disable(profileIndex, userId) }
 +    }
 +
      suspend fun deleteProfile(profileIndex: Int) {
          if (AuthRepository.state.value.isAnonymous) {
              val remaining = _state.value.profiles.filter { it.profileIndex != profileIndex }
-@@ -372,6 +379,7 @@ object ProfileRepository {
+@@ -372,6 +378,7 @@ object ProfileRepository {
                  currentPin?.let { put("p_current_pin", it) }
              }
              SupabaseProvider.client.postgrest.rpc("clear_profile_pin", params)
@@ -23815,7 +24054,7 @@ index f82b09ff..8a17179a 100644
              pullProfiles()
              ProfilePinCacheStorage.removePayload(profileIndex)
              PinVerifyResult(unlocked = true)
-@@ -389,6 +397,7 @@ object ProfileRepository {
+@@ -389,6 +396,7 @@ object ProfileRepository {
                  put("p_profile_id", profileIndex)
              }
              SupabaseProvider.client.postgrest.rpc("clear_profile_pin_with_account_password", params)
@@ -23824,7 +24063,7 @@ index f82b09ff..8a17179a 100644
              ProfilePinCacheStorage.removePayload(profileIndex)
          }.onFailure { e ->
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileSelectionScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileSelectionScreen.kt
-index 3b05dddd..77a87d77 100644
+index 3b05dddd..b9daf59a 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileSelectionScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileSelectionScreen.kt
 @@ -64,6 +64,7 @@ import com.nuvio.app.core.ui.NuvioToastHost
@@ -23855,7 +24094,7 @@ index 3b05dddd..77a87d77 100644
                  onActiveProfileSelected = { scope.launch { showAlreadyActiveProfileToast(it) } },
 -                onPinRequired = { pinDialogProfile = it },
 +                onPinRequired = { locked ->
-+                    if (locked.profileIndex == 1) {
++                    if (locked.userId.isNotBlank()) {
 +                        biometricAuthenticating = true
 +                        scope.launch {
 +                            val result = try {
@@ -23882,7 +24121,7 @@ index 3b05dddd..77a87d77 100644
              )
          }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileSwitcherTab.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileSwitcherTab.kt
-index 3749edc3..fa476bd7 100644
+index 3749edc3..1874eb3c 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileSwitcherTab.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileSwitcherTab.kt
 @@ -76,6 +76,7 @@ import com.nuvio.app.core.ui.NuvioTokens
@@ -23907,7 +24146,7 @@ index 3749edc3..fa476bd7 100644
              },
 -            onPinRequired = { pinProfile = it },
 +            onPinRequired = { locked ->
-+                if (locked.profileIndex == 1 && locked.userId.isNotBlank() && !biometricAuthenticating) {
++                if (locked.userId.isNotBlank() && !biometricAuthenticating) {
 +                    biometricAuthenticating = true
 +                    scope.launch {
 +                        val result = try {
@@ -23950,7 +24189,7 @@ index 3749edc3..fa476bd7 100644
              },
 -            onPinRequired = { pinProfile = it },
 +            onPinRequired = { locked ->
-+                if (locked.profileIndex == 1 && locked.userId.isNotBlank() && !biometricAuthenticating) {
++                if (locked.userId.isNotBlank() && !biometricAuthenticating) {
 +                    biometricAuthenticating = true
 +                    scope.launch {
 +                        val result = try {
@@ -24044,6 +24283,35 @@ index 05e91bbf..02f2d8a5 100644
  }
  
  @Composable
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AppearanceSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AppearanceSettingsPage.kt
+index 8a3af54f..c6b13770 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AppearanceSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AppearanceSettingsPage.kt
+@@ -53,6 +53,8 @@ import nuvio.composeapp.generated.resources.settings_nav_bar_summary
+ import nuvio.composeapp.generated.resources.settings_appearance_amoled_black
+ import nuvio.composeapp.generated.resources.settings_appearance_amoled_description
+ import nuvio.composeapp.generated.resources.settings_appearance_continue_watching_description
++import nuvio.composeapp.generated.resources.settings_appearance_glass_effects
++import nuvio.composeapp.generated.resources.settings_appearance_glass_effects_description
+ import nuvio.composeapp.generated.resources.settings_appearance_liquid_glass
+ import nuvio.composeapp.generated.resources.settings_appearance_liquid_glass_description
+ import nuvio.composeapp.generated.resources.settings_appearance_poster_customization_description
+@@ -133,6 +135,15 @@ internal fun LazyListScope.appearanceSettingsContent(
+                 SettingsGroupDivider(isTablet = isTablet)
+                 val dynamicArtworkBackground by com.nuvio.app.core.ui.DynamicArtworkBackgroundSetting.enabled.collectAsStateWithLifecycle()
+                 LaunchedEffect(Unit) { com.nuvio.app.core.ui.DynamicArtworkBackgroundSetting.ensureLoaded() }
++                LaunchedEffect(Unit) { com.nuvio.app.core.ui.glass.LiquidGlassSettings.ensureLoaded() }
++                SettingsSwitchRow(
++                    title = stringResource(Res.string.settings_appearance_glass_effects),
++                    description = stringResource(Res.string.settings_appearance_glass_effects_description),
++                    checked = com.nuvio.app.core.ui.glass.LiquidGlassSettings.enabled,
++                    isTablet = isTablet,
++                    onCheckedChange = com.nuvio.app.core.ui.glass.LiquidGlassSettings::set,
++                )
++                SettingsGroupDivider(isTablet = isTablet)
+                 SettingsSwitchRow(
+                     title = stringResource(Res.string.settings_appearance_dynamic_artwork_background),
+                     description = stringResource(Res.string.settings_appearance_dynamic_artwork_background_description),
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DebugLogsSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DebugLogsSettingsPage.kt
 new file mode 100644
 index 00000000..ec48732e
@@ -26407,6 +26675,39 @@ index 00000000..39869ae9
 +        return StreamLinkCacheRepository.getValid(key, settings.streamReuseLastLinkCacheHours * 60L * 60L * 1000L) != null
 +    }
 +}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/ProviderFilterRow.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/ProviderFilterRow.kt
+index 492f58b4..69c3400f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/ProviderFilterRow.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/ProviderFilterRow.kt
+@@ -41,6 +41,9 @@ import androidx.compose.runtime.rememberCoroutineScope
+ import androidx.compose.runtime.setValue
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
++import com.nuvio.app.core.ui.glass.LocalLiquidGlassBackdrop
++import com.nuvio.app.core.ui.glass.ambientLiquidGlass
+ import androidx.compose.ui.draw.clip
+ import androidx.compose.ui.graphics.graphicsLayer
+ import androidx.compose.ui.graphics.vector.ImageVector
+@@ -281,7 +284,17 @@ private fun FilterChip(
+             }
+             .height(36.dp)
+             .clip(RoundedCornerShape(16.dp))
+-            .background(containerColor)
++            .then(
++                if (!isSelected && LocalLiquidGlassBackdrop.current != null) {
++                    Modifier.ambientLiquidGlass(
++                        shape = RoundedCornerShape(16.dp),
++                        tint = Color.Black.copy(alpha = 0.22f),
++                        fallback = containerColor,
++                    )
++                } else {
++                    Modifier.background(containerColor)
++                },
++            )
+             .combinedClickable(
+                 interactionSource = interactionSource,
+                 indication = null,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamCard.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamCard.kt
 index 109be6d9..2d3d7e38 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamCard.kt
