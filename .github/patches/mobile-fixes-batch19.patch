@@ -1,0 +1,21 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt
+index 84b15967d..ee173362d 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt
+@@ -283,10 +283,15 @@ fun SubtitleModal(
+                                             },
+                                         )
+                                     }
++                                    item(key = "dx-second-subtitle") {
++                                        Column { DxSecondSubtitlePicker(addonSubtitles) } // dx.bi second subtitle hook, scrolls with the list
++                                    }
+                                 }
+                             }
+                         }
+-                        DxSecondSubtitlePicker(addonSubtitles) // dx.bi second subtitle hook
++                        if (options.isEmpty()) {
++                            Column { DxSecondSubtitlePicker(addonSubtitles) }
++                        }
+                     }
+ 
+                     AnimatedVisibility(
