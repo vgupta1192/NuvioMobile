@@ -1,0 +1,482 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/EpisodeExtraRatings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/EpisodeExtraRatings.kt
+index 13935950b..fdf21ee78 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/EpisodeExtraRatings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/EpisodeExtraRatings.kt
+@@ -3,11 +3,16 @@ package com.nuvio.app.features.details
+ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.mutableStateOf
+ import androidx.compose.runtime.setValue
++import com.nuvio.app.features.addons.httpGetText
+ import com.nuvio.app.features.addons.httpGetTextWithHeaders
++import com.nuvio.app.features.player.skip.SimklIdResolver
++import com.nuvio.app.features.simkl.SIMKL_API_BASE_URL
++import com.nuvio.app.features.simkl.SimklConfig
+ import com.nuvio.app.features.tmdb.TmdbMetadataService
+ import com.nuvio.app.features.trakt.TraktConfig
+ import kotlinx.coroutines.CancellationException
+ import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.contentOrNull
+ import kotlinx.serialization.json.doubleOrNull
+ import kotlinx.serialization.json.intOrNull
+ import kotlinx.serialization.json.jsonArray
+@@ -44,6 +49,33 @@ object EpisodeExtraRatings {
+         current = merged
+     }
+ 
++    private suspend fun fetchSimkl(imdbId: String?): Map<Pair<Int, Int>, Double> {
++        if (imdbId == null || SimklConfig.CLIENT_ID.isBlank()) return emptyMap()
++        return try {
++            val ids = SimklIdResolver.resolveIds("imdb", imdbId, "series") ?: return emptyMap()
++            val text = httpGetText(
++                "$SIMKL_API_BASE_URL/${ids.type}/episodes/${ids.simklId}?extended=full" +
++                    "&client_id=${SimklConfig.CLIENT_ID}&app-name=${SimklConfig.APP_NAME}&app-version=1.0",
++            )
++            val out = mutableMapOf<Pair<Int, Int>, Double>()
++            json.parseToJsonElement(text).jsonArray.forEach { el ->
++                val ep = el.jsonObject
++                if (ep["type"]?.jsonPrimitive?.contentOrNull?.let { it != "episode" } == true) return@forEach
++                val sn = ep["season"]?.jsonPrimitive?.intOrNull ?: return@forEach
++                val en = ep["episode"]?.jsonPrimitive?.intOrNull ?: return@forEach
++                val r = ep["ratings"]?.jsonObject?.get("simkl")?.jsonObject?.get("rating")?.jsonPrimitive?.doubleOrNull
++                    ?: ep["rating"]?.jsonPrimitive?.doubleOrNull
++                    ?: return@forEach
++                if (r > 0.0) out[sn to en] = r
++            }
++            out
++        } catch (cancelled: CancellationException) {
++            throw cancelled
++        } catch (_: Exception) {
++            emptyMap()
++        }
++    }
++
+     private suspend fun fetchTrakt(showId: String): Map<Pair<Int, Int>, Double> {
+         return try {
+             val text = httpGetTextWithHeaders(
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailSeriesContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailSeriesContent.kt
+index c1fed4b2f..62f895a8f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailSeriesContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailSeriesContent.kt
+@@ -1041,12 +1041,7 @@ private fun EpisodeHorizontalCard(
+                         )
+                     }
+                     extraRatings.forEach { (label, value) ->
+-                        Text(
+-                            text = "$label ${formatEpisodeRating(value)}",
+-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = metrics.metaTextSize, fontWeight = FontWeight.SemiBold),
+-                            color = Color.White.copy(alpha = 0.78f),
+-                            maxLines = 1,
+-                        )
++                        EpisodeSourceRatingBadge(label = label, rating = formatEpisodeRating(value), textSize = metrics.metaTextSize)
+                     }
+                     Spacer(modifier = Modifier.weight(1f))
+                     formattedDate?.let { date ->
+@@ -1239,6 +1234,52 @@ private fun EpisodeCodeBadge(
+     }
+ }
+ 
++@Composable
++private fun EpisodeSourceRatingBadge(
++    label: String,
++    rating: String,
++    textSize: androidx.compose.ui.unit.TextUnit,
++) {
++    val logo = when (label) {
++        "TMDB" -> Res.drawable.rating_tmdb
++        "Trakt" -> Res.drawable.rating_trakt
++        "Simkl" -> Res.drawable.simkl_logo_glyph
++        else -> null
++    }
++    val valueColor = when (label) {
++        "TMDB" -> Color(0xFF01B4E4)
++        "Trakt" -> Color(0xFFED1C24)
++        "Simkl" -> Color(0xFFFFFFFF)
++        else -> Color.White.copy(alpha = 0.78f)
++    }
++    Row(
++        horizontalArrangement = Arrangement.spacedBy(4.dp),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        if (logo != null) {
++            Image(
++                painter = painterResource(logo),
++                contentDescription = label,
++                modifier = Modifier.height(12.dp).width(16.dp),
++                contentScale = ContentScale.Fit,
++            )
++        } else {
++            Text(
++                text = label,
++                style = MaterialTheme.typography.labelSmall.copy(fontSize = textSize, fontWeight = FontWeight.SemiBold),
++                color = Color.White.copy(alpha = 0.78f),
++                maxLines = 1,
++            )
++        }
++        Text(
++            text = rating,
++            style = MaterialTheme.typography.labelSmall.copy(fontSize = textSize, fontWeight = FontWeight.SemiBold),
++            color = valueColor,
++            maxLines = 1,
++        )
++    }
++}
++
+ @Composable
+ private fun ImdbEpisodeRatingBadge(
+     rating: String,
+@@ -1427,12 +1468,7 @@ private fun EpisodeListCard(
+                             )
+                         }
+                         extraRatings.forEach { (label, value) ->
+-                            Text(
+-                                text = "$label ${formatEpisodeRating(value)}",
+-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = sizing.metaTextSize, fontWeight = FontWeight.SemiBold),
+-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+-                                maxLines = 1,
+-                            )
++                            EpisodeSourceRatingBadge(label = label, rating = formatEpisodeRating(value), textSize = sizing.metaTextSize)
+                         }
+                     }
+                 }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
+index eeb76d4cf..9bae5d2fb 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
+@@ -83,59 +83,75 @@ internal fun PlayerToolbar(
+ ) {
+     Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+         Spacer(Modifier.weight(1f))
+-        SmartEnhanceToolbarAction()
+-        DxEnhanceToolbarAction() // dx.bi picture enhance hook
+-        DxStatsToolbarAction() // dx.bi stream stats hook
+-        if (onCastClick != null) {
+-            PlayerAction(
+-                description = stringResource(Res.string.player_cast),
+-                icon = if (castActive) Icons.Rounded.CastConnected else Icons.Rounded.Cast,
+-                onClick = onCastClick,
+-                tint = if (castActive) MaterialTheme.colorScheme.primary else Color.White,
+-            )
+-        }
+-        if (onOrientationToggleClick != null) {
+-            PlayerAction(
+-                description = stringResource(
+-                    if (isPortraitPlayback) Res.string.player_action_rotate_landscape else Res.string.player_action_rotate_portrait,
+-                ),
+-                icon = if (isPortraitPlayback) Icons.Rounded.StayCurrentLandscape else Icons.Rounded.StayCurrentPortrait,
+-                onClick = onOrientationToggleClick,
+-            )
+-        }
+-        if (onMiniPlayerClick != null) {
+-            PlayerAction(
+-                description = stringResource(Res.string.player_action_mini_player),
+-                icon = Icons.Rounded.PictureInPicture,
+-                onClick = onMiniPlayerClick,
+-            )
+-        }
+-        if (onSwitchEngineClick != null) {
+-            PlayerAction(
+-                description = stringResource(Res.string.cd_switch_player_engine),
+-                icon = Icons.Rounded.SwapHoriz,
+-                onClick = onSwitchEngineClick,
+-            )
+-        }
+-        if (onPartyClick != null) {
+-            PlayerAction(
+-                description = stringResource(Res.string.party_title),
+-                icon = Icons.Rounded.Groups,
+-                onClick = onPartyClick,
+-                tint = if (partyActive) MaterialTheme.colorScheme.primary else Color.White,
+-            )
+-        }
+-        val hideLock by remember {
+-            com.nuvio.app.features.settings.ForkPrefs.hidePlayerLock.ensureLoaded()
+-            com.nuvio.app.features.settings.ForkPrefs.hidePlayerLock.value
+-        }.collectAsStateWithLifecycle()
+-        if (!hideLock || isLocked) {
++        var expanded by remember { mutableStateOf(false) }
++        val items = buildList<@Composable () -> Unit> {
++            add { SmartEnhanceToolbarAction() }
++            add { DxEnhanceToolbarAction() }
++            add { DxStatsToolbarAction() }
++            if (onCastClick != null) add {
++                PlayerAction(
++                    description = stringResource(Res.string.player_cast),
++                    icon = if (castActive) Icons.Rounded.CastConnected else Icons.Rounded.Cast,
++                    onClick = onCastClick,
++                    tint = if (castActive) MaterialTheme.colorScheme.primary else Color.White,
++                )
++            }
++            if (onOrientationToggleClick != null) add {
++                PlayerAction(
++                    description = stringResource(
++                        if (isPortraitPlayback) Res.string.player_action_rotate_landscape else Res.string.player_action_rotate_portrait,
++                    ),
++                    icon = if (isPortraitPlayback) Icons.Rounded.StayCurrentLandscape else Icons.Rounded.StayCurrentPortrait,
++                    onClick = onOrientationToggleClick,
++                )
++            }
++            if (onMiniPlayerClick != null) add {
++                PlayerAction(
++                    description = stringResource(Res.string.player_action_mini_player),
++                    icon = Icons.Rounded.PictureInPicture,
++                    onClick = onMiniPlayerClick,
++                )
++            }
++            if (onSwitchEngineClick != null) add {
++                PlayerAction(
++                    description = stringResource(Res.string.cd_switch_player_engine),
++                    icon = Icons.Rounded.SwapHoriz,
++                    onClick = onSwitchEngineClick,
++                )
++            }
++            if (onPartyClick != null) add {
++                PlayerAction(
++                    description = stringResource(Res.string.party_title),
++                    icon = Icons.Rounded.Groups,
++                    onClick = onPartyClick,
++                    tint = if (partyActive) MaterialTheme.colorScheme.primary else Color.White,
++                )
++            }
++            add {
++            val hideLock by remember {
++                com.nuvio.app.features.settings.ForkPrefs.hidePlayerLock.ensureLoaded()
++                com.nuvio.app.features.settings.ForkPrefs.hidePlayerLock.value
++            }.collectAsStateWithLifecycle()
++            if (!hideLock || isLocked) {
++                PlayerAction(
++                    description = stringResource(
++                        if (isLocked) Res.string.compose_player_unlock_controls else Res.string.compose_player_lock_controls,
++                    ),
++                    icon = if (isLocked) Icons.Rounded.LockOpen else Icons.Rounded.Lock,
++                    onClick = onLockToggle,
++                )
++            }
++            }
++        val limit = 4
++        val overflow = items.size > limit
++        items.take(if (expanded) items.size else limit).forEach { it() }
++        if (overflow) {
+             PlayerAction(
+                 description = stringResource(
+-                    if (isLocked) Res.string.compose_player_unlock_controls else Res.string.compose_player_lock_controls,
++                    if (expanded) Res.string.compose_player_fewer_actions else Res.string.compose_player_more_actions,
+                 ),
+-                icon = if (isLocked) Icons.Rounded.LockOpen else Icons.Rounded.Lock,
+-                onClick = onLockToggle,
++                icon = if (expanded) Icons.AutoMirrored.Rounded.KeyboardArrowLeft else Icons.AutoMirrored.Rounded.KeyboardArrowRight,
++                onClick = { expanded = !expanded },
+             )
+         }
+         NuvioBackButton(
+@@ -199,7 +215,7 @@ internal fun PlayerControlActions(
+     val actions = toolbarEntries
+         .filter { it.visible }
+         .mapNotNull { entry -> actionsById[entry.id] }
+-    val visibleCount = 7
++    val visibleCount = 4
+     val hasOverflow = actions.size > visibleCount
+     var expanded by remember(hasOverflow) { mutableStateOf(false) }
+     val scrollState = rememberScrollState()
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+index 9c7ae7004..712053c2f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+@@ -52,6 +52,8 @@ import androidx.compose.material3.Surface
+ import androidx.compose.material3.Text
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.CompositionLocalProvider
++import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
++import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.mutableStateOf
+ import androidx.compose.runtime.remember
+@@ -546,91 +548,110 @@ private fun PlayerHeader(
+                     horizontalArrangement = Arrangement.spacedBy(10.dp),
+                     verticalAlignment = Alignment.CenterVertically,
+                 ) {
+-                    SmartEnhanceHeaderButton(metrics)
+-                    DxEnhanceHeaderButton(metrics) // dx.bi picture enhance hook
+-                    DxStatsHeaderButton(metrics) // dx.bi stream stats hook
+-                    if (onCastClick != null) {
+-                        PlayerHeaderIconButton(
+-                            icon = if (castActive) Icons.Rounded.CastConnected else Icons.Rounded.Cast,
+-                            contentDescription = stringResource(Res.string.player_cast),
+-                            buttonSize = metrics.headerIconSize + 16.dp,
+-                            iconSize = metrics.headerIconSize,
+-                            onClick = onCastClick,
+-                            tint = if (castActive) MaterialTheme.colorScheme.primary else Color.White,
+-                        )
++                    var headerExpanded by remember { mutableStateOf(false) }
++                    val headerItems = buildList<@Composable () -> Unit> {
++                        add { SmartEnhanceHeaderButton(metrics) }
++                        add { DxEnhanceHeaderButton(metrics) }
++                        add { DxStatsHeaderButton(metrics) }
++                        if (onCastClick != null) add {
++                            PlayerHeaderIconButton(
++                                icon = if (castActive) Icons.Rounded.CastConnected else Icons.Rounded.Cast,
++                                contentDescription = stringResource(Res.string.player_cast),
++                                buttonSize = metrics.headerIconSize + 16.dp,
++                                iconSize = metrics.headerIconSize,
++                                onClick = onCastClick,
++                                tint = if (castActive) MaterialTheme.colorScheme.primary else Color.White,
++                            )
++                        }
++                        if (onOrientationToggleClick != null) add {
++                            PlayerHeaderIconButton(
++                                icon = if (isPortraitPlayback) Icons.Rounded.StayCurrentLandscape else Icons.Rounded.StayCurrentPortrait,
++                                contentDescription = stringResource(
++                                    if (isPortraitPlayback) Res.string.player_action_rotate_landscape else Res.string.player_action_rotate_portrait,
++                                ),
++                                buttonSize = metrics.headerIconSize + 16.dp,
++                                iconSize = metrics.headerIconSize,
++                                onClick = onOrientationToggleClick,
++                            )
++                        }
++                        if (onMiniPlayerClick != null) add {
++                            PlayerHeaderIconButton(
++                                icon = Icons.Rounded.PictureInPicture,
++                                contentDescription = stringResource(Res.string.player_action_mini_player),
++                                buttonSize = metrics.headerIconSize + 16.dp,
++                                iconSize = metrics.headerIconSize,
++                                onClick = onMiniPlayerClick,
++                            )
++                        }
++                        if (onSubmitIntroClick != null) add {
++                            PlayerHeaderIconButton(
++                                icon = Icons.Rounded.Flag,
++                                contentDescription = stringResource(Res.string.submit_intro_action),
++                                buttonSize = metrics.headerIconSize + 16.dp,
++                                iconSize = metrics.headerIconSize,
++                                onClick = onSubmitIntroClick,
++                            )
++                        }
++                        if (onOpenInExternalPlayer != null) add {
++                            PlayerHeaderIconButton(
++                                icon = Icons.Filled.SwapHoriz,
++                                contentDescription = stringResource(Res.string.streams_open_external_player),
++                                buttonSize = metrics.headerIconSize + 16.dp,
++                                iconSize = metrics.headerIconSize,
++                                onClick = onOpenInExternalPlayer,
++                            )
++                        }
++                        if (onPartyClick != null) add {
++                            PlayerHeaderIconButton(
++                                icon = Icons.Rounded.Groups,
++                                contentDescription = stringResource(Res.string.party_title),
++                                buttonSize = metrics.headerIconSize + 16.dp,
++                                iconSize = metrics.headerIconSize,
++                                onClick = onPartyClick,
++                                tint = if (partyActive) MaterialTheme.colorScheme.primary else Color.White,
++                            )
++                        }
++                        add {
++                        val hideLock by remember {
++                            com.nuvio.app.features.settings.ForkPrefs.hidePlayerLock.ensureLoaded()
++                            com.nuvio.app.features.settings.ForkPrefs.hidePlayerLock.value
++                        }.collectAsStateWithLifecycle()
++                        if (!hideLock || isLocked) {
++                            PlayerHeaderIconButton(
++                                icon = if (isLocked) Icons.Rounded.LockOpen else Icons.Rounded.Lock,
++                                contentDescription = if (isLocked) {
++                                    stringResource(Res.string.compose_player_unlock_controls)
++                                } else {
++                                    stringResource(Res.string.compose_player_lock_controls)
++                                },
++                                buttonSize = metrics.headerIconSize + 16.dp,
++                                iconSize = metrics.headerIconSize,
++                                onClick = onLockToggle,
++                            )
++                        }
++                        }
++                        if (onVideoSettingsClick != null) add {
++                            PlayerHeaderIconButton(
++                                icon = Icons.Rounded.Build,
++                                contentDescription = stringResource(Res.string.player_action_video_settings),
++                                buttonSize = metrics.headerIconSize + 16.dp,
++                                iconSize = metrics.headerIconSize,
++                                onClick = onVideoSettingsClick,
++                            )
++                        }
+                     }
+-                    if (onOrientationToggleClick != null) {
++                    val headerLimit = 4
++                    val headerOverflow = headerItems.size > headerLimit
++                    headerItems.take(if (headerExpanded) headerItems.size else headerLimit).forEach { it() }
++                    if (headerOverflow) {
+                         PlayerHeaderIconButton(
+-                            icon = if (isPortraitPlayback) Icons.Rounded.StayCurrentLandscape else Icons.Rounded.StayCurrentPortrait,
++                            icon = if (headerExpanded) Icons.AutoMirrored.Rounded.KeyboardArrowLeft else Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                             contentDescription = stringResource(
+-                                if (isPortraitPlayback) Res.string.player_action_rotate_landscape else Res.string.player_action_rotate_portrait,
++                                if (headerExpanded) Res.string.compose_player_fewer_actions else Res.string.compose_player_more_actions,
+                             ),
+                             buttonSize = metrics.headerIconSize + 16.dp,
+                             iconSize = metrics.headerIconSize,
+-                            onClick = onOrientationToggleClick,
+-                        )
+-                    }
+-                    if (onMiniPlayerClick != null) {
+-                        PlayerHeaderIconButton(
+-                            icon = Icons.Rounded.PictureInPicture,
+-                            contentDescription = stringResource(Res.string.player_action_mini_player),
+-                            buttonSize = metrics.headerIconSize + 16.dp,
+-                            iconSize = metrics.headerIconSize,
+-                            onClick = onMiniPlayerClick,
+-                        )
+-                    }
+-                    if (onSubmitIntroClick != null) {
+-                        PlayerHeaderIconButton(
+-                            icon = Icons.Rounded.Flag,
+-                            contentDescription = stringResource(Res.string.submit_intro_action),
+-                            buttonSize = metrics.headerIconSize + 16.dp,
+-                            iconSize = metrics.headerIconSize,
+-                            onClick = onSubmitIntroClick,
+-                        )
+-                    }
+-                    if (onOpenInExternalPlayer != null) {
+-                        PlayerHeaderIconButton(
+-                            icon = Icons.Filled.SwapHoriz,
+-                            contentDescription = stringResource(Res.string.streams_open_external_player),
+-                            buttonSize = metrics.headerIconSize + 16.dp,
+-                            iconSize = metrics.headerIconSize,
+-                            onClick = onOpenInExternalPlayer,
+-                        )
+-                    }
+-                    if (onPartyClick != null) {
+-                        PlayerHeaderIconButton(
+-                            icon = Icons.Rounded.Groups,
+-                            contentDescription = stringResource(Res.string.party_title),
+-                            buttonSize = metrics.headerIconSize + 16.dp,
+-                            iconSize = metrics.headerIconSize,
+-                            onClick = onPartyClick,
+-                            tint = if (partyActive) MaterialTheme.colorScheme.primary else Color.White,
+-                        )
+-                    }
+-                    val hideLock by remember {
+-                        com.nuvio.app.features.settings.ForkPrefs.hidePlayerLock.ensureLoaded()
+-                        com.nuvio.app.features.settings.ForkPrefs.hidePlayerLock.value
+-                    }.collectAsStateWithLifecycle()
+-                    if (!hideLock || isLocked) {
+-                        PlayerHeaderIconButton(
+-                            icon = if (isLocked) Icons.Rounded.LockOpen else Icons.Rounded.Lock,
+-                            contentDescription = if (isLocked) {
+-                                stringResource(Res.string.compose_player_unlock_controls)
+-                            } else {
+-                                stringResource(Res.string.compose_player_lock_controls)
+-                            },
+-                            buttonSize = metrics.headerIconSize + 16.dp,
+-                            iconSize = metrics.headerIconSize,
+-                            onClick = onLockToggle,
+-                        )
+-                    }
+-                    if (onVideoSettingsClick != null) {
+-                        PlayerHeaderIconButton(
+-                            icon = Icons.Rounded.Build,
+-                            contentDescription = stringResource(Res.string.player_action_video_settings),
+-                            buttonSize = metrics.headerIconSize + 16.dp,
+-                            iconSize = metrics.headerIconSize,
+-                            onClick = onVideoSettingsClick,
++                            onClick = { headerExpanded = !headerExpanded },
+                         )
+                     }
+                     NuvioBackButton(
