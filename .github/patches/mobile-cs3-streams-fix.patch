@@ -1,0 +1,126 @@
+diff --git a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/cloudstream/CloudStreamPlatformRuntime.android.kt b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/cloudstream/CloudStreamPlatformRuntime.android.kt
+index e5521ae..149c46a 100644
+--- a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/cloudstream/CloudStreamPlatformRuntime.android.kt
++++ b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/cloudstream/CloudStreamPlatformRuntime.android.kt
+@@ -253,7 +253,7 @@ internal actual object CloudStreamPlatformRuntime {
+         }
+         val pluginClassName = manifest.pluginClassName?.takeIf(String::isNotBlank)
+             ?: error("CloudStream manifest has no pluginClassName")
+-        val loader = PathClassLoader(file.absolutePath, context.classLoader)
++        val loader = PathClassLoader(file.absolutePath, context.applicationInfo.nativeLibraryDir, context.classLoader)
+         val pluginClass = loader.loadClass(pluginClassName)
+         require(BasePlugin::class.java.isAssignableFrom(pluginClass)) {
+             "CloudStream entry point does not extend BasePlugin"
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/cloudstream/CloudStreamNuvioAdapter.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/cloudstream/CloudStreamNuvioAdapter.kt
+index 5d9f900..21db5c7 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/cloudstream/CloudStreamNuvioAdapter.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/cloudstream/CloudStreamNuvioAdapter.kt
+@@ -127,9 +127,9 @@ fun CloudStreamPlaybackSource.toStreamItem(
+ }
+ 
+ private fun Int.cloudStreamQualityLabel(): String? =
+-    takeIf { it in knownCloudStreamQualities }?.let { "${it}p" }
++    takeIf { it in knownCloudStreamQualities || (it in 144..4320 && it % 10 == 0) }?.let { "${it}p" }
+ 
+-private val knownCloudStreamQualities = setOf(144, 240, 360, 480, 720, 1080, 1440, 2160)
++private val knownCloudStreamQualities = setOf(144, 240, 360, 480, 540, 576, 720, 1080, 1440, 2160, 4320)
+ 
+ private data class ParsedCloudStreamPlaybackUrl(
+     val url: String,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerStreamsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerStreamsRepository.kt
+index e22179f..1ac8208 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerStreamsRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerStreamsRepository.kt
+@@ -61,7 +61,7 @@ object PlayerStreamsRepository {
+     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+ 
+     private val cloudStreamSemaphore = Semaphore(4)
+-    private const val PLAYER_STREAM_PROVIDER_TIMEOUT_MS = 20_000L
++    private const val PLAYER_STREAM_PROVIDER_TIMEOUT_MS = 35_000L
+ 
+     // source panel
+     private val _sourceState = MutableStateFlow(StreamsUiState())
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/PlaybackAvailability.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/PlaybackAvailability.kt
+index 5299665..851d413 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/PlaybackAvailability.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/PlaybackAvailability.kt
+@@ -9,6 +9,7 @@ import com.nuvio.app.features.addons.AddonManifest
+ import com.nuvio.app.features.addons.AddonRepository
+ import com.nuvio.app.features.addons.ManagedAddon
+ import com.nuvio.app.features.addons.supportsResource
++import com.nuvio.app.features.cloudstream.CloudStreamRepository
+ import com.nuvio.app.features.details.MetaDetailsRepository
+ import com.nuvio.app.features.downloads.DownloadsRepository
+ import com.nuvio.app.features.plugins.PluginRepository
+@@ -24,15 +25,18 @@ internal fun hasCompatiblePlaybackSource(
+     plugins: PluginsUiState,
+     type: String,
+     videoId: String,
++    hasCloudStreamProviders: Boolean = false,
+ ): Boolean = addons.any { it.enabled && it.manifest?.supportsStream(type, videoId) == true } ||
+-    (plugins.pluginsEnabled && plugins.scrapers.any { it.enabled && it.supportsType(type) })
++    (plugins.pluginsEnabled && plugins.scrapers.any { it.enabled && it.supportsType(type) }) ||
++    hasCloudStreamProviders
+ 
+ internal class PlaybackAvailability(
+     private val addons: List<ManagedAddon>,
+     private val plugins: PluginsUiState,
++    private val hasCloudStreamProviders: Boolean = false,
+ ) {
+     fun canStream(type: String, videoId: String): Boolean =
+-        hasCompatiblePlaybackSource(addons, plugins, type, videoId) ||
++        hasCompatiblePlaybackSource(addons, plugins, type, videoId, hasCloudStreamProviders) ||
+             MetaDetailsRepository.findEmbeddedStreams(videoId).isNotEmpty() ||
+             ServerStreams.canServe(type, videoId)
+ 
+@@ -57,6 +61,12 @@ internal class PlaybackAvailability(
+             } else {
+                 PluginsUiState(pluginsEnabled = false)
+             },
++            hasCloudStreamProviders = if (AppFeaturePolicy.pluginsEnabled) {
++                CloudStreamRepository.initialize()
++                CloudStreamRepository.uiState.value.plugins.any { it.isRunnable }
++            } else {
++                false
++            },
+         )
+     }
+ }
+@@ -76,6 +86,13 @@ internal fun rememberPlaybackAvailability(): PlaybackAvailability {
+     } else {
+         PluginsUiState(pluginsEnabled = false)
+     }
++    val cloudStreamState = if (AppFeaturePolicy.pluginsEnabled) {
++        val state by remember {
++            CloudStreamRepository.initialize()
++            CloudStreamRepository.uiState
++        }.collectAsStateWithLifecycle()
++        state
++    } else null
+     val downloads by remember {
+         DownloadsRepository.ensureLoaded()
+         DownloadsRepository.uiState
+@@ -84,7 +101,8 @@ internal fun rememberPlaybackAvailability(): PlaybackAvailability {
+         ServerRepository.ensureLoaded()
+         ServerRepository.uiState
+     }.collectAsStateWithLifecycle()
+-    return remember(addons, plugins, downloads, servers.revision) {
+-        PlaybackAvailability(addons.addons, plugins)
++    val hasCloudStreamProviders = cloudStreamState?.plugins?.any { it.isRunnable } == true
++    return remember(addons, plugins, downloads, servers.revision, hasCloudStreamProviders) {
++        PlaybackAvailability(addons.addons, plugins, hasCloudStreamProviders)
+     }
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
+index 8e75c67..6a3861c 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
+@@ -42,7 +42,7 @@ object StreamsRepository {
+     val uiState: StateFlow<StreamsUiState> = _uiState.asStateFlow()
+ 
+     private val cloudStreamSemaphore = Semaphore(4)
+-    private const val STREAM_PROVIDER_TIMEOUT_MS = 20_000L
++    private const val STREAM_PROVIDER_TIMEOUT_MS = 35_000L
+ 
+     private var activeJob: Job? = null
+     private var activeRequestKey: String? = null
