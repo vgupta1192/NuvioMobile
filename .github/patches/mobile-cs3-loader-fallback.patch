@@ -1,0 +1,69 @@
+diff --git a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/cloudstream/CloudStreamPlatformRuntime.android.kt b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/cloudstream/CloudStreamPlatformRuntime.android.kt
+index 149c46a8..93232fcb 100644
+--- a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/cloudstream/CloudStreamPlatformRuntime.android.kt
++++ b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/cloudstream/CloudStreamPlatformRuntime.android.kt
+@@ -37,6 +37,9 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
+ import com.lagradost.cloudstream3.utils.extractorApis
+ import com.nuvio.app.core.diagnostics.RuntimeDiagnostics
+ import dalvik.system.PathClassLoader
++import android.os.Build
++import dalvik.system.InMemoryDexClassLoader
++import java.nio.ByteBuffer
+ import java.io.File
+ import java.lang.ref.WeakReference
+ import java.util.Collections
+@@ -221,6 +224,44 @@ internal actual object CloudStreamPlatformRuntime {
+         PluginManager.clear()
+     }
+ 
++    private fun loadPluginClass(context: Context, file: File, pluginClassName: String): Class<*> {
++        val nativeLibDir = context.applicationInfo.nativeLibraryDir
++        val pathFailure = try {
++            return PathClassLoader(file.absolutePath, nativeLibDir, context.classLoader).loadClass(pluginClassName)
++        } catch (error: ClassNotFoundException) {
++            error
++        }
++        val dexEntries = ZipFile(file).use { archive ->
++            archive.entries().asSequence()
++                .filter { entry -> !entry.isDirectory }
++                .map { entry -> entry.name to entry.size }
++                .toList()
++        }
++        val inMemoryFailure = try {
++            val buffers = ZipFile(file).use { archive ->
++                dexEntries
++                    .filter { (name, _) -> name.endsWith(".dex") }
++                    .map { (name, _) ->
++                        ByteBuffer.wrap(archive.getInputStream(archive.getEntry(name)).use { it.readBytes() })
++                    }
++            }
++            if (buffers.isEmpty() || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
++                null
++            } else {
++                return InMemoryDexClassLoader(buffers.toTypedArray(), context.classLoader).loadClass(pluginClassName)
++            }
++        } catch (error: Throwable) {
++            error
++        }
++        val suppressed = pathFailure.suppressed.joinToString("; ") { it.toString().take(160) }
++        throw IllegalStateException(
++            "Class $pluginClassName not loadable (sdk ${Build.VERSION.SDK_INT}, size ${file.length()}, " +
++                "entries ${dexEntries.joinToString { "${it.first}:${it.second}" }}). " +
++                "Path loader: ${pathFailure.message?.take(60)}; suppressed: ${suppressed.ifBlank { "none" }}. " +
++                "In-memory loader: ${inMemoryFailure?.toString()?.take(200) ?: "no dex or sdk too old"}",
++        )
++    }
++
+     private fun loadPlugin(item: CloudStreamPluginItem): LoadedPlugin {
+         val context = requireNotNull(getContext()) { "CloudStream Android runtime is not initialized" }
+         prepareHostContext(context)
+@@ -253,8 +294,7 @@ internal actual object CloudStreamPlatformRuntime {
+         }
+         val pluginClassName = manifest.pluginClassName?.takeIf(String::isNotBlank)
+             ?: error("CloudStream manifest has no pluginClassName")
+-        val loader = PathClassLoader(file.absolutePath, context.applicationInfo.nativeLibraryDir, context.classLoader)
+-        val pluginClass = loader.loadClass(pluginClassName)
++        val pluginClass = loadPluginClass(context, file, pluginClassName)
+         require(BasePlugin::class.java.isAssignableFrom(pluginClass)) {
+             "CloudStream entry point does not extend BasePlugin"
+         }
