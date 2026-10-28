@@ -630,7 +630,7 @@ index 95f78f7d..6f970605 100644
  private const val HOME_CATALOG_PREVIEW_FETCH_LIMIT = 18
  private const val HOME_CATALOG_PUBLISH_THROTTLE_MS = 200L
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt
-index c12464a6..d8d1479d 100644
+index c12464a6..ff56275a 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt
 @@ -4,12 +4,22 @@ import androidx.compose.animation.Crossfade
@@ -673,7 +673,20 @@ index c12464a6..d8d1479d 100644
  import com.nuvio.app.core.auth.AuthRepository
  import com.nuvio.app.core.auth.AuthState
  import com.nuvio.app.core.network.NetworkCondition
-@@ -172,6 +187,18 @@ fun HomeScreen(
+@@ -148,6 +163,12 @@ fun HomeScreen(
+         HomeCatalogSettingsRepository.snapshot()
+         HomeCatalogSettingsRepository.uiState
+     }.collectAsStateWithLifecycle()
++    val cloudStreamUiState by CloudStreamRepository.uiState.collectAsStateWithLifecycle()
++    val runnableCloudStreamProviders = remember(cloudStreamUiState.plugins) {
++        cloudStreamUiState.plugins.filter(CloudStreamPluginItem::isRunnable)
++    }
++    val selectedCloudStreamProviderId by HomeRepository.selectedCloudStreamProviderId.collectAsStateWithLifecycle()
++    var cloudStreamProviderMenuExpanded by remember { mutableStateOf(false) }
+     val homeListState = rememberLazyListState()
+     val continueWatchingListState = rememberLazyListState()
+     val upcomingListState = rememberLazyListState()
+@@ -172,6 +193,18 @@ fun HomeScreen(
      }.collectAsStateWithLifecycle()
      var observedOfflineState by remember { mutableStateOf(false) }
  
@@ -692,7 +705,7 @@ index c12464a6..d8d1479d 100644
      ScreenActivityEffect(scrollToTopRequests) { active ->
          if (!active) return@ScreenActivityEffect
          scrollToTopRequests.collect {
-@@ -867,7 +894,7 @@ fun HomeScreen(
+@@ -867,7 +900,7 @@ fun HomeScreen(
          }
      }
  
@@ -701,7 +714,7 @@ index c12464a6..d8d1479d 100644
      val serversUiState by remember {
          ServerRepository.ensureLoaded()
          ServerRepository.uiState
-@@ -893,6 +920,10 @@ fun HomeScreen(
+@@ -893,6 +926,10 @@ fun HomeScreen(
      val sectionsMap = remember(homeUiState.sections) {
          homeUiState.sections.associateBy(HomeCatalogSection::key)
      }
@@ -712,7 +725,7 @@ index c12464a6..d8d1479d 100644
      val enabledHomeItems = remember(homeSettingsUiState.items) {
          homeSettingsUiState.items.filter { it.enabled }
      }
-@@ -1169,6 +1200,26 @@ fun HomeScreen(
+@@ -1169,6 +1206,26 @@ fun HomeScreen(
                          ForkHomeLibraryRows(sectionPadding = homeSectionPadding, onPosterClick = onPosterClick)
                      }
  
@@ -739,7 +752,7 @@ index c12464a6..d8d1479d 100644
                      keyedEnabledHomeItems.forEach { keyedSettingsItem ->
                          val settingsItem = keyedSettingsItem.value
                          if (settingsItem.isCollection) {
-@@ -1212,6 +1263,58 @@ fun HomeScreen(
+@@ -1212,6 +1269,58 @@ fun HomeScreen(
              }
          }
          }
