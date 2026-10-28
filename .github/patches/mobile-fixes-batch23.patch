@@ -1,0 +1,211 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/NuvioApplication.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/NuvioApplication.kt
+index 6aa5e8540..ed65fc574 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/NuvioApplication.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/NuvioApplication.kt
+@@ -30,6 +30,7 @@ class NuvioApplication : Application(), SingletonImageLoader.Factory {
+ 
+     override fun onCreate() {
+         super.onCreate()
++        com.nuvio.app.features.settings.CrashLog.install(this)
+         com.nuvio.app.core.network.DnsPlatform.initialize(this)
+         com.nuvio.app.features.cloudstream.CloudStreamPlatformStorage.initialize(this)
+         com.nuvio.app.features.cloudstream.CloudStreamPlatformRuntime.initialize(this)
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/settings/CrashLog.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/settings/CrashLog.android.kt
+new file mode 100644
+index 000000000..4318c944e
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/settings/CrashLog.android.kt
+@@ -0,0 +1,95 @@
++package com.nuvio.app.features.settings
++
++import android.app.ActivityManager
++import android.app.Application
++import android.content.Context
++import android.os.Build
++import android.util.Log
++import java.io.File
++import java.text.SimpleDateFormat
++import java.util.Date
++import java.util.Locale
++
++actual object CrashLog {
++    private const val FILE_NAME = "crash-log.txt"
++    private const val MAX_BYTES = 40_000
++
++    private var appContext: Context? = null
++
++    /** Call once from Application.onCreate. Chains to the previous handler so the system crash flow stays. */
++    fun install(app: Application) {
++        appContext = app.applicationContext
++        val previous = Thread.getDefaultUncaughtExceptionHandler()
++        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
++            runCatching { append(app, thread, error) }
++            previous?.uncaughtException(thread, error)
++        }
++    }
++
++    private fun file(context: Context) = File(context.filesDir, FILE_NAME)
++
++    private fun stamp(time: Long): String =
++        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(time))
++
++    private fun append(context: Context, thread: Thread, error: Throwable) {
++        val version = runCatching {
++            context.packageManager.getPackageInfo(context.packageName, 0).versionName
++        }.getOrNull().orEmpty()
++        val entry = buildString {
++            append("=== Crash ").append(stamp(System.currentTimeMillis())).append(" ===\n")
++            append("App ").append(version).append(", Android ").append(Build.VERSION.RELEASE)
++            append(", ").append(Build.MANUFACTURER).append(' ').append(Build.MODEL).append('\n')
++            append("Thread: ").append(thread.name).append('\n')
++            append(Log.getStackTraceString(error)).append("\n\n")
++        }
++        val target = file(context)
++        val old = if (target.exists()) target.readText() else ""
++        val merged = entry + old
++        target.writeText(if (merged.length > MAX_BYTES) merged.take(MAX_BYTES) else merged)
++    }
++
++    /** Crashes written by the handler, plus the system's own record of recent exits (native crashes, low memory kills). */
++    actual fun read(): String {
++        val context = appContext ?: return "Crash log is not ready yet."
++        val saved = runCatching { file(context).takeIf { it.exists() }?.readText() }.getOrNull().orEmpty()
++        val exits = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
++            runCatching {
++                val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
++                manager.getHistoricalProcessExitReasons(context.packageName, 0, 8).joinToString("\n") { info ->
++                    "${stamp(info.timestamp)} ${reasonName(info.reason)} (${info.description ?: "no description"}), " +
++                        "importance ${info.importance}, memory ${info.rss / 1024} MB"
++                }
++            }.getOrNull().orEmpty()
++        } else {
++            ""
++        }
++        return buildString {
++            append("Exit history (system):\n")
++            append(if (exits.isBlank()) "none\n" else exits + "\n")
++            append("\nJava crashes:\n")
++            append(if (saved.isBlank()) "none\n" else saved)
++        }
++    }
++
++    private fun reasonName(reason: Int): String = when (reason) {
++        1 -> "EXIT_SELF"
++        2 -> "SIGNALED"
++        3 -> "LOW_MEMORY"
++        4 -> "CRASH"
++        5 -> "CRASH_NATIVE"
++        6 -> "ANR"
++        7 -> "INITIALIZATION_FAILURE"
++        8 -> "PERMISSION_CHANGE"
++        9 -> "EXCESSIVE_RESOURCE_USAGE"
++        10 -> "USER_REQUESTED"
++        11 -> "USER_STOPPED"
++        12 -> "DEPENDENCY_DIED"
++        13 -> "OTHER"
++        else -> "REASON_$reason"
++    }
++
++    actual fun clear() {
++        val context = appContext ?: return
++        runCatching { file(context).delete() }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/CrashLog.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/CrashLog.kt
+new file mode 100644
+index 000000000..3aa9517b4
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/CrashLog.kt
+@@ -0,0 +1,10 @@
++package com.nuvio.app.features.settings
++
++/**
++ * Last app crashes and process exit reasons, kept in a local file so the user can copy them
++ * from Settings after the app dies (for example during playback).
++ */
++expect object CrashLog {
++    fun read(): String
++    fun clear()
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkAboutSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkAboutSettings.kt
+index 80078a4ce..967921a0f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkAboutSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkAboutSettings.kt
+@@ -1,8 +1,15 @@
+ package com.nuvio.app.features.settings
+ 
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.verticalScroll
+ import androidx.compose.material3.AlertDialog
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.ui.Modifier
+ import androidx.compose.material3.Text
+ import androidx.compose.material3.TextButton
++import androidx.compose.ui.platform.LocalClipboardManager
++import androidx.compose.ui.text.AnnotatedString
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.mutableStateOf
+@@ -27,6 +34,8 @@ private val forkChanges = listOf(
+ internal fun ForkAboutSettingsSection(isTablet: Boolean) {
+     var showNews by remember { mutableStateOf(false) }
+     var cacheMessage by remember { mutableStateOf<String?>(null) }
++    var crashText by remember { mutableStateOf<String?>(null) }
++    val clipboard = LocalClipboardManager.current
+     val context = LocalPlatformContext.current
+     SettingsSection(title = "Performance and fork news", isTablet = isTablet) {
+         SettingsGroup(isTablet = isTablet) {
+@@ -48,6 +57,13 @@ internal fun ForkAboutSettingsSection(isTablet: Boolean) {
+                 isTablet = isTablet,
+                 onClick = { showNews = true },
+             )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsNavigationRow(
++                title = "Crash log",
++                description = "Last crashes and why the app was closed. Copy it and send it when the app dies.",
++                isTablet = isTablet,
++                onClick = { crashText = CrashLog.read() },
++            )
+         }
+     }
+     if (showNews) {
+@@ -58,4 +74,26 @@ internal fun ForkAboutSettingsSection(isTablet: Boolean) {
+             text = { Text(forkChanges.joinToString("\n") { "- $it" }) },
+         )
+     }
++    crashText?.let { text ->
++        AlertDialog(
++            onDismissRequest = { crashText = null },
++            confirmButton = {
++                TextButton(onClick = { clipboard.setText(AnnotatedString(text)) }) { Text("Copy") }
++            },
++            dismissButton = {
++                Row {
++                    TextButton(onClick = { CrashLog.clear(); crashText = CrashLog.read() }) { Text("Clear") }
++                    TextButton(onClick = { crashText = null }) { Text("Close") }
++                }
++            },
++            title = { Text("Crash log") },
++            text = {
++                Text(
++                    text = text,
++                    style = MaterialTheme.typography.bodySmall,
++                    modifier = Modifier.verticalScroll(rememberScrollState()),
++                )
++            },
++        )
++    }
+ }
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/settings/CrashLog.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/settings/CrashLog.ios.kt
+new file mode 100644
+index 000000000..e7a4ba680
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/settings/CrashLog.ios.kt
+@@ -0,0 +1,6 @@
++package com.nuvio.app.features.settings
++
++actual object CrashLog {
++    actual fun read(): String = "No crash log on this platform."
++    actual fun clear() = Unit
++}
