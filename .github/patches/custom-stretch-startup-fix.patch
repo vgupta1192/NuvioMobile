@@ -15,10 +15,10 @@ index c027ae97..5deb1eb1 100644
          frame.scaleX = 1f
          frame.scaleY = 1f
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index b244d685..a2bdcbe7 100644
+index e318dc60..cb045db1 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-@@ -1796,6 +1796,13 @@ private class NuvioLibmpvView(
+@@ -1830,6 +1830,13 @@ private class NuvioLibmpvView(
              mpv.getPropertyInt("video-params/h") ?: 0,
          )
          mpv.setPropertyString("keepaspect", if (customStretchActive) "no" else "yes")

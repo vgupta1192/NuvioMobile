@@ -1,7 +1,8 @@
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
+index bc8bcbfd..f789520a 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
-@@ -39,6 +39,13 @@
+@@ -39,6 +39,13 @@ data class VideoContentRect(
          bottom = max(bottom, other.bottom),
      )
  
@@ -15,7 +16,7 @@ diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/Cust
      fun isCloseTo(other: VideoContentRect, tolerance: Float = 0.004f): Boolean =
          abs(left - other.left) <= tolerance &&
              abs(top - other.top) <= tolerance &&
-@@ -92,6 +99,8 @@
+@@ -92,6 +99,8 @@ class BarSample(
      val confident: BooleanArray,
      /** Coarse 4x4 grid of mean luma, to tell whether two samples show different frames. */
      val signature: IntArray = IntArray(0),
@@ -24,7 +25,7 @@ diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/Cust
  ) {
      /** Thickness of the bar at each edge (left, top, right, bottom) as frame fractions. */
      val thickness: FloatArray
-@@ -114,11 +123,13 @@
+@@ -114,11 +123,13 @@ class BarSample(
              VideoContentRect(horizontal, vertical, 1f - horizontal, 1f - vertical),
              booleanArrayOf(horizontalConfident, verticalConfident, horizontalConfident, verticalConfident),
              signature,
@@ -39,7 +40,7 @@ diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/Cust
  
      /** True when [other] shows a clearly different frame (not the same paused or static shot). */
      fun differsFrom(other: IntArray?): Boolean {
-@@ -332,17 +343,23 @@
+@@ -332,17 +343,23 @@ object BlackBarDetector {
  }
  
  /**
@@ -71,7 +72,7 @@ diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/Cust
      private var lastEvidence: IntArray? = null
      /** Frames that counted as evidence (distinct shots, or a still shot seen long enough). */
      private var samples = 0
-@@ -350,30 +367,54 @@
+@@ -350,30 +367,54 @@ class BlackBarTracker {
      private var attempts = 0
      private var staticRepeats = 0
      private var committed: VideoContentRect? = null
@@ -131,7 +132,7 @@ diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/Cust
          // A dark scene must not confirm itself, so a repeat of the same shot only counts after it
          // was seen STATIC_CONFIRM_REPEATS more times. Bars are only trusted with a sharp edge, so a
          // still frame that shows them (intro card, paused start) is real evidence.
-@@ -389,11 +430,11 @@
+@@ -389,11 +430,11 @@ class BlackBarTracker {
          val measured = sample.thickness
          for (edge in 0 until 4) {
              if (!sample.confident[edge]) continue
@@ -146,7 +147,7 @@ diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/Cust
          var horizontal = min(edge[0], edge[2])
          var vertical = min(edge[1], edge[3])
          if (horizontal > 0f && vertical > 0f) {
-@@ -402,7 +443,22 @@
+@@ -402,7 +443,22 @@ class BlackBarTracker {
          }
          val rect = VideoContentRect(horizontal, vertical, 1f - horizontal, 1f - vertical)
          val previous = committed
@@ -170,7 +171,7 @@ diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/Cust
          committed = rect
          return rect
      }
-@@ -410,12 +466,19 @@
+@@ -410,12 +466,19 @@ class BlackBarTracker {
      companion object {
          const val CALIBRATION_SAMPLES = 3
          const val CONFIRMATIONS = 2
@@ -191,7 +192,7 @@ diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/Cust
  
          /** Longest side of the sampled frame. Enough to place bar edges within ~0.3%. */
          const val SAMPLE_MAX_DIMENSION = 320
-@@ -443,8 +506,18 @@
+@@ -443,8 +506,18 @@ fun CustomStretchSamplingEffect(
          val tracker = BlackBarTracker()
          delay(BlackBarTracker.FIRST_SAMPLE_DELAY_MS)
          while (isActive) {

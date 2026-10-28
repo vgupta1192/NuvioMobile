@@ -10,10 +10,10 @@ index 00000000..c9e0abdf
 +    <string name="netflix_preview_options">Options</string>
 +</resources>
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index 4cd81556..cc3e89b3 100644
+index 3494a799..00c63733 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-@@ -295,6 +295,7 @@ internal fun MainAppContent(
+@@ -294,6 +294,7 @@ internal fun MainAppContent(
          val liquidGlassNativeTabBarSupported = remember { isLiquidGlassNativeTabBarSupported() }
          var showExitConfirmation by rememberSaveable { mutableStateOf(false) }
          var selectedPosterActionTarget by remember { mutableStateOf<PosterActionTarget?>(null) }
@@ -21,7 +21,7 @@ index 4cd81556..cc3e89b3 100644
          var selectedPosterAnchor by remember { mutableStateOf<PosterZoomAnchor?>(null) }
          val posterOverlayHazeState = rememberHazeState()
          var selectedContinueWatchingForActions by remember { mutableStateOf<ContinueWatchingItem?>(null) }
-@@ -1561,7 +1562,15 @@ internal fun MainAppContent(
+@@ -1559,7 +1560,15 @@ internal fun MainAppContent(
                                  },
                                  onPosterLongClick = { meta ->
                                      if (!meta.id.startsWith(JELLYFIN_META_ID_PREFIX)) {
@@ -38,7 +38,7 @@ index 4cd81556..cc3e89b3 100644
                                      }
                                  },
                                  onLibraryPosterClick = { item ->
-@@ -1965,6 +1974,21 @@ internal fun MainAppContent(
+@@ -1963,6 +1972,21 @@ internal fun MainAppContent(
                  )
              }
  

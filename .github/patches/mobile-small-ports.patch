@@ -343,10 +343,10 @@ index 00000000..e94e5ae8
 +    private fun decode(value: String): ByteArray = Base64.decode(value, Base64.NO_WRAP)
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index d6f908da..2dd74565 100644
+index e114530f..bf679c99 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-@@ -2071,6 +2071,7 @@ private class NuvioLibmpvView(
+@@ -2099,6 +2099,7 @@ private class NuvioLibmpvView(
                      mpv.setPropertyString("sub-outline-color", style.outlineColor.toMpvColor())
                      mpv.setPropertyString("sub-border-color", style.outlineColor.toMpvColor())
                      mpv.setPropertyString("sub-border-style", style.toMpvSubtitleBorderStyle())
@@ -354,7 +354,7 @@ index d6f908da..2dd74565 100644
                      mpv.setPropertyString("sub-bold", if (style.bold) "yes" else "no")
                      SubtitleFontStore.current(context)?.let { mpv.setPropertyString("sub-font", it.familyName) } // Nuvio fork: custom subtitle font
                      mpv.setPropertyInt("sub-font-size", style.toMpvSubtitleFontSize())
-@@ -2490,7 +2491,7 @@ private fun PlayerView.applySubtitleStyle(style: SubtitleStyleState, pipVideoHei
+@@ -2518,7 +2519,7 @@ private fun PlayerView.applySubtitleStyle(style: SubtitleStyleState, pipVideoHei
                  style.textColor.toArgb(),
                  style.backgroundColor.toArgb(),
                  android.graphics.Color.TRANSPARENT,
@@ -364,10 +364,10 @@ index d6f908da..2dd74565 100644
                  SubtitleFontStore.current(context)?.typeface // Nuvio fork: custom subtitle font
                      ?.let { if (style.bold) Typeface.create(it, Typeface.BOLD) else it }
 diff --git a/composeApp/src/commonMain/composeResources/values/strings.xml b/composeApp/src/commonMain/composeResources/values/strings.xml
-index 4726426f..3f909a93 100644
+index 9fa81a47..6e89e2dc 100644
 --- a/composeApp/src/commonMain/composeResources/values/strings.xml
 +++ b/composeApp/src/commonMain/composeResources/values/strings.xml
-@@ -2475,4 +2475,5 @@
+@@ -2481,4 +2481,5 @@
      <string name="settings_content_discovery_providers_description">Add external CloudStream repositories and enable providers that can work independently of TMDB.</string>
      <string name="compose_settings_page_cloudstream">CloudStream / CS3</string>
      <string name="settings_content_discovery_cloudstream_description">Install CloudStream repositories and manage the providers they make available.</string>
@@ -458,10 +458,10 @@ index 00000000..83077438
 +    <string name="details_rating_map_hint">Tap an episode to see its rating.</string>
 +</resources>
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index af47702d..d0d9ae2f 100644
+index 26700815..a298aa23 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-@@ -2380,6 +2380,8 @@ internal fun MainAppContent(
+@@ -2378,6 +2378,8 @@ internal fun MainAppContent(
                      .zIndex(20f),
              )
  
@@ -3776,10 +3776,10 @@ index 529d8f3d..fd254ce9 100644
                                          LibraryLayoutMode.VERTICAL
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt
 new file mode 100644
-index 00000000..499aa9b1
+index 00000000..95648358
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,80 @@
 +package com.nuvio.app.features.player
 +
 +import com.nuvio.app.core.storage.AppFileCache
@@ -3796,6 +3796,7 @@ index 00000000..499aa9b1
 +        ForkToolbarButton("next_episode", "Next episode"),
 +        ForkToolbarButton("subtitles", "Subtitles"),
 +        ForkToolbarButton("audio", "Audio"),
++        ForkToolbarButton("chapters", "Chapters"),
 +        ForkToolbarButton("sources", "Sources"),
 +        ForkToolbarButton("episodes", "Episodes"),
 +        ForkToolbarButton("quality", "Quality"),
@@ -3860,10 +3861,10 @@ index 00000000..499aa9b1
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
-index 9ba1b2c2..ceed8f41 100644
+index 115c3b5c..5514400a 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
-@@ -41,6 +41,7 @@ import androidx.compose.material3.Text
+@@ -42,6 +42,7 @@ import androidx.compose.material3.Text
  import androidx.compose.runtime.Composable
  import androidx.compose.runtime.CompositionLocalProvider
  import androidx.compose.runtime.LaunchedEffect
@@ -3871,28 +3872,129 @@ index 9ba1b2c2..ceed8f41 100644
  import androidx.compose.runtime.getValue
  import androidx.compose.runtime.mutableStateOf
  import androidx.compose.runtime.remember
-@@ -164,7 +165,9 @@ internal fun PlayerControlActions(
+@@ -166,7 +167,9 @@ internal fun PlayerControlActions(
      onRateClick: (() -> Unit)? = null,
      userRating: Int? = null,
  ) {
--    val actions = listOfNotNull(
+-    val actions = playerControlActions(
 +    androidx.compose.runtime.LaunchedEffect(Unit) { ForkPlayerToolbar.ensureLoaded() }
 +    val toolbarEntries by ForkPlayerToolbar.entries.collectAsState()
-+    val allActions = listOf(
-         onNextEpisodeClick?.let {
-             PlayerControlAction(
-                 stringResource(Res.string.player_next_episode), it,
-@@ -236,6 +239,10 @@ internal fun PlayerControlActions(
-             )
-         },
++    val allActions = playerControlActions(
+         playbackSnapshot = playbackSnapshot,
+         resizeMode = resizeMode,
+         onSubtitleClick = onSubtitleClick,
+@@ -185,6 +188,10 @@ internal fun PlayerControlActions(
+         onRateClick = onRateClick,
+         userRating = userRating,
      )
-+    val actionsById = ForkPlayerToolbar.buttons.map { it.id }.zip(allActions).toMap()
++    val actionsById = allActions.associateBy { it.id }
 +    val actions = toolbarEntries
 +        .filter { it.visible }
 +        .mapNotNull { entry -> actionsById[entry.id] }
      val visibleCount = 7
      val hasOverflow = actions.size > visibleCount
      var expanded by remember(hasOverflow) { mutableStateOf(false) }
+@@ -295,38 +302,45 @@ internal fun playerControlActions(
+             PlayerControlAction(
+                 stringResource(Res.string.player_next_episode), it,
+                 icon = Icons.Rounded.SkipNext, iconSize = 40.dp,
++                id = "next_episode",
+             )
+         },
+         PlayerControlAction(
+             stringResource(Res.string.compose_player_subtitles), onSubtitleClick,
+             painter = appIconPainter(AppIconResource.PlayerSubtitles),
+-        ),
++                id = "subtitles",
++            ),
+         PlayerControlAction(
+             stringResource(Res.string.compose_player_audio), onAudioClick,
+             painter = appIconPainter(AppIconResource.PlayerAudioFilled),
+-        ),
++                id = "audio",
++            ),
+         onChaptersClick?.let {
+             PlayerControlAction(
+                 stringResource(Res.string.compose_player_chapters), it,
+                 icon = Icons.AutoMirrored.Rounded.Toc,
++                id = "chapters",
+             )
+         },
+         onSourcesClick?.let {
+             PlayerControlAction(
+                 stringResource(Res.string.compose_player_sources), it,
+                 painter = appIconPainter(AppIconResource.PlayerSource),
++                id = "sources",
+             )
+         },
+         onEpisodesClick?.let {
+             PlayerControlAction(
+                 stringResource(Res.string.compose_player_episodes), it,
+                 painter = appIconPainter(AppIconResource.PlayerEpisodes),
++                id = "episodes",
+             )
+         },
+         onQualityClick?.let {
+             PlayerControlAction(
+                 stringResource(Res.string.player_action_quality), it,
+                 icon = Icons.Rounded.HighQuality,
++                id = "quality",
+             )
+         },
+         onRateClick?.let {
+@@ -335,36 +349,43 @@ internal fun playerControlActions(
+                     ?: stringResource(Res.string.player_action_rate),
+                 it,
+                 icon = if (userRating != null) Icons.Rounded.Star else Icons.Rounded.StarBorder,
++                id = "rate",
+             )
+         },
+         PlayerControlAction(
+             "${stringResource(Res.string.compose_player_speed)} ${formatPlaybackSpeedLabel(playbackSnapshot.playbackSpeed)}",
+             onSpeedClick, icon = Icons.Rounded.Speed,
+-        ),
++                id = "speed",
++            ),
+         PlayerControlAction(
+             stringResource(resizeMode.labelRes), onResizeModeClick,
+             painter = appIconPainter(AppIconResource.PlayerAspectRatio),
+-        ),
++                id = "resize",
++            ),
+         onOpenInExternalPlayer?.let {
+             PlayerControlAction(
+                 stringResource(Res.string.streams_open_external_player), it,
+                 icon = Icons.AutoMirrored.Rounded.OpenInNew,
++                id = "external_player",
+             )
+         },
+         PlayerControlAction(
+             stringResource(Res.string.cd_stream_info), onStreamInfoClick,
+             icon = Icons.Rounded.Info,
+-        ),
++                id = "playback_info",
++            ),
+         onVideoSettingsClick?.let {
+             PlayerControlAction(
+                 stringResource(Res.string.player_action_video_settings), it,
+                 icon = Icons.Rounded.Build,
++                id = "video_settings",
+             )
+         },
+         onSubmitIntroClick?.let {
+             PlayerControlAction(
+                 stringResource(Res.string.submit_intro_action), it,
+                 icon = Icons.Rounded.Flag,
++                id = "submit_intro",
+             )
+         },
+     )
+@@ -375,4 +396,5 @@ internal data class PlayerControlAction(
+     val icon: ImageVector? = null,
+     val painter: Painter? = null,
+     val iconSize: Dp = 24.dp,
++    val id: String = "",
+ )
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEffectsPanels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEffectsPanels.kt
 index b326c20e..91589cb9 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEffectsPanels.kt
@@ -4024,10 +4126,10 @@ index 00000000..2d0c95bd
 +    )
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
-index 06d106ca..0aac2e78 100644
+index 666d8402..997fea55 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
-@@ -351,6 +351,7 @@ internal fun PlayerScreenRuntime.BindPlayerRuntimeEffects() {
+@@ -359,6 +359,7 @@ internal fun PlayerScreenRuntime.BindPlayerRuntimeEffects() {
      BindPlayerUiVisibilityEffects()
      BindPlayerMetadataAndSkipEffects()
      BindPartyEffects()
@@ -4036,7 +4138,7 @@ index 06d106ca..0aac2e78 100644
      DisposableEffect(activeSourceUrl) {
          val effectSourceUrl = activeSourceUrl
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSourceActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSourceActions.kt
-index 55763bb1..0f5921a8 100644
+index d960c29b..2eab0451 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSourceActions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSourceActions.kt
 @@ -1,5 +1,6 @@
@@ -4056,7 +4158,7 @@ index 55763bb1..0f5921a8 100644
                      onStale()
                  }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
-index 46f0cc27..a8c72885 100644
+index a41ec991..8489d5fd 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
 @@ -49,6 +49,7 @@ internal class PlayerScreenRuntime(
@@ -4088,10 +4190,10 @@ index 47bac957..0570ad21 100644
      val preferredSubtitleLanguage = normalizeLanguageCode(
          playerSettingsUiState.preferredSubtitleLanguage,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index c1e0fabd..a7ef7b05 100644
+index 74e0850f..d28c6e8d 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -338,6 +338,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+@@ -368,6 +368,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
          SmartEnhance.available.value = controller?.supportsSmartEnhance() == true
          controller?.applyPicture(pictureState.copy(smartEnhance = smartEnhanceOn))
      }
@@ -4100,10 +4202,10 @@ index c1e0fabd..a7ef7b05 100644
      val dxSoundRow by DxSound.rowEnabled.collectAsStateWithLifecycle()
      LaunchedEffect(playerController, audioState, dxSoundMode, dxSoundRow) {
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSurfaceGestures.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSurfaceGestures.kt
-index e1ff6722..816d2279 100644
+index 37fa54ba..7dc00bf6 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSurfaceGestures.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSurfaceGestures.kt
-@@ -127,6 +127,7 @@ internal fun Modifier.playerSurfaceDragGestures(
+@@ -121,6 +121,7 @@ internal fun Modifier.playerSurfaceDragGestures(
                      )
                      val horizontalDominant =
                          !holdToSpeedActive &&
@@ -5286,10 +5388,10 @@ index aa8b5778..deddf8d6 100644
          val catalogOnlyItems = items.filter { !it.isCollection }
          if (heroEnabled && catalogOnlyItems.isNotEmpty()) {
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-index 69c3b040..eafdfae8 100644
+index 322e63dc..2ddf2f1f 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-@@ -647,6 +647,7 @@ private fun PlaybackSettingsSection(
+@@ -650,6 +650,7 @@ private fun PlaybackSettingsSection(
          DxRememberSettingsSection(isTablet = isTablet) // dx.bi remember hook
          DxSecondSubtitleSettingsSection(isTablet = isTablet) // dx.bi second subtitle hook
          DxStatsSettingsSection(isTablet = isTablet) // dx.bi stream stats hook
@@ -5322,10 +5424,10 @@ index 65f8797e..025e8e53 100644
          titleRes = Res.string.compose_settings_page_live_tv,
          category = SettingsCategory.General,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
-index b7f29725..51415bd3 100644
+index 8d24eb24..6d9a323d 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
-@@ -824,6 +824,7 @@ private fun MobileSettingsScreen(
+@@ -828,6 +828,7 @@ private fun MobileSettingsScreen(
                      onMediaServersClick = { onPageChange(SettingsPage.MediaServers) },
                      onLiveTvClick = { onPageChange(SettingsPage.LiveTv) },
                      onCloudStreamClick = { onPageChange(SettingsPage.CloudStream) },
@@ -5333,7 +5435,7 @@ index b7f29725..51415bd3 100644
                  )
                  SettingsPage.Addons -> addonsSettingsContent()
                  SettingsPage.MediaServers -> mediaServersSettingsContent(
-@@ -831,6 +832,7 @@ private fun MobileSettingsScreen(
+@@ -835,6 +836,7 @@ private fun MobileSettingsScreen(
                      onServerClick = { onPageChange(SettingsPage.MediaServer) },
                  )
                  SettingsPage.LiveTv -> liveTvSettingsContent(isTablet = false)
@@ -5341,7 +5443,7 @@ index b7f29725..51415bd3 100644
                  SettingsPage.MediaServer -> mediaServerSettingsContent(
                      isTablet = false,
                      onBack = onNavigateBack,
-@@ -1273,6 +1275,7 @@ private fun TabletSettingsScreen(
+@@ -1279,6 +1281,7 @@ private fun TabletSettingsScreen(
                          onMediaServersClick = { openInlinePage(SettingsPage.MediaServers) },
                          onLiveTvClick = { openInlinePage(SettingsPage.LiveTv) },
                          onCloudStreamClick = { openInlinePage(SettingsPage.CloudStream) },
@@ -5349,7 +5451,7 @@ index b7f29725..51415bd3 100644
                      )
                      SettingsPage.Addons -> addonsSettingsContent()
                      SettingsPage.MediaServers -> mediaServersSettingsContent(
-@@ -1280,6 +1283,7 @@ private fun TabletSettingsScreen(
+@@ -1286,6 +1289,7 @@ private fun TabletSettingsScreen(
                          onServerClick = { openInlinePage(SettingsPage.MediaServer) },
                      )
                      SettingsPage.LiveTv -> liveTvSettingsContent(isTablet = true)

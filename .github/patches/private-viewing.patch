@@ -72,10 +72,10 @@ index 00000000..e6a8d137
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-index ab2ed47f..93b6f22c 100644
+index d0050ddc..650cc06e 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-@@ -390,6 +390,15 @@ private fun PlaybackSettingsSection(
+@@ -396,6 +396,15 @@ private fun PlaybackSettingsSection(
              isTablet = isTablet,
          ) {
              SettingsGroup(isTablet = isTablet) {

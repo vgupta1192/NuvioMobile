@@ -1,5 +1,5 @@
 diff --git a/androidApp/build.gradle.kts b/androidApp/build.gradle.kts
-index e126f59..a00d9a1 100644
+index 6300910c..c745995d 100644
 --- a/androidApp/build.gradle.kts
 +++ b/androidApp/build.gradle.kts
 @@ -145,7 +145,7 @@ android {
@@ -12,7 +12,7 @@ index e126f59..a00d9a1 100644
  }
  
 diff --git a/androidApp/src/debug/res/values/strings.xml b/androidApp/src/debug/res/values/strings.xml
-index 0e9eb7a..8bc40b6 100644
+index 0e9eb7af..8bc40b64 100644
 --- a/androidApp/src/debug/res/values/strings.xml
 +++ b/androidApp/src/debug/res/values/strings.xml
 @@ -1,4 +1,4 @@

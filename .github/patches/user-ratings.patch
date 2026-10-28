@@ -121,7 +121,7 @@ index c5df6055..85b37c47 100644
  
  @Composable
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
-index 4d18f06e..c4e09f8c 100644
+index a746a1da..8c4c84b2 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
 @@ -68,6 +68,7 @@ internal fun PlayerScreenRuntime.lockPlayerControls() {
@@ -133,10 +133,10 @@ index 4d18f06e..c4e09f8c 100644
      showVideoSettingsModal = false
      showStreamInfo = false
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
-index 4a531d51..f24d9d23 100644
+index 9c583c73..330fabe5 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
-@@ -200,6 +200,7 @@ internal class PlayerScreenRuntime(
+@@ -205,6 +205,7 @@ internal class PlayerScreenRuntime(
  
      var showAudioModal by mutableStateOf(false)
      var showQualityModal by mutableStateOf(false)
@@ -145,12 +145,12 @@ index 4a531d51..f24d9d23 100644
      var showVideoSettingsModal by mutableStateOf(false)
      var showStreamInfo by mutableStateOf(false)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index 0887a1fc..8fea712f 100644
+index bc8028c2..e97c3b6b 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -8,6 +8,12 @@ import androidx.compose.foundation.layout.Box
- import androidx.compose.foundation.layout.BoxScope
- import androidx.compose.foundation.layout.fillMaxSize
+@@ -12,6 +12,12 @@ import androidx.compose.foundation.layout.height
+ import androidx.compose.foundation.layout.padding
+ import androidx.compose.runtime.LaunchedEffect
  import androidx.compose.runtime.Composable
 +import com.nuvio.app.core.i18n.localizedSeasonEpisodeCode
 +import com.nuvio.app.features.ratings.UserRatingPlayerOverlay
@@ -161,7 +161,7 @@ index 0887a1fc..8fea712f 100644
  import androidx.compose.runtime.DisposableEffect
  import androidx.compose.runtime.getValue
  import androidx.compose.runtime.key
-@@ -270,6 +276,13 @@ private val PlayerScreenRuntime.activeAddonLogo: String?
+@@ -288,6 +294,13 @@ private val PlayerScreenRuntime.activeAddonLogo: String?
          addon.manifest?.takeIf { addon.streamAddonInstanceId(it.id) == activeProviderAddonId }?.logoUrl
      }
  
@@ -175,7 +175,7 @@ index 0887a1fc..8fea712f 100644
  private fun PlayerScreenRuntime.currentInitialPositionRequestKey(): String? {
      val positionMs = activeInitialPositionMs.takeIf { it > 0L } ?: return null
      return "$activePlaybackIdentity:${activeVideoId.orEmpty()}:$positionMs"
-@@ -283,6 +296,9 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+@@ -306,6 +319,9 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
      val playerBadges = rememberPlayerBadges()
      val orientationToggleSupported by PlayerOrientationPreference.toggleSupported.collectAsStateWithLifecycle()
      val portraitPlayback by PlayerOrientationPreference.portrait.collectAsStateWithLifecycle()
@@ -185,7 +185,7 @@ index 0887a1fc..8fea712f 100644
      val hasVideoQualities = remember(playerController, audioTracks, playbackSnapshot.durationMs) {
          playerController?.getVideoQualities().orEmpty().size > 1
      }
-@@ -412,6 +428,12 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+@@ -444,6 +460,12 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
                  null
              },
              isPortraitPlayback = portraitPlayback,
@@ -198,7 +198,7 @@ index 0887a1fc..8fea712f 100644
              onQualityClick = if (hasVideoQualities) {
                  {
                      refreshTracks()
-@@ -722,6 +744,26 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
+@@ -782,6 +804,26 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
              showSubmitIntroModal = false
          },
      )

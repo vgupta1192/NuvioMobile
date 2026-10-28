@@ -1,8 +1,8 @@
 diff --git a/composeApp/build.gradle.kts b/composeApp/build.gradle.kts
-index 8e2e4ecc..c77eccd8 100644
+index 1b4a3e63..641eff9a 100644
 --- a/composeApp/build.gradle.kts
 +++ b/composeApp/build.gradle.kts
-@@ -480,6 +480,7 @@ kotlin {
+@@ -481,6 +481,7 @@ kotlin {
                  implementation(libs.androidx.media3.decoder)
                  implementation(libs.androidx.media3.session)
                  implementation(libs.androidx.media3.common)
@@ -11,7 +11,7 @@ index 8e2e4ecc..c77eccd8 100644
                  implementation("com.google.android.gms:play-services-cast-framework:22.1.0")
                  implementation("androidx.mediarouter:mediarouter:1.7.0")
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index 066835cd..7d5f6390 100644
+index 62bee06c..e3c00fbc 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 @@ -42,6 +42,8 @@ import androidx.media3.common.MimeTypes
@@ -23,7 +23,7 @@ index 066835cd..7d5f6390 100644
  import androidx.media3.common.Tracks
  import androidx.media3.common.VideoSize
  import androidx.media3.common.text.Cue
-@@ -930,6 +932,12 @@ private fun ExoPlayerSurface(
+@@ -946,6 +948,12 @@ private fun ExoPlayerSurface(
                      exoPlayer.applyVideoQuality(heightPx)
                  }
  
@@ -36,7 +36,7 @@ index 066835cd..7d5f6390 100644
                  override suspend fun getMediaInfo(): PlayerMediaInfo {
                      val video = exoPlayer.videoFormat
                      val audio = exoPlayer.audioFormat
-@@ -1859,6 +1867,18 @@ private class NuvioLibmpvView(
+@@ -1895,6 +1903,18 @@ private class NuvioLibmpvView(
                  executeMpv { mpv.setPropertyBoolean("mute", muted) }
              }
  
@@ -55,7 +55,7 @@ index 066835cd..7d5f6390 100644
              override fun getAudioTracks(): List<AudioTrack> =
                  latestAudioTracks.mapIndexed { index, track ->
                      AudioTrack(
-@@ -2423,6 +2443,22 @@ private fun ExoPlayer.extractVideoQualities(): List<VideoQualityOption> {
+@@ -2465,6 +2485,22 @@ private fun ExoPlayer.extractVideoQualities(): List<VideoQualityOption> {
      return byHeight.values.sortedByDescending { it.heightPx }
  }
  
@@ -90,10 +90,10 @@ index 00000000..1215fc13
 +    <string name="player_smart_enhance_tagline">Immersive visual experience</string>
 +</resources>
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
-index 7dd9a21e..b0e9153d 100644
+index 804109ef..8cf5545e 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
-@@ -80,6 +80,7 @@ internal fun PlayerToolbar(
+@@ -81,6 +81,7 @@ internal fun PlayerToolbar(
  ) {
      Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
          Spacer(Modifier.weight(1f))
@@ -102,10 +102,10 @@ index 7dd9a21e..b0e9153d 100644
              PlayerAction(
                  description = stringResource(Res.string.player_cast),
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
-index c50c9df6..c7575e36 100644
+index 7a238c5e..de5fac24 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
-@@ -482,6 +482,7 @@ private fun PlayerHeader(
+@@ -533,6 +533,7 @@ private fun PlayerHeader(
                      horizontalArrangement = Arrangement.spacedBy(10.dp),
                      verticalAlignment = Alignment.CenterVertically,
                  ) {
@@ -114,7 +114,7 @@ index c50c9df6..c7575e36 100644
                          PlayerHeaderIconButton(
                              icon = if (castActive) Icons.Rounded.CastConnected else Icons.Rounded.Cast,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
-index b632383e..17d23ab9 100644
+index 6fe88bb2..4f5dd59c 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
 @@ -17,6 +17,9 @@ interface PlayerEngineController {
@@ -128,13 +128,13 @@ index b632383e..17d23ab9 100644
      fun showCastDialog() {}
      fun getSubtitleTracks(): List<SubtitleTrack>
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index a1498807..30354a0c 100644
+index 16a0418b..5b2a50dc 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -318,6 +318,15 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
-     val userRatingTarget = currentUserRatingTarget()
-     val canRate = rememberCanRate(userRatingTarget)
-     val userRating = rememberUserRating(userRatingTarget.takeIf { canRate })
+@@ -348,6 +348,15 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
+             showParentalGuide = false
+         }
+     }
 +    // Smart Enhance: the engine applies the effect; re-applied whenever the engine (or the choice) changes.
 +    val smartEnhanceOn by SmartEnhance.enabled.collectAsStateWithLifecycle()
 +    LaunchedEffect(playerController, smartEnhanceOn) {
@@ -145,8 +145,8 @@ index a1498807..30354a0c 100644
 +    }
 +    SmartEnhanceBanner()
      AnimatedVisibility(
-         visible = (controlsVisible || showParentalGuide) && !playerControlsLocked && !isInPip && !seekPreview.showSyncPanel,
-         enter = fadeIn(),
+         visible = (controlsVisible || folded || showParentalGuide) && !playerControlsLocked && !isInPip &&
+             !(folded && isPanelOpen) && !seekPreview.showSyncPanel,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SmartEnhance.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SmartEnhance.kt
 new file mode 100644
 index 00000000..ec2ab43b
@@ -350,7 +350,7 @@ index 00000000..ec2ab43b
 +    }
 +}
 diff --git a/gradle/libs.versions.toml b/gradle/libs.versions.toml
-index 6d7de4bc..1c6fa408 100644
+index 133b6209..cef38392 100644
 --- a/gradle/libs.versions.toml
 +++ b/gradle/libs.versions.toml
 @@ -82,6 +82,7 @@ androidx-media3-decoder = { module = "androidx.media3:media3-decoder", version.r

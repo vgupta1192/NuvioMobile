@@ -1,8 +1,8 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
-index c2c60bda..278d1b6e 100644
+index 5c2ea6c4..c8611d39 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
-@@ -102,6 +102,7 @@ open class MainActivity : AppCompatActivity() {
+@@ -101,6 +101,7 @@ open class MainActivity : AppCompatActivity() {
          WatchedStorage.initialize(applicationContext)
          MetaScreenSettingsStorage.initialize(applicationContext)
          com.nuvio.app.features.shuffle.EpisodeShuffleStorage.initialize(applicationContext)
@@ -243,7 +243,7 @@ index 4a8e5af9..5d07fd20 100644
              subclass(EntityBrowseRoute::class, EntityBrowseRoute.serializer())
              subclass(SettingsPageRoute::class, SettingsPageRoute.serializer())
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index 1233c0e7..c5bedf8b 100644
+index 5c9db049..6af2898e 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 @@ -118,6 +118,12 @@ import com.nuvio.app.features.home.HomeCatalogSettingsRepository
@@ -259,7 +259,7 @@ index 1233c0e7..c5bedf8b 100644
  import com.nuvio.app.features.library.LibraryItem
  import com.nuvio.app.features.library.LibraryRepository
  import com.nuvio.app.features.library.LibrarySection
-@@ -915,6 +921,45 @@ internal fun MainAppContent(
+@@ -913,6 +919,45 @@ internal fun MainAppContent(
              navController.navigate(PlayerRoute(launchId = launchId, title = playerLaunch.title))
          }
  
@@ -305,7 +305,7 @@ index 1233c0e7..c5bedf8b 100644
          fun openExternalStreamUrl(url: String): Boolean {
              val opened = runCatching {
                  uriHandler.openUri(url)
-@@ -1412,9 +1457,22 @@ internal fun MainAppContent(
+@@ -1408,9 +1453,22 @@ internal fun MainAppContent(
                          actions = { isTabletLayout ->
                              AppTabActions(
                                  onCatalogClick = onCatalogClick,
@@ -330,7 +330,7 @@ index 1233c0e7..c5bedf8b 100644
                                  },
                                  onLibraryPosterClick = { item ->
                                      navController.navigate(
-@@ -1659,6 +1717,14 @@ internal fun MainAppContent(
+@@ -1655,6 +1713,14 @@ internal fun MainAppContent(
                      val onBack = rememberGuardedPopBackStack(navController, route)
                      LiveTvScreen(onBack = onBack, onPlay = ::openLiveTvChannel)
                  }
@@ -3413,10 +3413,10 @@ index b0672f48..eb5cb770 100644
                      SettingsNavigationRow(
                          title = stringResource(Res.string.compose_settings_page_notifications),
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
-index 015b796c..00a60692 100644
+index a2a5f2a5..c5742c59 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
-@@ -720,6 +720,7 @@ private fun MobileSettingsScreen(
+@@ -723,6 +723,7 @@ private fun MobileSettingsScreen(
                              onNotificationsClick = { onPageChange(SettingsPage.Notifications) },
                              onContentDiscoveryClick = { onPageChange(SettingsPage.ContentDiscovery) },
                              onIntegrationsClick = { onPageChange(SettingsPage.Integrations) },
@@ -3424,7 +3424,7 @@ index 015b796c..00a60692 100644
                              onTrackingClick = { onPageChange(SettingsPage.TraktAuthentication) },
                              onSupportersContributorsClick = onSupportersContributorsClick,
                              onLicensesAttributionsClick = onLicensesAttributionsClick,
-@@ -872,6 +873,9 @@ private fun MobileSettingsScreen(
+@@ -876,6 +877,9 @@ private fun MobileSettingsScreen(
                      mdbListConnected = mdbListConnected,
                      onCommentsEnabledChange = TraktCommentsSettings::setEnabled,
                  )
@@ -3434,7 +3434,7 @@ index 015b796c..00a60692 100644
              }
          }
      }
-@@ -1157,6 +1161,7 @@ private fun TabletSettingsScreen(
+@@ -1162,6 +1166,7 @@ private fun TabletSettingsScreen(
                                  onNotificationsClick = { openInlinePage(SettingsPage.Notifications) },
                                  onContentDiscoveryClick = { openInlinePage(SettingsPage.ContentDiscovery) },
                                  onIntegrationsClick = { openInlinePage(SettingsPage.Integrations) },
@@ -3442,7 +3442,7 @@ index 015b796c..00a60692 100644
                                  onTrackingClick = { openInlinePage(SettingsPage.TraktAuthentication) },
                                  onSupportersContributorsClick = { openInlinePage(SettingsPage.SupportersContributors) },
                                  onLicensesAttributionsClick = { openInlinePage(SettingsPage.LicensesAttributions) },
-@@ -1313,6 +1318,9 @@ private fun TabletSettingsScreen(
+@@ -1319,6 +1324,9 @@ private fun TabletSettingsScreen(
                          mdbListConnected = mdbListConnected,
                          onCommentsEnabledChange = TraktCommentsSettings::setEnabled,
                      )
@@ -3510,10 +3510,10 @@ index 658fe89b..9dcf9e2f 100644
      fun saveNavBarGlowEnabled(enabled: Boolean)
      fun exportToSyncPayload(): JsonObject
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt
-index 0dac52ce..bc82adfc 100644
+index 2b861b65..1fc1faf9 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt
-@@ -1257,6 +1257,12 @@ object WatchProgressRepository {
+@@ -1255,6 +1255,12 @@ object WatchProgressRepository {
          persist: Boolean,
          syncRemote: Boolean,
      ) {

@@ -1,8 +1,8 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index a2bdcbe7..4ef748c7 100644
+index cb045db1..392b79b8 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-@@ -577,6 +577,7 @@ private fun ExoPlayerSurface(
+@@ -585,6 +585,7 @@ private fun ExoPlayerSurface(
                  "mime=${mediaItem.localConfiguration?.mimeType ?: "auto"} " +
                  "startPositionMs=${requestedStartPositionMs ?: 0L}",
          )
@@ -10,7 +10,7 @@ index a2bdcbe7..4ef748c7 100644
          exoPlayer.setPlaybackMediaItem(mediaItem, requestedStartPositionMs)
          if (fallbackStartPositionMs == null) {
              initialPositionRequestKey?.let { key ->
-@@ -703,6 +704,11 @@ private fun ExoPlayerSurface(
+@@ -711,6 +712,11 @@ private fun ExoPlayerSurface(
                      error,
                  )
  
@@ -22,7 +22,7 @@ index a2bdcbe7..4ef748c7 100644
                  // Live TV robustness: a paused or stalled live stream fell out of its playlist
                  // window; rejoin the live edge (at most 3 times until playback is ready again).
                  if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW && liveEdgeRejoins < 3) {
-@@ -762,6 +768,7 @@ private fun ExoPlayerSurface(
+@@ -770,6 +776,7 @@ private fun ExoPlayerSurface(
                      fallbackStartPositionMs = null
                      latestOnError.value(null)
                      exoPlayer.logCurrentTracks("STATE_READY")

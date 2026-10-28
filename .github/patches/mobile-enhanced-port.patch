@@ -3601,7 +3601,7 @@ index 954b2e0c..c2ce11a4 100644
  </resources>
 \ No newline at end of file
 diff --git a/composeApp/src/commonMain/composeResources/values-bg/strings.xml b/composeApp/src/commonMain/composeResources/values-bg/strings.xml
-index 768343d3..015a5343 100644
+index 6405b0fd..6cb0f493 100644
 --- a/composeApp/src/commonMain/composeResources/values-bg/strings.xml
 +++ b/composeApp/src/commonMain/composeResources/values-bg/strings.xml
 @@ -2265,4 +2265,5 @@
@@ -3661,10 +3661,10 @@ index f915315c..5e700aae 100644
 +    <string name="submit_intro_segment_preview">Preview</string>
  </resources>
 diff --git a/composeApp/src/commonMain/composeResources/values-it/strings.xml b/composeApp/src/commonMain/composeResources/values-it/strings.xml
-index 34c77893..fbafd65e 100644
+index 8820e811..24334bde 100644
 --- a/composeApp/src/commonMain/composeResources/values-it/strings.xml
 +++ b/composeApp/src/commonMain/composeResources/values-it/strings.xml
-@@ -2440,4 +2440,5 @@
+@@ -2451,4 +2451,5 @@
          <item quantity="one">%d titolo</item>
          <item quantity="other">%d titoli</item>
      </plurals>
@@ -3711,10 +3711,10 @@ index f30fe0ff..5b4654d5 100644
 +    <string name="submit_intro_segment_preview">Preview</string>
  </resources>
 diff --git a/composeApp/src/commonMain/composeResources/values-pt-rBR/strings.xml b/composeApp/src/commonMain/composeResources/values-pt-rBR/strings.xml
-index 836ba43c..00a23454 100644
+index 6807fb8c..f4253c93 100644
 --- a/composeApp/src/commonMain/composeResources/values-pt-rBR/strings.xml
 +++ b/composeApp/src/commonMain/composeResources/values-pt-rBR/strings.xml
-@@ -2465,4 +2465,90 @@
+@@ -2475,4 +2475,90 @@
      <string name="stream_info_subtitle_source_embedded">Embutida</string>
      <string name="stream_info_player_engine">Mecanismo do player</string>
      <string name="stream_info_server">Servidor</string>
@@ -3806,10 +3806,10 @@ index 836ba43c..00a23454 100644
 +    <string name="whats_new_root_description">Veja o que mudou nas versões recentes</string>
  </resources>
 diff --git a/composeApp/src/commonMain/composeResources/values-pt/strings.xml b/composeApp/src/commonMain/composeResources/values-pt/strings.xml
-index 6b3214de..201e8075 100644
+index e3e8b9cb..ac4ec3be 100644
 --- a/composeApp/src/commonMain/composeResources/values-pt/strings.xml
 +++ b/composeApp/src/commonMain/composeResources/values-pt/strings.xml
-@@ -1882,4 +1882,5 @@
+@@ -1888,4 +1888,5 @@
      <string name="settings_mdblist_library_lists_description">Escolhe que listas do MDBList aparecem na Biblioteca e em Gerir Listas. A Watchlist aparece sempre.</string>
      <string name="settings_mdblist_library_lists_summary">%1$d de %2$d visíveis</string>
      <string name="settings_mdblist_library_lists_empty">Ainda não foram encontradas listas na tua conta MDBList. Sincroniza para as carregar.</string>
@@ -3856,10 +3856,10 @@ index a61a6627..2c8365fd 100644
 +    <string name="submit_intro_segment_preview">Preview</string>
  </resources>
 diff --git a/composeApp/src/commonMain/composeResources/values/strings.xml b/composeApp/src/commonMain/composeResources/values/strings.xml
-index 3f909a93..a31fe38b 100644
+index 6e89e2dc..70901bbe 100644
 --- a/composeApp/src/commonMain/composeResources/values/strings.xml
 +++ b/composeApp/src/commonMain/composeResources/values/strings.xml
-@@ -624,6 +624,7 @@
+@@ -628,6 +628,7 @@
      <string name="detail_tab_trailer">Trailer</string>
      <string name="detail_trailer_category_count">%1$s (%2$d)</string>
      <string name="detail_trailers_title">Trailers</string>
@@ -3867,7 +3867,7 @@ index 3f909a93..a31fe38b 100644
      <string name="downloads_empty_episodes">No completed episodes</string>
      <string name="downloads_empty_title">No downloads yet</string>
      <string name="downloads_episode_count">%1$d downloaded episode(s)</string>
-@@ -693,6 +694,8 @@
+@@ -697,6 +698,8 @@
      <string name="settings_nav_bar_style_compact">Always Compact</string>
      <string name="settings_nav_bar_style_classic">Classic</string>
      <string name="settings_appearance_continue_watching_description">Settings for the Continue Watching section.</string>
@@ -3876,7 +3876,7 @@ index 3f909a93..a31fe38b 100644
      <string name="settings_appearance_liquid_glass">Liquid Glass</string>
      <string name="settings_appearance_liquid_glass_description">Use the native iPhone tab bar on iOS 26 and later.</string>
      <string name="settings_appearance_poster_customization_description">Tune card width and corner radius.</string>
-@@ -2476,4 +2479,362 @@
+@@ -2482,4 +2485,362 @@
      <string name="compose_settings_page_cloudstream">CloudStream / CS3</string>
      <string name="settings_content_discovery_cloudstream_description">Install CloudStream repositories and manage the providers they make available.</string>
  
@@ -4438,10 +4438,10 @@ index 5fca4c1f..2dbb0ea4 100644
 +    title: String,
 +): DownloadsSettingsRoute? = if (useNativeNavigation) DownloadsSettingsRoute(title) else null
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index da0c0ac7..e1cbde7a 100644
+index d53b616d..866ff2fe 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-@@ -389,6 +389,7 @@ internal fun MainAppContent(
+@@ -388,6 +388,7 @@ internal fun MainAppContent(
      val accountSettingsTitle = stringResource(Res.string.compose_settings_page_account)
      val supportersSettingsTitle = stringResource(Res.string.compose_settings_page_supporters_contributors)
      val licensesSettingsTitle = stringResource(Res.string.compose_settings_page_licenses_attributions)
@@ -4449,7 +4449,7 @@ index da0c0ac7..e1cbde7a 100644
      val collectionsTitle = stringResource(Res.string.collections_header)
      val newCollectionTitle = stringResource(Res.string.collections_new)
      val detailsFallbackTitle = stringResource(Res.string.meta_section_details_title)
-@@ -523,6 +524,9 @@ internal fun MainAppContent(
+@@ -521,6 +522,9 @@ internal fun MainAppContent(
          )
      }
      launchOverlayState.targetState = launchOverlayVisible
@@ -4459,7 +4459,7 @@ index da0c0ac7..e1cbde7a 100644
  
      LaunchedEffect(
          rootContentReady,
-@@ -531,6 +535,9 @@ internal fun MainAppContent(
+@@ -529,6 +533,9 @@ internal fun MainAppContent(
      ) {
          if (ownsAppRuntime) {
              onRootContentReady?.invoke(rootContentReady)
@@ -4469,7 +4469,7 @@ index da0c0ac7..e1cbde7a 100644
          }
      }
  
-@@ -1656,6 +1663,9 @@ internal fun MainAppContent(
+@@ -1654,6 +1661,9 @@ internal fun MainAppContent(
                                  onLicensesAttributionsSettingsClick = {
                                      navController.navigate(LicensesAttributionsSettingsRoute(licensesSettingsTitle))
                                  },
@@ -4479,7 +4479,7 @@ index da0c0ac7..e1cbde7a 100644
                                  onCheckForUpdatesClick = if (AppFeaturePolicy.inAppUpdaterEnabled) {
                                      {
                                          appUpdaterController.checkForUpdates(
-@@ -1869,6 +1879,18 @@ internal fun MainAppContent(
+@@ -1867,6 +1877,18 @@ internal fun MainAppContent(
                          onOpenDownload = ::openDownloadedItem,
                      )
                  }
@@ -4498,7 +4498,7 @@ index da0c0ac7..e1cbde7a 100644
                  entry<AddonsSettingsRoute> { route ->
                      SettingsDestination(route, navController) { onBack ->
                          AddonsSettingsScreen(onBack = onBack)
-@@ -1909,6 +1931,11 @@ internal fun MainAppContent(
+@@ -1907,6 +1929,11 @@ internal fun MainAppContent(
                          LicensesAttributionsSettingsScreen(onBack = onBack)
                      }
                  }
@@ -19580,19 +19580,6 @@ index 00000000..f38785e8
 +        )
 +    }
 +}
-diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
-index 140b1d80..bd7ad739 100644
---- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
-+++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
-@@ -354,7 +354,7 @@ internal fun PlayerControlsShell(
-                         onRateClick = onRateClick,
-                         userRating = userRating,
-                         onChaptersClick = onChaptersClick,
--                        onSwitchEngineClick = onSwitchEngineClick,
-+                        onSwitchEngineClick = null,
-                     )
-                 }
-             }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreen.kt
 index 9160de7c..42e32618 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreen.kt
@@ -19645,10 +19632,10 @@ index 93bb6999..32786346 100644
          onAutoSyncCueSelected = onAutoSyncCueSelected,
          onAutoSyncReload = onAutoSyncReload,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
-index 0aac2e78..129b9d10 100644
+index 997fea55..9f8b16dd 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
-@@ -527,6 +527,9 @@ private fun PlayerScreenRuntime.BindPlayerMetadataAndSkipEffects() {
+@@ -537,6 +537,9 @@ private fun PlayerScreenRuntime.BindPlayerMetadataAndSkipEffects() {
          lastManualSkipSeekPositions = null
          activeSkipInterval = null
          skipIntervalDismissed = false
@@ -19659,7 +19646,7 @@ index 0aac2e78..129b9d10 100644
          nextEpisodeCardDismissed = false
          cancelNextEpisodeAutoPlay()
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
-index a8c72885..c0d59045 100644
+index 8489d5fd..b61f9a15 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
 @@ -29,6 +29,10 @@ internal class PlayerScreenRuntime(
@@ -19673,7 +19660,7 @@ index a8c72885..c0d59045 100644
      val title: String get() = args.title
      val profileId: Int get() = args.profileId
      val sourceUrl: String get() = args.sourceUrl
-@@ -182,6 +186,12 @@ internal class PlayerScreenRuntime(
+@@ -187,6 +191,12 @@ internal class PlayerScreenRuntime(
      var lastManualSkipSeekPositions by mutableStateOf<Pair<Long, Long>?>(null)
      var activeSkipInterval by mutableStateOf<SkipInterval?>(null)
      var skipIntervalDismissed by mutableStateOf(false)
@@ -19686,7 +19673,7 @@ index a8c72885..c0d59045 100644
      var parentalWarnings by mutableStateOf<List<ParentalWarning>>(emptyList())
      var showParentalGuide by mutableStateOf(false)
      var parentalGuideHasShown by mutableStateOf(false)
-@@ -241,6 +251,9 @@ internal class PlayerScreenRuntime(
+@@ -249,6 +259,9 @@ internal class PlayerScreenRuntime(
      var autoFetchedAddonSubtitlesForKey by mutableStateOf<String?>(null)
      var trackPreferenceRestoreApplied by mutableStateOf(false)
      var subtitleDelayMs by mutableStateOf(0)
@@ -19739,20 +19726,27 @@ index daf4ccba..da788ff7 100644
 +    subtitleSyncSawPositionMs = null
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index 59e86821..3554d465 100644
+index d28c6e8d..9b34bace 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -7,6 +7,9 @@ import androidx.compose.animation.fadeOut
- import androidx.compose.foundation.layout.Box
- import androidx.compose.foundation.layout.BoxScope
- import androidx.compose.foundation.layout.fillMaxSize
-+import androidx.compose.foundation.layout.padding
+@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
+ import androidx.compose.foundation.layout.height
+ import androidx.compose.foundation.layout.padding
+ import androidx.compose.runtime.LaunchedEffect
 +import androidx.compose.ui.Alignment
 +import androidx.compose.ui.unit.dp
  import androidx.compose.runtime.Composable
  import com.nuvio.app.core.i18n.localizedSeasonEpisodeCode
  import com.nuvio.app.features.ratings.UserRatingPlayerOverlay
-@@ -31,6 +34,11 @@ import com.nuvio.app.features.p2p.formatP2pMegabytes
+@@ -19,7 +21,6 @@ import com.nuvio.app.features.ratings.rememberUserRating
+ import com.nuvio.app.features.ratings.toUserRatingTarget
+ import com.nuvio.app.features.tracking.TrackingRatingTarget
+ import androidx.compose.runtime.DisposableEffect
+-import androidx.compose.runtime.LaunchedEffect
+ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.key
+ import androidx.compose.runtime.mutableStateOf
+@@ -35,6 +36,11 @@ import com.nuvio.app.features.p2p.formatP2pMegabytes
  import com.nuvio.app.features.p2p.formatP2pSpeed
  import com.nuvio.app.features.autosync.bubble.AutoSyncBubbleToastHost
  import com.nuvio.app.features.player.skip.internalSkipAction
@@ -19764,7 +19758,7 @@ index 59e86821..3554d465 100644
  import com.nuvio.app.features.servers.ServerStreams
  import com.nuvio.app.features.streams.streamAddonInstanceId
  import com.nuvio.app.isIos
-@@ -260,6 +268,98 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+@@ -267,6 +273,98 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
          }
  
          SubtitleSyncStatusPanel(horizontalSafePadding) // AutoSync hook: audio sync fallback status
@@ -19861,9 +19855,9 @@ index 59e86821..3554d465 100644
 +            )
 +        }
  
-         RenderPlayerControls(displayedPositionMs = displayedPositionMs, isEpisode = isEpisode)
-         RenderPlaybackOverlays(
-@@ -611,6 +711,10 @@ private fun BoxScope.RenderPlaybackOverlays(
+         RenderPlayerControls(
+             displayedPositionMs = displayedPositionMs,
+@@ -645,6 +743,10 @@ private fun BoxScope.RenderPlaybackOverlays(
                      scheduleProgressSyncAfterSeek()
                      publishPartyPlayback(positionMs = seekMs)
                      skipIntervalDismissed = true
@@ -19874,7 +19868,7 @@ index 59e86821..3554d465 100644
                  }
              }
          },
-@@ -735,6 +839,7 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
+@@ -780,6 +882,7 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
          onSubtitleStyleChanged = PlayerSettingsRepository::setSubtitleStyle,
          onSubtitleDelayChanged = { delayMs -> setSubtitleDelay(delayMs) },
          onSubtitleDelayReset = { setSubtitleDelay(0) },
@@ -19882,17 +19876,17 @@ index 59e86821..3554d465 100644
          onAutoSyncCapture = { captureSubtitleAutoSyncTime() },
          onAutoSyncCueSelected = { cue -> applySubtitleAutoSyncCue(cue) },
          onAutoSyncReload = { loadSubtitleAutoSyncCues(force = true) },
-@@ -890,3 +995,5 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
+@@ -935,3 +1038,5 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
          )
      }
  }
 +
 +private const val STALL_HINT_DELAY_MS = 10_000L
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSettingsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSettingsRepository.kt
-index fb95a348..7bbcad65 100644
+index 172f63d1..2625940e 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSettingsRepository.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSettingsRepository.kt
-@@ -82,6 +82,7 @@ data class PlayerSettingsUiState(
+@@ -83,6 +83,7 @@ data class PlayerSettingsUiState(
      val animeSkipEnabled: Boolean = false,
      val animeSkipClientId: String = "",
      val introDbApiKey: String = "",
@@ -19900,7 +19894,7 @@ index fb95a348..7bbcad65 100644
      val introSubmitEnabled: Boolean = false,
      val streamAutoPlayNextEpisodeEnabled: Boolean = false,
      val streamAutoPlayNextEpisodeFallbackEnabled: Boolean = true,
-@@ -165,6 +166,7 @@ object PlayerSettingsRepository {
+@@ -167,6 +168,7 @@ object PlayerSettingsRepository {
      private var animeSkipEnabled = false
      private var animeSkipClientId = ""
      private var introDbApiKey = ""
@@ -19908,7 +19902,7 @@ index fb95a348..7bbcad65 100644
      private var introSubmitEnabled = false
      private var streamAutoPlayNextEpisodeEnabled = false
      private var streamAutoPlayNextEpisodeFallbackEnabled = true
-@@ -254,6 +256,7 @@ object PlayerSettingsRepository {
+@@ -257,6 +259,7 @@ object PlayerSettingsRepository {
          animeSkipEnabled = false
          animeSkipClientId = ""
          introDbApiKey = ""
@@ -19916,7 +19910,7 @@ index fb95a348..7bbcad65 100644
          introSubmitEnabled = false
          streamAutoPlayNextEpisodeEnabled = false
          streamAutoPlayNextEpisodeFallbackEnabled = true
-@@ -407,6 +410,7 @@ object PlayerSettingsRepository {
+@@ -411,6 +414,7 @@ object PlayerSettingsRepository {
          animeSkipEnabled = PlayerSettingsStorage.loadAnimeSkipEnabled() ?: false
          animeSkipClientId = PlayerSettingsStorage.loadAnimeSkipClientId() ?: ""
          introDbApiKey = PlayerSettingsStorage.loadIntroDbApiKey() ?: ""
@@ -19924,7 +19918,7 @@ index fb95a348..7bbcad65 100644
          introSubmitEnabled = PlayerSettingsStorage.loadIntroSubmitEnabled() ?: false
          streamAutoPlayNextEpisodeEnabled = PlayerSettingsStorage.loadStreamAutoPlayNextEpisodeEnabled() ?: false
          streamAutoPlayNextEpisodeFallbackEnabled = PlayerSettingsStorage.loadStreamAutoPlayNextEpisodeFallbackEnabled() ?: true
-@@ -896,6 +900,14 @@ object PlayerSettingsRepository {
+@@ -908,6 +912,14 @@ object PlayerSettingsRepository {
          PlayerSettingsStorage.saveAnimeSkipClientId(clientId)
      }
  
@@ -19939,7 +19933,7 @@ index fb95a348..7bbcad65 100644
      fun setIntroDbApiKey(apiKey: String) {
          ensureLoaded()
          if (introDbApiKey == apiKey) return
-@@ -1216,6 +1228,7 @@ object PlayerSettingsRepository {
+@@ -1229,6 +1241,7 @@ object PlayerSettingsRepository {
              animeSkipEnabled = animeSkipEnabled,
              animeSkipClientId = animeSkipClientId,
              introDbApiKey = introDbApiKey,
@@ -26895,7 +26889,7 @@ index 328d7adc..a3a9e253 100644
                          title = stringResource(Res.string.compose_settings_page_licenses_attributions),
                          description = stringResource(Res.string.about_licenses_attributions_subtitle),
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
-index 51415bd3..f878e10d 100644
+index 6d9a323d..de0bc1d6 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
 @@ -147,6 +147,7 @@ fun SettingsScreen(
@@ -26918,7 +26912,7 @@ index 51415bd3..f878e10d 100644
  
          LaunchedEffect(page, currentPage) {
              if (page.name != currentPage) {
-@@ -449,6 +455,7 @@ fun SettingsScreen(
+@@ -450,6 +456,7 @@ fun SettingsScreen(
                          onSwitchProfile = onSwitchProfile,
                          onSupportersContributorsClick = openSupportersContributors,
                          onLicensesAttributionsClick = openLicensesAttributions,
@@ -26926,7 +26920,7 @@ index 51415bd3..f878e10d 100644
                          onCheckForUpdatesClick = onCheckForUpdatesClick,
                          onTestUpdateBannerClick = onTestUpdateBannerClick,
                          onCollectionsClick = onCollectionsClick,
-@@ -523,6 +530,7 @@ fun SettingsScreen(
+@@ -525,6 +532,7 @@ fun SettingsScreen(
                          onAccountClick = openAccount,
                          onSupportersContributorsClick = openSupportersContributors,
                          onLicensesAttributionsClick = openLicensesAttributions,
@@ -26934,7 +26928,7 @@ index 51415bd3..f878e10d 100644
                          onCheckForUpdatesClick = onCheckForUpdatesClick,
                          onTestUpdateBannerClick = onTestUpdateBannerClick,
                          onCollectionsClick = onCollectionsClick,
-@@ -603,6 +611,7 @@ private fun MobileSettingsScreen(
+@@ -606,6 +614,7 @@ private fun MobileSettingsScreen(
      onAccountClick: () -> Unit = {},
      onSupportersContributorsClick: () -> Unit = {},
      onLicensesAttributionsClick: () -> Unit = {},
@@ -26942,7 +26936,7 @@ index 51415bd3..f878e10d 100644
      onCheckForUpdatesClick: (() -> Unit)? = null,
      onTestUpdateBannerClick: (() -> Unit)? = null,
      onCollectionsClick: () -> Unit = {},
-@@ -610,6 +619,10 @@ private fun MobileSettingsScreen(
+@@ -613,6 +622,10 @@ private fun MobileSettingsScreen(
  ) {
      val saveableStateHolder = rememberSaveableStateHolder()
      saveableStateHolder.SaveableStateProvider(page.name) {
@@ -26953,7 +26947,7 @@ index 51415bd3..f878e10d 100644
          var settingsSearchQuery by rememberSaveable { mutableStateOf("") }
          var rootSearchVisible by rememberSaveable { mutableStateOf(false) }
          var rootSearchRevealAnimating by rememberSaveable { mutableStateOf(false) }
-@@ -642,6 +655,7 @@ private fun MobileSettingsScreen(
+@@ -645,6 +658,7 @@ private fun MobileSettingsScreen(
                          }
                      }
                      SettingsPage.LicensesAttributions -> onLicensesAttributionsClick()
@@ -26961,7 +26955,7 @@ index 51415bd3..f878e10d 100644
                      SettingsPage.ContinueWatching -> onContinueWatchingClick()
                      SettingsPage.Addons -> onAddonsClick()
                      SettingsPage.Plugins -> {
-@@ -724,6 +738,7 @@ private fun MobileSettingsScreen(
+@@ -727,6 +741,7 @@ private fun MobileSettingsScreen(
                              onTrackingClick = { onPageChange(SettingsPage.TraktAuthentication) },
                              onSupportersContributorsClick = onSupportersContributorsClick,
                              onLicensesAttributionsClick = onLicensesAttributionsClick,
@@ -26969,7 +26963,7 @@ index 51415bd3..f878e10d 100644
                              onCheckForUpdatesClick = onCheckForUpdatesClick,
                              onTestUpdateBannerClick = onTestUpdateBannerClick,
                              onAccountClick = onAccountClick,
-@@ -796,7 +811,12 @@ private fun MobileSettingsScreen(
+@@ -800,7 +815,12 @@ private fun MobileSettingsScreen(
                  SettingsPage.Advanced -> advancedSettingsContent(
                      isTablet = false,
                      rememberLastProfileEnabled = rememberLastProfileEnabled,
@@ -26982,7 +26976,7 @@ index 51415bd3..f878e10d 100644
                  SettingsPage.Notifications -> notificationsSettingsContent(
                      isTablet = false,
                      uiState = episodeReleaseNotificationsUiState,
-@@ -992,6 +1012,7 @@ private fun TabletSettingsScreen(
+@@ -997,6 +1017,7 @@ private fun TabletSettingsScreen(
      onSwitchProfile: (() -> Unit)? = null,
      onSupportersContributorsClick: () -> Unit = {},
      onLicensesAttributionsClick: () -> Unit = {},
@@ -26990,7 +26984,7 @@ index 51415bd3..f878e10d 100644
      onCheckForUpdatesClick: (() -> Unit)? = null,
      onTestUpdateBannerClick: (() -> Unit)? = null,
      onCollectionsClick: () -> Unit = {},
-@@ -1057,6 +1078,10 @@ private fun TabletSettingsScreen(
+@@ -1062,6 +1083,10 @@ private fun TabletSettingsScreen(
          }
  
          saveableStateHolder.SaveableStateProvider(page.name) {
@@ -27001,7 +26995,7 @@ index 51415bd3..f878e10d 100644
              var settingsSearchQuery by rememberSaveable { mutableStateOf("") }
              var rootSearchVisible by rememberSaveable { mutableStateOf(false) }
              var rootSearchRevealAnimating by rememberSaveable { mutableStateOf(false) }
-@@ -1171,6 +1196,7 @@ private fun TabletSettingsScreen(
+@@ -1176,6 +1201,7 @@ private fun TabletSettingsScreen(
                                  onTrackingClick = { openInlinePage(SettingsPage.TraktAuthentication) },
                                  onSupportersContributorsClick = { openInlinePage(SettingsPage.SupportersContributors) },
                                  onLicensesAttributionsClick = { openInlinePage(SettingsPage.LicensesAttributions) },
@@ -27009,7 +27003,7 @@ index 51415bd3..f878e10d 100644
                                  onCheckForUpdatesClick = onCheckForUpdatesClick,
                                  onTestUpdateBannerClick = onTestUpdateBannerClick,
                                  onAccountClick = { openInlinePage(SettingsPage.Account) },
-@@ -1247,7 +1273,12 @@ private fun TabletSettingsScreen(
+@@ -1253,7 +1279,12 @@ private fun TabletSettingsScreen(
                      SettingsPage.Advanced -> advancedSettingsContent(
                          isTablet = true,
                          rememberLastProfileEnabled = rememberLastProfileEnabled,

@@ -14,10 +14,10 @@ index 0e60f523..ad41dd02 100644
 +    <string name="mini_player_expand">Open full screen player</string>
  </resources>
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index 17f22596..13f28b59 100644
+index c42ca7bd..bc5e7803 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-@@ -153,7 +153,11 @@ import com.nuvio.app.features.player.PlayerLaunchStore
+@@ -156,7 +156,11 @@ import com.nuvio.app.features.player.PlayerLaunchStore
  import com.nuvio.app.features.player.PlayerSettingsRepository
  import com.nuvio.app.features.player.SubtitleLanguageOption
  import com.nuvio.app.features.player.prepareExternalPlayerLaunch
@@ -29,7 +29,7 @@ index 17f22596..13f28b59 100644
  import com.nuvio.app.features.player.HidePlayerSystemBars
  import com.nuvio.app.features.player.rememberExternalPlayerLauncher
  import com.nuvio.app.features.profiles.ProfileRepository
-@@ -329,6 +333,10 @@ internal fun MainAppContent(
+@@ -331,6 +335,10 @@ internal fun MainAppContent(
          PlayerSettingsRepository.uiState
      }.collectAsStateWithLifecycle()
      var visiblePlayerEntries by remember { mutableIntStateOf(0) }
@@ -40,7 +40,7 @@ index 17f22596..13f28b59 100644
      var streamLandscapeLoadingVisible by remember(currentRoute) { mutableStateOf(false) }
      if (currentRoute is PlayerRoute || visiblePlayerEntries > 0 || streamLandscapeLoadingVisible) {
          LockPlayerToLandscape()
-@@ -1664,17 +1672,27 @@ internal fun MainAppContent(
+@@ -1670,17 +1678,27 @@ internal fun MainAppContent(
                              onDispose { visiblePlayerEntries -= 1 }
                          }
                      }
@@ -79,7 +79,7 @@ index 17f22596..13f28b59 100644
                  }
                  entry<CatalogRoute> { route ->
                      CatalogDestination(
-@@ -1836,6 +1854,31 @@ internal fun MainAppContent(
+@@ -1842,6 +1860,31 @@ internal fun MainAppContent(
              }
              }
  
@@ -128,10 +128,10 @@ index 6b5c676a..ad2bd3ac 100644
      if (launch == null) {
          LaunchedEffect(route.launchId) {
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailHero.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailHero.kt
-index 8bc2a76f..43d4ac6b 100644
+index b81d610b..ab956c65 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailHero.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailHero.kt
-@@ -146,7 +146,7 @@ fun DetailHero(
+@@ -148,7 +148,7 @@ fun DetailHero(
                      HeroTrailerPlayerSurface(
                          sourceUrl = heroTrailerSourceUrl,
                          sourceAudioUrl = heroTrailerSourceAudioUrl,
@@ -141,10 +141,10 @@ index 8bc2a76f..43d4ac6b 100644
                          modifier = Modifier
                              .align(Alignment.TopCenter)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/TabletDetailHero.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/TabletDetailHero.kt
-index 0b0d7455..189e16e3 100644
+index 2b68f55b..4ca188e3 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/TabletDetailHero.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/TabletDetailHero.kt
-@@ -188,7 +188,7 @@ private fun BackdropArtwork(
+@@ -194,7 +194,7 @@ private fun BackdropArtwork(
              HeroTrailerPlayerSurface(
                  sourceUrl = heroTrailerSourceUrl,
                  sourceAudioUrl = heroTrailerSourceAudioUrl,
@@ -670,10 +670,10 @@ index d69f0749..6c69e179 100644
          runtime.WithSeekPreview { runtime.RenderPlayerRuntimeUi() } // Seek previews hook
      }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
-index f24d9d23..ce1d0be0 100644
+index 330fabe5..b0f522c7 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
-@@ -201,6 +201,7 @@ internal class PlayerScreenRuntime(
+@@ -206,6 +206,7 @@ internal class PlayerScreenRuntime(
      var showAudioModal by mutableStateOf(false)
      var showQualityModal by mutableStateOf(false)
      var showUserRatingSheet by mutableStateOf(false)
@@ -682,26 +682,31 @@ index f24d9d23..ce1d0be0 100644
      var showVideoSettingsModal by mutableStateOf(false)
      var showStreamInfo by mutableStateOf(false)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index 8fea712f..1d813255 100644
+index e97c3b6b..a3cc8c2a 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -219,6 +219,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+@@ -227,6 +227,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
              }
          }
  
 +        if (!isMiniPresentation) {
          AnimatedVisibility(
-             visible = playerSettingsUiState.pauseOverlayEnabled && pausedOverlayVisible && !controlsVisible && !playerControlsLocked,
+             visible = playerSettingsUiState.pauseOverlayEnabled && pausedOverlayVisible && !controlsVisible && !playerControlsLocked && fold == null,
              enter = fadeIn(animationSpec = tween(durationMillis = 220)),
-@@ -255,6 +256,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+@@ -269,10 +270,12 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+             )
+         }
          if (!isInPip) AutoSyncBubbleToastHost(controlsVisible) // AutoSync hook: bubble toast
-         RenderPlayerModals(displayedPositionMs = displayedPositionMs)
-         RenderParty(runtime = runtime)
++        if (!isMiniPresentation) {
+         Box(modifier = panelModifier) {
+             RenderPlayerModals(displayedPositionMs = displayedPositionMs)
+             RenderParty(runtime = runtime)
+         }
 +        }
      }
  }
  
-@@ -416,6 +418,13 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+@@ -448,6 +451,13 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
              } else {
                  null
              },
@@ -716,10 +721,10 @@ index 8fea712f..1d813255 100644
                  { playerController?.showCastDialog() }
              } else {
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-index 93b6f22c..a7a5c3a1 100644
+index 650cc06e..bb94a887 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-@@ -398,6 +398,18 @@ private fun PlaybackSettingsSection(
+@@ -404,6 +404,18 @@ private fun PlaybackSettingsSection(
                      isTablet = isTablet,
                      onCheckedChange = com.nuvio.app.features.player.PrivateViewing::set,
                  )

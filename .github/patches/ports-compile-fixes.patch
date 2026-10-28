@@ -13,10 +13,10 @@ index dc4def32..99c6e6dc 100644
  import nuvio.composeapp.generated.resources.details_actions_menu_label
  import nuvio.composeapp.generated.resources.hero_add_to_library
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index 234a77d7..a1498807 100644
+index a7b32b92..16a0418b 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -15,6 +15,7 @@ import com.nuvio.app.features.ratings.rememberUserRating
+@@ -19,6 +19,7 @@ import com.nuvio.app.features.ratings.rememberUserRating
  import com.nuvio.app.features.ratings.toUserRatingTarget
  import com.nuvio.app.features.tracking.TrackingRatingTarget
  import androidx.compose.runtime.DisposableEffect

@@ -1,5 +1,5 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt
-index baf0527d..238b44fa 100644
+index e33c1099..e8c585d4 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt
 @@ -7,6 +7,8 @@ import android.util.Log
@@ -29,7 +29,7 @@ index baf0527d..238b44fa 100644
      private var job: Job? = null
      private var selectedBodyJob: Job? = null
      private var retryJob: Job? = null
-@@ -480,7 +489,7 @@ internal class AutoSyncPlayerCoordinator(
+@@ -481,7 +490,7 @@ internal class AutoSyncPlayerCoordinator(
              .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
              .build()
  
@@ -38,7 +38,7 @@ index baf0527d..238b44fa 100644
              var analysisOutcome: AutoSyncAnalysisOutcome? = null
              var searchLanguage = getPreferredLanguage()
              var resolved = AutomaticSubtitleSync.findTimelineRetime(
-@@ -711,6 +720,14 @@ internal class AutoSyncPlayerCoordinator(
+@@ -712,6 +721,14 @@ internal class AutoSyncPlayerCoordinator(
                  "applied selected=$url chosen=$chosenUrl alignment=${timeline.alignmentSource}",
              )
          }

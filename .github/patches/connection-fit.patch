@@ -98,7 +98,7 @@ index 00000000..ecc5e84c
 +    }
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index bae7d727..11c7acab 100644
+index 63d7e14f..64c4b15b 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 @@ -315,6 +315,7 @@ private fun ExoPlayerSurface(
@@ -118,7 +118,7 @@ index bae7d727..11c7acab 100644
      }
      val dataSourceFactory = remember(
          context,
-@@ -522,6 +523,7 @@ private fun ExoPlayerSurface(
+@@ -530,6 +531,7 @@ private fun ExoPlayerSurface(
          onDispose { nowPlayingController.release() }
      }
      com.nuvio.app.features.player.volumeboost.ExoVolumeBoostEffect(exoPlayer) // Volume boost hook
@@ -126,7 +126,7 @@ index bae7d727..11c7acab 100644
  
      LaunchedEffect(exoPlayer, resolvedMediaItem, initialPositionRequestKey) {
          val mediaItem = resolvedMediaItem
-@@ -1211,6 +1213,7 @@ private fun LibmpvPlayerSurface(
+@@ -1227,6 +1229,7 @@ private fun LibmpvPlayerSurface(
          preferredSubtitleLanguage = preferredSubtitleLanguage,
      )
      var playerViewRef by remember { mutableStateOf<NuvioLibmpvView?>(null) }
@@ -134,8 +134,8 @@ index bae7d727..11c7acab 100644
      val nowPlayingController = remember(context, playerViewRef) {
          playerViewRef?.let { view ->
              AndroidPlayerNowPlayingController(
-@@ -1626,6 +1629,23 @@ private class NuvioLibmpvView(
-         }
+@@ -1660,6 +1663,23 @@ private class NuvioLibmpvView(
+         }.getOrDefault(emptyList())
      }
  
 +    /** Nuvio fork: mpv's download rate and whether it is still fetching (connection-speed learning). */
@@ -340,10 +340,10 @@ index 00000000..78774b20
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-index 2234c465..27879934 100644
+index 057968cd..fef83d23 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-@@ -616,6 +616,8 @@ private fun PlaybackSettingsSection(
+@@ -622,6 +622,8 @@ private fun PlaybackSettingsSection(
  
          VolumeBoostSettingsSection(isTablet = isTablet) // Volume boost hook
  

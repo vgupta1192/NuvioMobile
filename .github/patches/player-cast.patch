@@ -1,8 +1,8 @@
 diff --git a/composeApp/build.gradle.kts b/composeApp/build.gradle.kts
-index 5a6618e5..8e2e4ecc 100644
+index 38714906..1b4a3e63 100644
 --- a/composeApp/build.gradle.kts
 +++ b/composeApp/build.gradle.kts
-@@ -481,6 +481,8 @@ kotlin {
+@@ -482,6 +482,8 @@ kotlin {
                  implementation(libs.androidx.media3.session)
                  implementation(libs.androidx.media3.common)
                  implementation(libs.androidx.media3.container)
@@ -670,7 +670,7 @@ index 00000000..15962acb
 +    override fun getAdditionalSessionProviders(context: Context): List<SessionProvider>? = null
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index 6f2fc62f..066835cd 100644
+index 4aa301be..62bee06c 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 @@ -138,6 +138,31 @@ actual fun PlatformPlayerSurface(
@@ -816,7 +816,7 @@ index 5368d6a2..4806c9f7 100644
                      Text(
                          text = stringResource(Res.string.player_video_quality),
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
-index cb2b5d55..b632383e 100644
+index 8272749f..6fe88bb2 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
 @@ -17,6 +17,8 @@ interface PlayerEngineController {
@@ -864,10 +864,10 @@ index 6b01de89..3805d6fb 100644
  
      SubtitleModal(
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index 75579bbb..6952e44e 100644
+index a64924ea..2d5bd867 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -541,6 +541,8 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
+@@ -601,6 +601,8 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
          },
          onAudioModalDismissed = { showAudioModal = false },
          videoController = playerController,

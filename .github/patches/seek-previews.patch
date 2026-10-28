@@ -2065,10 +2065,10 @@ index 00000000..f4855b0f
 +    <string name="settings_seekr_api_key_invalid">Seekr didn't accept this key.</string>
 +</resources>
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
-index b7441f70..7bc1b893 100644
+index f9a8cc51..30d7e2f9 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
-@@ -703,6 +703,9 @@ private fun ProgressControls(
+@@ -776,6 +776,9 @@ private fun ProgressControls(
                              onClick = onEpisodesClick,
                          )
                      }
@@ -2078,7 +2078,7 @@ index b7441f70..7bc1b893 100644
                  }
              }
          }
-@@ -722,8 +725,12 @@ internal fun PlayerSeekBar(
+@@ -796,8 +799,12 @@ internal fun PlayerSeekBar(
      val seekDescription = stringResource(Res.string.player_seek_position)
      val seekState = remember(seekDurationMs) { SliderState(trackRange = 0f..seekDurationMs.toFloat()) }
      seekState.value = displayedPositionMs.coerceIn(0L, seekDurationMs).toFloat()
@@ -2104,7 +2104,7 @@ index 220937e7..d69f0749 100644
      }
  }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
-index 98cd9484..e64ae855 100644
+index 03a31b3b..e00ee66a 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
 @@ -47,6 +47,7 @@ internal fun PlayerScreenRuntime.showGestureMessage(message: String) {
@@ -2115,7 +2115,7 @@ index 98cd9484..e64ae855 100644
  }
  
  internal fun PlayerScreenRuntime.revealLockedOverlay() {
-@@ -101,7 +102,8 @@ internal fun PlayerScreenRuntime.showSeekFeedback(direction: PlayerSeekDirection
+@@ -102,7 +103,8 @@ internal fun PlayerScreenRuntime.showSeekFeedback(direction: PlayerSeekDirection
      )
  }
  
@@ -2125,7 +2125,7 @@ index 98cd9484..e64ae855 100644
      val deltaMs = previewPositionMs - baselinePositionMs
      val direction = if (deltaMs < 0L) PlayerSeekDirection.Backward else PlayerSeekDirection.Forward
      liveGestureFeedback = GestureFeedbackState(
-@@ -354,7 +356,8 @@ internal fun PlayerScreenRuntime.rememberSurfaceGestureCallbacks(): PlayerSurfac
+@@ -355,7 +357,8 @@ internal fun PlayerScreenRuntime.rememberSurfaceGestureCallbacks(): PlayerSurfac
          playerControlsLocked = rememberUpdatedState(playerControlsLocked),
          currentPositionMs = rememberUpdatedState(playbackSnapshot.positionMs.coerceAtLeast(0L)),
          currentDurationMs = rememberUpdatedState(playbackSnapshot.durationMs),
@@ -2136,7 +2136,7 @@ index 98cd9484..e64ae855 100644
                  ownSeekTarget(requestedPositionMs) ?: return@rememberUpdatedState
              } else {
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
-index 75ba0203..9bdf568b 100644
+index 28daa428..3161cbdd 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
 @@ -140,6 +140,7 @@ internal class PlayerScreenRuntime(
@@ -2148,19 +2148,19 @@ index 75ba0203..9bdf568b 100644
      var pausedOverlayVisible by mutableStateOf(false)
      var gestureFeedback by mutableStateOf<GestureFeedbackState?>(null)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index 92024451..03424e47 100644
+index eb80b4a6..e8a8919a 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -282,7 +282,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
-     val partyActive = partyState.party != null
-     val playerBadges = rememberPlayerBadges()
+@@ -312,7 +312,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
+     }
      AnimatedVisibility(
--        visible = (controlsVisible || showParentalGuide) && !playerControlsLocked && !isInPip,
-+        visible = (controlsVisible || showParentalGuide) && !playerControlsLocked && !isInPip && !seekPreview.showSyncPanel,
+         visible = (controlsVisible || folded || showParentalGuide) && !playerControlsLocked && !isInPip &&
+-            !(folded && isPanelOpen),
++            !(folded && isPanelOpen) && !seekPreview.showSyncPanel,
          enter = fadeIn(),
          exit = fadeOut(),
      ) {
-@@ -403,7 +403,8 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+@@ -435,7 +435,8 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
                  isScrubbingTimeline = true
                  scrubbingPositionMs = positionMs
              },
@@ -2171,10 +2171,10 @@ index 92024451..03424e47 100644
                  if (targetMs == null) {
                      isScrubbingTimeline = false
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTimeline.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTimeline.kt
-index f8a296de..bbfb3971 100644
+index db7d7934..1dbf8099 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTimeline.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTimeline.kt
-@@ -117,6 +117,7 @@ internal fun PlayerTimeline(
+@@ -119,6 +119,7 @@ internal fun PlayerTimeline(
      val isPressed by interactionSource.collectIsPressedAsState()
      val isDragged by interactionSource.collectIsDraggedAsState()
      val isInteracting = enabled && durationMs > 0L && (isPressed || isDragged)
@@ -2182,7 +2182,7 @@ index f8a296de..bbfb3971 100644
      val trackThickness by animateDpAsState(
          targetValue = if (isInteracting) 10.dp else 6.dp,
          animationSpec = tween(durationMillis = if (isInteracting) 140 else 180),
-@@ -127,6 +128,7 @@ internal fun PlayerTimeline(
+@@ -129,6 +130,7 @@ internal fun PlayerTimeline(
      sliderState.value = displayedPositionMs.coerceIn(0L, durationMs).toFloat()
  
      CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
@@ -2190,10 +2190,10 @@ index f8a296de..bbfb3971 100644
          Slider(
              state = sliderState,
              onValueChange = { value ->
-@@ -168,6 +170,7 @@ internal fun PlayerTimeline(
-                                 size = Size(size.width * (state.value / rangeEnd).coerceIn(0f, 1f), trackHeight),
-                                 cornerRadius = radius,
-                             )
+@@ -182,6 +184,7 @@ internal fun PlayerTimeline(
+                                     )
+                                 }
+                             }
 +                            drawSeekPreviewCueTicks(cueIntervalMs, durationMs, trackOrigin.y, trackHeight) // Seek previews hook
                          },
                  )
@@ -4139,10 +4139,10 @@ index 00000000..5ccc2afa
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-index 8d683f96..b261b677 100644
+index 405a3b5f..4a9ca68d 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-@@ -615,6 +615,8 @@ private fun PlaybackSettingsSection(
+@@ -618,6 +618,8 @@ private fun PlaybackSettingsSection(
              )
          }
  

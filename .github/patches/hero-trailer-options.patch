@@ -71,10 +71,10 @@ index 00000000..1a038c96
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
-index 71feb84d..99085289 100644
+index 4b3f3dc6..e44d97d3 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
-@@ -742,12 +742,17 @@ fun MetaDetailsScreen(
+@@ -746,12 +746,17 @@ fun MetaDetailsScreen(
                      if (!deferredMetaWorkAllowed || !heroTrailerPlaybackEnabled || heroTrailerCandidate == null) {
                          return@LaunchedEffect
                      }

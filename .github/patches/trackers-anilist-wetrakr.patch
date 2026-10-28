@@ -602,10 +602,10 @@ index 00000000..6e3e0fca
 +    <string name="settings_wetrakr_plan_limit">This needs WeTrakr VIP or is over your plan’s limits.</string>
 +</resources>
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index faaa289e..bb45e65f 100644
+index 3690de33..c42ca7bd 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-@@ -1231,6 +1231,8 @@ internal fun MainAppContent(
+@@ -1232,6 +1232,8 @@ internal fun MainAppContent(
              LibrarySourceMode.TRAKT -> stringResource(Res.string.compose_catalog_subtitle_trakt_library)
              LibrarySourceMode.SIMKL -> stringResource(Res.string.compose_catalog_subtitle_simkl_library)
                                      LibrarySourceMode.MDBLIST -> stringResource(Res.string.library_mdblist_title)
@@ -3437,10 +3437,10 @@ index f38d5cd7..4d022bdf 100644
  
  data class LibraryUiState(
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryScreen.kt
-index 5651a8e9..34f136d4 100644
+index f421ab90..529d8f3d 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryScreen.kt
-@@ -320,6 +320,8 @@ fun LibraryScreen(
+@@ -328,6 +328,8 @@ fun LibraryScreen(
                                      LibrarySourceMode.TRAKT -> stringResource(Res.string.library_trakt_title)
                                      LibrarySourceMode.SIMKL -> stringResource(Res.string.library_simkl_title)
                                      LibrarySourceMode.MDBLIST -> stringResource(Res.string.library_mdblist_title)
@@ -3449,7 +3449,7 @@ index 5651a8e9..34f136d4 100644
                                  }
                              },
                              modifier = Modifier.padding(horizontal = 16.dp),
-@@ -448,6 +450,8 @@ fun LibraryScreen(
+@@ -456,6 +458,8 @@ fun LibraryScreen(
                                          LibrarySourceMode.TRAKT -> stringResource(Res.string.library_trakt_load_failed)
                                          LibrarySourceMode.SIMKL -> stringResource(Res.string.library_simkl_load_failed)
                                          LibrarySourceMode.MDBLIST -> stringResource(Res.string.library_mdblist_load_failed)
@@ -3458,7 +3458,7 @@ index 5651a8e9..34f136d4 100644
                                      },
                                      message = uiState.errorMessage.orEmpty(),
                                      actionLabel = stringResource(Res.string.action_retry),
-@@ -466,12 +470,16 @@ fun LibraryScreen(
+@@ -474,12 +478,16 @@ fun LibraryScreen(
                                      LibrarySourceMode.TRAKT -> stringResource(Res.string.library_trakt_empty_title)
                                      LibrarySourceMode.SIMKL -> stringResource(Res.string.library_simkl_empty_title)
                                      LibrarySourceMode.MDBLIST -> stringResource(Res.string.library_mdblist_empty_title)

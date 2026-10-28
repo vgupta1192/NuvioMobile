@@ -35,7 +35,7 @@ index bcf97374..bc01257c 100644
      actual suspend fun updatePlugin(pluginId: String): CloudStreamInstallResult = CloudStreamInstallResult.Error("CloudStream is available only in full builds")
      actual suspend fun installAndEnablePlugins(pluginIds: List<String>): CloudStreamBulkInstallResult =
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index d0d9ae2f..da0c0ac7 100644
+index a298aa23..d53b616d 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 @@ -89,6 +89,7 @@ import com.nuvio.app.features.addons.AddAddonResult
@@ -46,7 +46,7 @@ index d0d9ae2f..da0c0ac7 100644
  import com.nuvio.app.features.catalog.CatalogTarget
  import com.nuvio.app.features.cloud.CloudLibraryContentType
  import com.nuvio.app.features.cloud.CloudLibraryFile
-@@ -406,8 +407,10 @@ internal fun MainAppContent(
+@@ -405,8 +406,10 @@ internal fun MainAppContent(
      var networkToastBaselineReady by rememberSaveable { mutableStateOf(false) }
      var lastNetworkToastCondition by rememberSaveable { mutableStateOf(NetworkCondition.Unknown.name) }
      var watchSourceReconnectPending by remember { mutableStateOf(false) }

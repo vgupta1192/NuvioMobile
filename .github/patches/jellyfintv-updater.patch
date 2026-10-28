@@ -1,5 +1,5 @@
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt
-index 450b153..adb11cd 100644
+index 450b153e..adb11cd2 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt
 @@ -27,8 +27,8 @@ internal object ForkBuild {

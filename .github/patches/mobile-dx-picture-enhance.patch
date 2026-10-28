@@ -156,10 +156,10 @@ index 759cba5d..e868e3bc 100644
              shaderBroken = true
              push()
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index 04ef76bd..8e877164 100644
+index 576c07f5..a0814de0 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-@@ -1932,7 +1932,7 @@ private class NuvioLibmpvView(
+@@ -1960,7 +1960,7 @@ private class NuvioLibmpvView(
                      runCatching { mpv.setPropertyString("tone-mapping", state.toneMapping.mpv ?: "auto") }
                      runCatching { mpv.setPropertyBoolean("interpolation", state.interpolation) }
                      runCatching { mpv.setPropertyString("video-sync", if (state.interpolation) "display-resample" else "audio") }
@@ -436,10 +436,10 @@ index 00000000..de941360
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
-index b0e9153d..8357b8c6 100644
+index 8cf5545e..f5aebc15 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
-@@ -81,6 +81,7 @@ internal fun PlayerToolbar(
+@@ -82,6 +82,7 @@ internal fun PlayerToolbar(
      Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
          Spacer(Modifier.weight(1f))
          SmartEnhanceToolbarAction()
@@ -448,10 +448,10 @@ index b0e9153d..8357b8c6 100644
              PlayerAction(
                  description = stringResource(Res.string.player_cast),
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
-index 000462fa..0ca4ff59 100644
+index de5fac24..7c3b4031 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
-@@ -476,6 +476,7 @@ private fun PlayerHeader(
+@@ -534,6 +534,7 @@ private fun PlayerHeader(
                      verticalAlignment = Alignment.CenterVertically,
                  ) {
                      SmartEnhanceHeaderButton(metrics)
@@ -472,10 +472,10 @@ index a7394f20..b326c20e 100644
          SliderRow("Contrast", signed(state.contrast), state.contrast.toFloat(), -30f..30f) { edit(state.copy(contrast = it.roundToInt())) }
          SliderRow("Saturation", signed(state.saturation), state.saturation.toFloat(), -50f..50f) { edit(state.copy(saturation = it.roundToInt())) }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index 8baf44ec..665d9568 100644
+index 9653a62f..2b006b0e 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -328,7 +328,12 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+@@ -358,7 +358,12 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
          SmartEnhance.ensureLoaded()
          PlayerEffects.enterTitle(parentMetaId)
      }
@@ -489,14 +489,14 @@ index 8baf44ec..665d9568 100644
          val controller = playerController
          SmartEnhance.available.value = controller?.supportsSmartEnhance() == true
          controller?.applyPicture(pictureState.copy(smartEnhance = smartEnhanceOn))
-@@ -348,6 +353,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+@@ -378,6 +383,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
          PlayerEffects.maybeAutoEnhance(info.videoHeight, info.videoBitrate)
      }
      SmartEnhanceBanner()
 +    DxPlayerHintHost() // dx.bi player hints hook
      AnimatedVisibility(
-         visible = (controlsVisible || showParentalGuide) && !playerControlsLocked && !isInPip && !seekPreview.showSyncPanel,
-         enter = fadeIn(),
+         visible = (controlsVisible || folded || showParentalGuide) && !playerControlsLocked && !isInPip &&
+             !(folded && isPanelOpen) && !seekPreview.showSyncPanel,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxEnhanceSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxEnhanceSettings.kt
 new file mode 100644
 index 00000000..90bbf97e
@@ -546,10 +546,10 @@ index 00000000..90bbf97e
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-index 9c0b03d0..fe794ff2 100644
+index 24e7ef4e..7fb9aeb5 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-@@ -643,6 +643,7 @@ private fun PlaybackSettingsSection(
+@@ -646,6 +646,7 @@ private fun PlaybackSettingsSection(
          PictureSoundSettingsSection(isTablet = isTablet) // Picture and sound hook
  
          DxSoundSettingsSection(isTablet = isTablet) // dx.bi sound modes hook

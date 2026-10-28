@@ -1,5 +1,5 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
-index 7612799b..024e5524 100644
+index 8bcc5e5b..73dcae99 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 @@ -107,6 +107,7 @@ open class MainActivity : AppCompatActivity() {
@@ -11,7 +11,7 @@ index 7612799b..024e5524 100644
          SubtitleFileCache.initialize(applicationContext)
          ProfileStorage.initialize(applicationContext)
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt
-index 297a157f..3ca8b963 100644
+index 297a157f..0d6b5baf 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/autosync/AutoSyncPlayerCoordinator.android.kt
 @@ -86,6 +86,8 @@ internal class AutoSyncPlayerCoordinator(
@@ -437,7 +437,7 @@ index b3665232..2702619c 100644
          PlayerEpisodesPanel(
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
 new file mode 100644
-index 00000000..94e9b375
+index 00000000..91924928
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
 @@ -0,0 +1,332 @@
@@ -838,10 +838,10 @@ index 5dffa35c..109be6d9 100644
  private fun CurrentStreamBadge(label: String) {
      Box(
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt
-index 423d2cff..4ffdd1cd 100644
+index c003a587..4dd43193 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt
-@@ -225,6 +225,9 @@ fun StreamsScreen(
+@@ -227,6 +227,9 @@ fun StreamsScreen(
  
      if (showLoadingScreen) return
  
@@ -851,7 +851,7 @@ index 423d2cff..4ffdd1cd 100644
      BoxWithConstraints(
          modifier = modifier
              .fillMaxSize()
-@@ -397,6 +400,7 @@ fun StreamsScreen(
+@@ -400,6 +403,7 @@ fun StreamsScreen(
              },
          )
      }

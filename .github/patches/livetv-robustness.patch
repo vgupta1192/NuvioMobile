@@ -1,8 +1,8 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index 38e113f8..bf0b4878 100644
+index dc829188..3a50349e 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-@@ -297,7 +297,15 @@ private fun ExoPlayerSurface(
+@@ -302,7 +302,15 @@ private fun ExoPlayerSurface(
      val extractorsFactory = remember(sourceUrl) {
          AutoSyncExtractorsFactory( // AutoSync hook
              delegate = DefaultExtractorsFactory()
@@ -19,7 +19,7 @@ index 38e113f8..bf0b4878 100644
                  .setTsExtractorTimestampSearchBytes(1500 * TsExtractor.TS_PACKET_SIZE),
              sourceKey = sourceUrl,
          )
-@@ -591,6 +599,8 @@ private fun ExoPlayerSurface(
+@@ -608,6 +616,8 @@ private fun ExoPlayerSurface(
              }
          }
  
@@ -28,7 +28,7 @@ index 38e113f8..bf0b4878 100644
          fun reportPlayerError(error: PlaybackException) {
              if (
                  playerSettings.decoderPriority == DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON &&
-@@ -626,6 +636,15 @@ private fun ExoPlayerSurface(
+@@ -643,6 +653,15 @@ private fun ExoPlayerSurface(
                      error,
                  )
  
@@ -44,7 +44,7 @@ index 38e113f8..bf0b4878 100644
                  val isSourceError = error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW ||
                          error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED ||
                          error.cause?.toString()?.contains("UnrecognizedInputFormatException") == true
-@@ -672,6 +691,7 @@ private fun ExoPlayerSurface(
+@@ -689,6 +708,7 @@ private fun ExoPlayerSurface(
                          "terminalError=${exoPlayer.playerError?.errorCodeName ?: "none"}",
                  )
                  if (playbackState == Player.STATE_READY) {

@@ -394,10 +394,10 @@ index 33c36072..a2b26a89 100644
              StreamsRepository.consumeAutoPlay()
              StreamsRepository.cancelLoading()
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
-index f57dcf46..754431c6 100644
+index 1f175529..73553976 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
-@@ -47,6 +47,7 @@ import androidx.compose.material3.Text
+@@ -48,6 +48,7 @@ import androidx.compose.material3.Text
  import androidx.compose.runtime.Composable
  import androidx.compose.runtime.SideEffect
  import androidx.compose.runtime.CompositionLocalProvider
@@ -405,7 +405,7 @@ index f57dcf46..754431c6 100644
  import com.nuvio.app.features.details.components.LocalDetailExtraActions
  import com.nuvio.app.features.details.components.DetailExtraActionsHolder
  import androidx.compose.runtime.LaunchedEffect
-@@ -958,7 +959,13 @@ fun MetaDetailsScreen(
+@@ -961,7 +962,13 @@ fun MetaDetailsScreen(
                          )
                      }
                  }

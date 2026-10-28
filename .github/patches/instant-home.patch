@@ -322,7 +322,7 @@ index 062b5e61..322a0a28 100644
      definitions: List<HomeCatalogDefinition>,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeSnapshot.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeSnapshot.kt
 new file mode 100644
-index 00000000..4d6115fb
+index 00000000..80da30d9
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeSnapshot.kt
 @@ -0,0 +1,213 @@

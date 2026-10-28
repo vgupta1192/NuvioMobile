@@ -1,5 +1,6 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/core/storage/AppContextHolder.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/core/storage/AppContextHolder.kt
 new file mode 100644
+index 00000000..56c88c10
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/core/storage/AppContextHolder.kt
 @@ -0,0 +1,14 @@
@@ -18,6 +19,7 @@ new file mode 100644
 +    fun get(): Context? = DownloadsPlatformDownloader.applicationContextOrNull()
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt
+index 1f6484c5..9b25160c 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt
 @@ -23,6 +23,8 @@ internal actual object DownloadsPlatformDownloader {

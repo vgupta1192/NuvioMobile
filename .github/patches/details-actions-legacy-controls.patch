@@ -34,10 +34,10 @@ index a469b68b..5dd419e6 100644
          onCastClick = { person, avatarTransitionKey ->
              val tmdbId = person.tmdbId
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index 5175144e..4cd81556 100644
+index bc5e7803..3494a799 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-@@ -1050,6 +1050,8 @@ internal fun MainAppContent(
+@@ -1048,6 +1048,8 @@ internal fun MainAppContent(
              resumeProgressFraction: Float?,
              manualSelection: Boolean,
              startFromBeginning: Boolean,
@@ -46,7 +46,7 @@ index 5175144e..4cd81556 100644
          ) {
              val targetResumePositionMs = if (startFromBeginning) 0L else (resumePositionMs ?: 0L)
              val targetResumeProgressFraction = if (startFromBeginning) null else resumeProgressFraction
-@@ -1089,7 +1091,7 @@ internal fun MainAppContent(
+@@ -1087,7 +1089,7 @@ internal fun MainAppContent(
                          initialPositionMs = targetResumePositionMs,
                          initialProgressFraction = targetResumeProgressFraction,
                      )
@@ -55,7 +55,7 @@ index 5175144e..4cd81556 100644
                          coroutineScope.launch { openExternalPlayback(playerLaunch) }
                          return
                      }
-@@ -1124,6 +1126,8 @@ internal fun MainAppContent(
+@@ -1122,6 +1124,8 @@ internal fun MainAppContent(
                      resumeProgressFraction = targetResumeProgressFraction,
                      manualSelection = manualSelection,
                      startFromBeginning = startFromBeginning,
@@ -64,7 +64,7 @@ index 5175144e..4cd81556 100644
                  ),
              )
              navController.navigate(
-@@ -1203,6 +1207,77 @@ internal fun MainAppContent(
+@@ -1201,6 +1205,77 @@ internal fun MainAppContent(
                  )
              }
  
@@ -142,7 +142,7 @@ index 5175144e..4cd81556 100644
          LaunchedEffect(Unit) {
              if (!ownsAppRuntime) return@LaunchedEffect
              PartyRepository.events.collect { event ->
-@@ -1634,6 +1709,9 @@ internal fun MainAppContent(
+@@ -1632,6 +1707,9 @@ internal fun MainAppContent(
                          navController = navController,
                          onPlay = onPlay,
                          onPlayManually = onPlayManually,
@@ -349,7 +349,7 @@ index 00000000..4fd36abc
 +
 +val LocalDetailExtraActions = compositionLocalOf<DetailExtraActionsHolder?> { null }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
-index 71973ba8..be8746c6 100644
+index f136add3..7a238c5e 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
 @@ -28,6 +28,14 @@ import androidx.compose.material.icons.Icons
@@ -367,7 +367,7 @@ index 71973ba8..be8746c6 100644
  import androidx.compose.material.icons.rounded.Flag
  import androidx.compose.material.icons.rounded.Groups
  import androidx.compose.material.icons.rounded.Forward10
-@@ -199,6 +207,11 @@ internal fun PlayerControlsShell(
+@@ -252,6 +260,11 @@ internal fun PlayerControlsShell(
                      onPartyClick = onPartyClick,
                      partyActive = partyActive,
                      onBack = onBack,
@@ -379,17 +379,17 @@ index 71973ba8..be8746c6 100644
                      modifier = Modifier
                          .align(Alignment.TopStart)
                          .fillMaxWidth()
-@@ -278,6 +291,9 @@ internal fun PlayerControlsShell(
-                     onAudioClick = onAudioClick,
-                     onSourcesClick = onSourcesClick,
+@@ -333,6 +346,9 @@ internal fun PlayerControlsShell(
                      onEpisodesClick = onEpisodesClick,
+                     chapters = chapters,
+                     onChaptersClick = onChaptersClick,
 +                    onQualityClick = onQualityClick,
 +                    onRateClick = onRateClick,
 +                    userRating = userRating,
                      modifier = Modifier
                          .align(Alignment.BottomCenter)
                          .fillMaxWidth()
-@@ -365,6 +381,11 @@ private fun PlayerHeader(
+@@ -423,6 +439,11 @@ private fun PlayerHeader(
      partyActive: Boolean,
      onBack: () -> Unit,
      modifier: Modifier = Modifier,
@@ -401,7 +401,7 @@ index 71973ba8..be8746c6 100644
  ) {
      val typeScale = MaterialTheme.nuvioTypeScale
      val metadataAlpha by animateFloatAsState(
-@@ -454,6 +475,36 @@ private fun PlayerHeader(
+@@ -512,6 +533,36 @@ private fun PlayerHeader(
                      horizontalArrangement = Arrangement.spacedBy(10.dp),
                      verticalAlignment = Alignment.CenterVertically,
                  ) {
@@ -438,9 +438,9 @@ index 71973ba8..be8746c6 100644
                      if (onSubmitIntroClick != null) {
                          PlayerHeaderIconButton(
                              icon = Icons.Rounded.Flag,
-@@ -652,6 +703,9 @@ private fun ProgressControls(
-     onSourcesClick: (() -> Unit)? = null,
-     onEpisodesClick: (() -> Unit)? = null,
+@@ -712,6 +763,9 @@ private fun ProgressControls(
+     chapters: List<PlayerChapter> = emptyList(),
+     onChaptersClick: (() -> Unit)? = null,
      modifier: Modifier = Modifier,
 +    onQualityClick: (() -> Unit)? = null,
 +    onRateClick: (() -> Unit)? = null,
@@ -448,7 +448,7 @@ index 71973ba8..be8746c6 100644
  ) {
      val aspectRatioPainter = appIconPainter(AppIconResource.PlayerAspectRatio)
      val subtitlesPainter = appIconPainter(AppIconResource.PlayerSubtitles)
-@@ -719,6 +773,21 @@ private fun ProgressControls(
+@@ -792,6 +846,21 @@ private fun ProgressControls(
                              onClick = onEpisodesClick,
                          )
                      }

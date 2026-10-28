@@ -1,5 +1,5 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
-index 33736cd9..bc11ccc7 100644
+index cb375079..a36b1d52 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 @@ -135,6 +135,7 @@ open class MainActivity : AppCompatActivity() {
@@ -1246,10 +1246,10 @@ index 00000000..3cec6ad8
 +    fun save(profileId: Int, payload: String)
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryScreen.kt
-index 8062f756..8b2d9f91 100644
+index 376584ac..f421ab90 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryScreen.kt
-@@ -325,6 +325,7 @@ fun LibraryScreen(
+@@ -333,6 +333,7 @@ fun LibraryScreen(
                              modifier = Modifier.padding(horizontal = 16.dp),
                              actions = {
                                  if (sourceMode == LibraryViewMode.Saved) {
@@ -1257,7 +1257,7 @@ index 8062f756..8b2d9f91 100644
                                      LibraryListManagementButton()
                                      val targetLayout = if (displaySettings.layoutMode == LibraryLayoutMode.HORIZONTAL) {
                                          LibraryLayoutMode.VERTICAL
-@@ -522,6 +523,7 @@ fun LibraryScreen(
+@@ -530,6 +531,7 @@ fun LibraryScreen(
                  }
              }
          }

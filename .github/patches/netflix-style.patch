@@ -1,6 +1,6 @@
 diff --git a/composeApp/src/commonMain/composeResources/values/strings_netflix_style.xml b/composeApp/src/commonMain/composeResources/values/strings_netflix_style.xml
 new file mode 100644
-index 00000000..3101c0e3
+index 00000000..b89cb8c5
 --- /dev/null
 +++ b/composeApp/src/commonMain/composeResources/values/strings_netflix_style.xml
 @@ -0,0 +1,6 @@
@@ -51,7 +51,7 @@ index c8271dda..1fa1bdd2 100644
              title = stringResource(Res.string.settings_continue_watching_section_visibility),
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NetflixStyle.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NetflixStyle.kt
 new file mode 100644
-index 00000000..6480dd81
+index 00000000..bbd20b35
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NetflixStyle.kt
 @@ -0,0 +1,95 @@

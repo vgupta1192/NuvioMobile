@@ -101,10 +101,10 @@ index 00000000..c027ae97
 +    frame.translationY = -((rect.top + rect.bottom) / 2f - 0.5f) * frameHeight * scaleY
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index 733597cb..cb1677d5 100644
+index 3a50349e..2f8491be 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-@@ -1079,6 +1079,30 @@ private fun ExoPlayerSurface(
+@@ -1095,6 +1095,30 @@ private fun ExoPlayerSurface(
          }
      }
  
@@ -135,7 +135,7 @@ index 733597cb..cb1677d5 100644
      AndroidView(
          modifier = modifier,
          factory = { viewContext ->
-@@ -1384,6 +1408,13 @@ private fun LibmpvPlayerSurface(
+@@ -1400,6 +1424,13 @@ private fun LibmpvPlayerSurface(
          playerViewRef?.applyResizeMode(resizeMode)
      }
  
@@ -149,7 +149,7 @@ index 733597cb..cb1677d5 100644
      LaunchedEffect(playerViewRef, sourceUrl, sourceAudioUrl, sanitizedSourceHeaders, externalSubtitles) {
          val view = playerViewRef ?: return@LaunchedEffect
          onControllerReady(
-@@ -1619,9 +1650,65 @@ private class NuvioLibmpvView(
+@@ -1653,9 +1684,65 @@ private class NuvioLibmpvView(
          )
      }
  
@@ -215,7 +215,7 @@ index 733597cb..cb1677d5 100644
                  PlayerResizeMode.Fit -> {
                      mpv.setPropertyDouble("panscan", 0.0)
                      mpv.setPropertyString("video-aspect-override", "no")
-@@ -2099,6 +2186,7 @@ private fun PlayerResizeMode.toExoResizeMode(): Int =
+@@ -2135,6 +2222,7 @@ private fun PlayerResizeMode.toExoResizeMode(): Int =
          PlayerResizeMode.Fit -> AspectRatioFrameLayout.RESIZE_MODE_FIT
          PlayerResizeMode.Fill -> AspectRatioFrameLayout.RESIZE_MODE_FILL
          PlayerResizeMode.Zoom -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
@@ -224,10 +224,10 @@ index 733597cb..cb1677d5 100644
  
  private fun PlayerView.syncLibassOverlay(
 diff --git a/composeApp/src/commonMain/composeResources/values/strings.xml b/composeApp/src/commonMain/composeResources/values/strings.xml
-index 114fc5b9..745eb112 100644
+index 1559f159..ec3d32ff 100644
 --- a/composeApp/src/commonMain/composeResources/values/strings.xml
 +++ b/composeApp/src/commonMain/composeResources/values/strings.xml
-@@ -458,6 +458,7 @@
+@@ -462,6 +462,7 @@
      <string name="compose_player_resize_fill">Fill</string>
      <string name="compose_player_resize_fit">Fit</string>
      <string name="compose_player_resize_zoom">Zoom</string>
@@ -739,10 +739,10 @@ index 606cab52..40e92b22 100644
          runtime.airsPrefix = stringResource(Res.string.compose_player_airs_prefix)
          runtime.tbaLabel = stringResource(Res.string.compose_player_tba)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
-index 46bbe1c8..98cd9484 100644
+index 78c86aa2..03a31b3b 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
-@@ -259,6 +259,7 @@ internal fun PlayerScreenRuntime.cycleResizeMode() {
+@@ -260,6 +260,7 @@ internal fun PlayerScreenRuntime.cycleResizeMode() {
              PlayerResizeMode.Fit -> resizeModeFitLabel
              PlayerResizeMode.Fill -> resizeModeFillLabel
              PlayerResizeMode.Zoom -> resizeModeZoomLabel
@@ -751,7 +751,7 @@ index 46bbe1c8..98cd9484 100644
      )
      controlsVisible = true
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
-index 1ae375ed..75ba0203 100644
+index d6a2b4fd..28daa428 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
 @@ -86,6 +86,7 @@ internal class PlayerScreenRuntime(

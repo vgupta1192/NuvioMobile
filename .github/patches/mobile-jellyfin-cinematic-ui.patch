@@ -34,10 +34,10 @@ index 921324b7..48b11dc3 100644
 +    }.getOrNull()
  }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index ffba2177..8d22f1f2 100644
+index a991dbee..3690de33 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-@@ -1712,11 +1712,24 @@ internal fun MainAppContent(
+@@ -1722,11 +1722,24 @@ internal fun MainAppContent(
                  }
                  entry<JellyfinRoute> { route ->
                      val onBack = rememberGuardedPopBackStack(navController, route)
@@ -65,10 +65,10 @@ index ffba2177..8d22f1f2 100644
                  entry<DownloadsRoute> { route ->
                      DownloadsDestination(
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
-index 43f1a28c..de79442d 100644
+index 43f1a28c..260e8fdd 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
-@@ -48,11 +48,27 @@ internal object AutoSyncSyncedSubtitle {
+@@ -48,19 +48,55 @@ internal object AutoSyncSyncedSubtitle {
      }
  }
  
@@ -77,13 +77,15 @@ index 43f1a28c..de79442d 100644
 + *  add-on subtitle that already has a saved synced timing for this title + stream. */
 +private val loggedRowBasenames = mutableSetOf<String>()
 +
++/** "Auto synced" chip: live for the subtitle AutoSync just corrected, and shown for every
++ *  add-on subtitle that already has a saved synced timing for this title + stream. */
  @Composable
  internal fun AutoSyncedChip(subtitleUrl: String, selected: Boolean) {
 +    // Nuvio fork diagnostics: the stable-looking file name of every row shown in the list, so a
 +    // shared log capture can be compared against the saved timings' URLs on the server.
 +    val rowBase = subtitleUrl.substringBefore('?').substringAfterLast('/')
 +    synchronized(loggedRowBasenames) {
-+        if (loggedRowBasenames.add(rowBase)) {
++        if (loggedRowBasenames.add("row:$rowBase")) {
 +            com.nuvio.app.features.player.SyncedSubtitles.log("subtitle list row file=$rowBase")
 +        }
 +    }
@@ -94,10 +96,53 @@ index 43f1a28c..de79442d 100644
 +    val hasSavedTiming = saved?.second?.values?.any {
 +        com.nuvio.app.features.player.SyncedSubtitles.sameSubtitleFile(it.subtitleUrl, subtitleUrl)
 +    } == true
++    synchronized(loggedRowBasenames) {
++        if (loggedRowBasenames.add("chip:$rowBase:$liveSynced:$hasSavedTiming")) {
++            com.nuvio.app.features.player.SyncedSubtitles.log(
++                "chip row file=$rowBase live=$liveSynced saved=$hasSavedTiming mapRows=${saved?.second?.size ?: 0}",
++            )
++        }
++    }
 +    if (!liveSynced && !hasSavedTiming) return
  
      val tokens = MaterialTheme.nuvio
-     val contentColor = tokens.colors.onAccent.copy(alpha = 0.9f)
+-    val contentColor = tokens.colors.onAccent.copy(alpha = 0.9f)
++    // Nuvio fork: match the source chip's colours per state - the onAccent palette is only
++    // readable on the selected (accent) row; unselected rows sit on the dark player surface.
++    val chipContent = if (selected) {
++        tokens.colors.onAccent.copy(alpha = 0.9f)
++    } else {
++        androidx.compose.ui.graphics.Color.White.copy(alpha = 0.85f)
++    }
++    val chipBackground = if (selected) {
++        tokens.colors.onAccent.copy(alpha = 0.14f)
++    } else {
++        androidx.compose.ui.graphics.Color.White.copy(alpha = 0.08f)
++    }
+     val shape = RoundedCornerShape(999.dp)
+     Row(
+         modifier = Modifier
+             .clip(shape)
+-            .background(tokens.colors.onAccent.copy(alpha = 0.14f))
++            .background(chipBackground)
+             .padding(horizontal = 8.dp, vertical = 3.dp),
+         horizontalArrangement = Arrangement.spacedBy(4.dp),
+         verticalAlignment = Alignment.CenterVertically,
+@@ -68,12 +104,12 @@ internal fun AutoSyncedChip(subtitleUrl: String, selected: Boolean) {
+         Icon(
+             imageVector = Icons.Rounded.Sync,
+             contentDescription = null,
+-            tint = contentColor,
++            tint = chipContent,
+             modifier = Modifier.size(12.dp),
+         )
+         Text(
+             text = stringResource(Res.string.autosync_label_synced),
+-            color = contentColor,
++            color = chipContent,
+             style = MaterialTheme.typography.labelSmall,
+             maxLines = 1,
+         )
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailCastSection.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailCastSection.kt
 index e430bdec..12884be6 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailCastSection.kt
@@ -1775,7 +1820,7 @@ index bfaf55c6..547ca408 100644
 -    }
 -}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
-index 94e9b375..de7d83d6 100644
+index 91924928..6f2891b1 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SyncedSubtitles.kt
 @@ -50,6 +50,10 @@ object SyncedSubtitles {
@@ -1789,7 +1834,7 @@ index 94e9b375..de7d83d6 100644
      private var localLoad: ((name: String) -> String?)? = null
      private var localSave: ((name: String, value: String) -> Unit)? = null
  
-@@ -136,8 +140,10 @@ object SyncedSubtitles {
+@@ -156,8 +160,10 @@ object SyncedSubtitles {
          userPicked = false
          next ?: return
          requestMarks(next.videoId)
@@ -1800,7 +1845,7 @@ index 94e9b375..de7d83d6 100644
              if (local.isNotEmpty() && _playback.value == next) merge(next, local, store = false)
              val remote = runCatching {
                  val result = SupabaseProvider.client.postgrest.rpc(
-@@ -149,8 +155,38 @@ object SyncedSubtitles {
+@@ -169,8 +175,38 @@ object SyncedSubtitles {
                  )
                  decodeList(result.data)
              }.getOrNull().orEmpty()
@@ -1839,7 +1884,7 @@ index 94e9b375..de7d83d6 100644
      }
  
      /** Adds [incoming] to the saved subtitles of [playback]; the newer copy of a subtitle wins. */
-@@ -214,7 +250,21 @@ object SyncedSubtitles {
+@@ -234,7 +270,21 @@ object SyncedSubtitles {
      /** The saved synced subtitle for [url] in this playback, if any. */
      fun savedFor(url: String): Saved? {
          val (playback, saved) = _saved.value ?: return null
@@ -1863,7 +1908,7 @@ index 94e9b375..de7d83d6 100644
  
      /** AutoSync or the audio sync synced [url] to [srt] in this playback: keep it for next time. */
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tmdb/TmdbMetadataService.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tmdb/TmdbMetadataService.kt
-index fe0c628b..29da758d 100644
+index 955da429..5a47e998 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tmdb/TmdbMetadataService.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tmdb/TmdbMetadataService.kt
 @@ -2,6 +2,7 @@ package com.nuvio.app.features.tmdb
@@ -1874,7 +1919,7 @@ index fe0c628b..29da758d 100644
  import com.nuvio.app.features.details.MetaCompany
  import com.nuvio.app.features.details.MetaDetails
  import com.nuvio.app.features.details.MetaPerson
-@@ -71,6 +72,22 @@ object TmdbMetadataService {
+@@ -82,6 +83,22 @@ object TmdbMetadataService {
              }
          }
  
@@ -1897,7 +1942,7 @@ index fe0c628b..29da758d 100644
      suspend fun fetchPersonDetail(
          personId: Int,
          preferCrewCredits: Boolean? = null,
-@@ -2234,3 +2251,15 @@ internal data class TmdbDiscoverResult(
+@@ -2249,3 +2266,15 @@ internal data class TmdbDiscoverResult(
      @SerialName("vote_average") val voteAverage: Double? = null,
      @SerialName("vote_count") val voteCount: Int? = null,
  )
@@ -1936,75 +1981,3 @@ index 0a9fc370..d6ef8634 100644
 +        )
 +    }.getOrNull()
  }
-diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
-index de79442d..260e8fdd 100644
---- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
-+++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/autosync/AutoSyncSyncedLabel.kt
-@@ -52,13 +52,15 @@ internal object AutoSyncSyncedSubtitle {
-  *  add-on subtitle that already has a saved synced timing for this title + stream. */
- private val loggedRowBasenames = mutableSetOf<String>()
- 
-+/** "Auto synced" chip: live for the subtitle AutoSync just corrected, and shown for every
-+ *  add-on subtitle that already has a saved synced timing for this title + stream. */
- @Composable
- internal fun AutoSyncedChip(subtitleUrl: String, selected: Boolean) {
-     // Nuvio fork diagnostics: the stable-looking file name of every row shown in the list, so a
-     // shared log capture can be compared against the saved timings' URLs on the server.
-     val rowBase = subtitleUrl.substringBefore('?').substringAfterLast('/')
-     synchronized(loggedRowBasenames) {
--        if (loggedRowBasenames.add(rowBase)) {
-+        if (loggedRowBasenames.add("row:$rowBase")) {
-             com.nuvio.app.features.player.SyncedSubtitles.log("subtitle list row file=$rowBase")
-         }
-     }
-@@ -68,15 +70,33 @@ internal fun AutoSyncedChip(subtitleUrl: String, selected: Boolean) {
-     val hasSavedTiming = saved?.second?.values?.any {
-         com.nuvio.app.features.player.SyncedSubtitles.sameSubtitleFile(it.subtitleUrl, subtitleUrl)
-     } == true
-+    synchronized(loggedRowBasenames) {
-+        if (loggedRowBasenames.add("chip:$rowBase:$liveSynced:$hasSavedTiming")) {
-+            com.nuvio.app.features.player.SyncedSubtitles.log(
-+                "chip row file=$rowBase live=$liveSynced saved=$hasSavedTiming mapRows=${saved?.second?.size ?: 0}",
-+            )
-+        }
-+    }
-     if (!liveSynced && !hasSavedTiming) return
- 
-     val tokens = MaterialTheme.nuvio
--    val contentColor = tokens.colors.onAccent.copy(alpha = 0.9f)
-+    // Nuvio fork: match the source chip's colours per state - the onAccent palette is only
-+    // readable on the selected (accent) row; unselected rows sit on the dark player surface.
-+    val chipContent = if (selected) {
-+        tokens.colors.onAccent.copy(alpha = 0.9f)
-+    } else {
-+        androidx.compose.ui.graphics.Color.White.copy(alpha = 0.85f)
-+    }
-+    val chipBackground = if (selected) {
-+        tokens.colors.onAccent.copy(alpha = 0.14f)
-+    } else {
-+        androidx.compose.ui.graphics.Color.White.copy(alpha = 0.08f)
-+    }
-     val shape = RoundedCornerShape(999.dp)
-     Row(
-         modifier = Modifier
-             .clip(shape)
--            .background(tokens.colors.onAccent.copy(alpha = 0.14f))
-+            .background(chipBackground)
-             .padding(horizontal = 8.dp, vertical = 3.dp),
-         horizontalArrangement = Arrangement.spacedBy(4.dp),
-         verticalAlignment = Alignment.CenterVertically,
-@@ -84,12 +104,12 @@ internal fun AutoSyncedChip(subtitleUrl: String, selected: Boolean) {
-         Icon(
-             imageVector = Icons.Rounded.Sync,
-             contentDescription = null,
--            tint = contentColor,
-+            tint = chipContent,
-             modifier = Modifier.size(12.dp),
-         )
-         Text(
-             text = stringResource(Res.string.autosync_label_synced),
--            color = contentColor,
-+            color = chipContent,
-             style = MaterialTheme.typography.labelSmall,
-             maxLines = 1,
-         )

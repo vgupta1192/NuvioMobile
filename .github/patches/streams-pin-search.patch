@@ -609,7 +609,7 @@ index 00000000..2de60e50
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt
-index 4ffdd1cd..1e22c13b 100644
+index 4dd43193..b117039c 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt
 @@ -6,6 +6,7 @@ import androidx.compose.animation.fadeIn
@@ -634,7 +634,7 @@ index 4ffdd1cd..1e22c13b 100644
  import androidx.compose.material3.MaterialTheme
  import androidx.compose.material3.Text
  import androidx.compose.runtime.Composable
-@@ -498,16 +502,22 @@ private fun MobileStreamsLayout(
+@@ -501,16 +505,22 @@ private fun MobileStreamsLayout(
                          onRefresh = onRefresh,
                      )
  
@@ -667,7 +667,7 @@ index 4ffdd1cd..1e22c13b 100644
                  }
              }
          }
-@@ -747,6 +757,10 @@ internal fun StreamList(
+@@ -752,6 +762,10 @@ internal fun StreamList(
          StreamBadgeSettingsRepository.ensureLoaded()
          StreamBadgeSettingsRepository.uiState
      }.collectAsStateWithLifecycle()
@@ -678,7 +678,7 @@ index 4ffdd1cd..1e22c13b 100644
  
      CompositionLocalProvider(LocalStreamSizeLabelFormat provides formatStreamSize) {
      LazyColumn(
-@@ -761,8 +775,11 @@ internal fun StreamList(
+@@ -766,8 +780,11 @@ internal fun StreamList(
              item(key = "shared_stream") {
                  Column {
                      StreamSectionHeader(
@@ -692,7 +692,7 @@ index 4ffdd1cd..1e22c13b 100644
                          fetchingText = fetchingText,
                      )
                      StreamCard(
-@@ -787,13 +804,33 @@ internal fun StreamList(
+@@ -792,13 +809,33 @@ internal fun StreamList(
              }
  
              !hasAnyStreams && !uiState.isAnyLoading -> {
@@ -729,7 +729,7 @@ index 4ffdd1cd..1e22c13b 100644
                      streamSection(
                          sectionKey = streamSectionRenderKey(groupIndex = groupIndex, group = group),
                          group = group,
-@@ -846,8 +883,7 @@ private fun LazyListScope.streamSection(
+@@ -851,8 +888,7 @@ private fun LazyListScope.streamSection(
      if (showHeader) {
          item(key = "header_$sectionKey") {
              StreamSectionHeader(
@@ -739,7 +739,7 @@ index 4ffdd1cd..1e22c13b 100644
                  fetchingText = fetchingText,
              )
          }
-@@ -863,7 +899,20 @@ private fun LazyListScope.streamSection(
+@@ -868,7 +904,20 @@ private fun LazyListScope.streamSection(
          val sourceStreams = streamsBySource[sourceName].orEmpty()
          if (showSourceHeaders) {
              item(key = "source_${sectionKey}_$sourceIndex") {
@@ -761,7 +761,7 @@ index 4ffdd1cd..1e22c13b 100644
              }
          }
  
-@@ -908,6 +957,69 @@ private fun LazyListScope.streamSection(
+@@ -913,6 +962,69 @@ private fun LazyListScope.streamSection(
      }
  }
  
@@ -831,7 +831,7 @@ index 4ffdd1cd..1e22c13b 100644
  internal fun streamSectionRenderKey(
      groupIndex: Int,
      group: AddonStreamGroup,
-@@ -938,26 +1050,48 @@ internal fun streamCardRenderKey(
+@@ -943,26 +1055,48 @@ internal fun streamCardRenderKey(
  
  @Composable
  private fun StreamSectionHeader(
@@ -890,7 +890,7 @@ index 4ffdd1cd..1e22c13b 100644
          AnimatedVisibility(visible = isLoading, enter = fadeIn(), exit = fadeOut()) {
              Text(
                  text = fetchingText,
-@@ -967,22 +1101,56 @@ private fun StreamSectionHeader(
+@@ -972,22 +1106,56 @@ private fun StreamSectionHeader(
              )
          }
      }
@@ -956,7 +956,7 @@ index 4ffdd1cd..1e22c13b 100644
      )
  }
  
-@@ -1041,6 +1209,25 @@ private fun StreamActionsSheet(
+@@ -1046,6 +1214,25 @@ private fun StreamActionsSheet(
                      }
              }
  
@@ -983,10 +983,10 @@ index 4ffdd1cd..1e22c13b 100644
              NuvioBottomSheetActionRow(
                  icon = Icons.Rounded.ContentCopy,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsTabletLayout.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsTabletLayout.kt
-index e8b6d5ed..56d1fdf7 100644
+index 956cdbfb..7631107f 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsTabletLayout.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsTabletLayout.kt
-@@ -207,16 +207,22 @@ internal fun TabletStreamsLayout(
+@@ -215,16 +215,22 @@ internal fun TabletStreamsLayout(
                              modifier = Modifier.padding(bottom = 4.dp),
                          )
  

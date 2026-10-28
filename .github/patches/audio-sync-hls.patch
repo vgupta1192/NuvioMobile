@@ -1,5 +1,5 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
-index e303ae00..98e9f0dc 100644
+index b4c7d03e..a529e23f 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/audiosync/AudioSubtitleSyncController.kt
 @@ -180,6 +180,8 @@ internal class AudioSubtitleSyncController(
@@ -237,7 +237,7 @@ index e303ae00..98e9f0dc 100644
          decoder?.offerPlaybackPcm(mono, frames, sampleRate, mediaTimeUs)
      }
  
-@@ -1249,6 +1339,8 @@ internal class AudioSubtitleSyncController(
+@@ -1292,6 +1382,8 @@ internal class AudioSubtitleSyncController(
          private const val RESUME_THRESHOLD_MS = 10 * 60_000L
          private const val SPOT_BACKOFF_MS = 5L
          private const val DRAIN_TIMEOUT_MS = 10_000L

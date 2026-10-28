@@ -1,8 +1,8 @@
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
-index 30fc3061..71feb84d 100644
+index c1023a99..4b3f3dc6 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
-@@ -1182,6 +1182,7 @@ fun MetaDetailsScreen(
+@@ -1186,6 +1186,7 @@ fun MetaDetailsScreen(
                                                          onWatchedClick = toggleWatched,
                                                          onSaveClick = toggleSaved,
                                                          onSaveLongClick = openLibraryListPicker,
@@ -10,7 +10,7 @@ index 30fc3061..71feb84d 100644
                                                      )
                                                  }
                                              } else {
-@@ -2305,6 +2306,7 @@ private fun ConfiguredMetaSections(
+@@ -2312,6 +2313,7 @@ private fun ConfiguredMetaSections(
                      onWatchedClick = onWatchedClick,
                      onSaveClick = onSaveClick,
                      onSaveLongClick = onSaveLongClick,

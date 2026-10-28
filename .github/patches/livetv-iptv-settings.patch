@@ -192,10 +192,10 @@ index f0a22ebd..2ddd8270 100644
          titleRes = Res.string.compose_settings_page_media_server,
          category = SettingsCategory.General,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
-index 00a60692..b2f1232e 100644
+index c5742c59..f7ba4f06 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
-@@ -822,12 +822,14 @@ private fun MobileSettingsScreen(
+@@ -826,12 +826,14 @@ private fun MobileSettingsScreen(
                      onAddonsClick = onAddonsClick,
                      onPluginsClick = onPluginsClick,
                      onMediaServersClick = { onPageChange(SettingsPage.MediaServers) },
@@ -210,7 +210,7 @@ index 00a60692..b2f1232e 100644
                  SettingsPage.MediaServer -> mediaServerSettingsContent(
                      isTablet = false,
                      onBack = onNavigateBack,
-@@ -1267,12 +1269,14 @@ private fun TabletSettingsScreen(
+@@ -1273,12 +1275,14 @@ private fun TabletSettingsScreen(
                          onAddonsClick = { openInlinePage(SettingsPage.Addons) },
                          onPluginsClick = { openInlinePage(SettingsPage.Plugins) },
                          onMediaServersClick = { openInlinePage(SettingsPage.MediaServers) },
@@ -226,7 +226,7 @@ index 00a60692..b2f1232e 100644
                          isTablet = true,
                          onBack = onNavigateBack,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsSearch.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsSearch.kt
-index b245a6a2..e4ea940c 100644
+index aa521bc6..bdaa1297 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsSearch.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsSearch.kt
 @@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth

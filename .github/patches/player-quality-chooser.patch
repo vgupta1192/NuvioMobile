@@ -1,8 +1,8 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index 2e92eb58..649797fd 100644
+index 9ad52a2e..4aa301be 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-@@ -41,6 +41,7 @@ import androidx.media3.common.MimeTypes
+@@ -42,6 +42,7 @@ import androidx.media3.common.MimeTypes
  import androidx.media3.common.PlaybackException
  import androidx.media3.common.Player
  import androidx.media3.common.TrackSelectionOverride
@@ -10,7 +10,7 @@ index 2e92eb58..649797fd 100644
  import androidx.media3.common.VideoSize
  import androidx.media3.common.text.Cue
  import androidx.media3.common.text.CueGroup
-@@ -885,6 +886,13 @@ private fun ExoPlayerSurface(
+@@ -910,6 +911,13 @@ private fun ExoPlayerSurface(
                  override fun getAudioTracks(): List<AudioTrack> =
                      exoPlayer.extractAudioTracks(context)
  
@@ -24,7 +24,7 @@ index 2e92eb58..649797fd 100644
                  override suspend fun getMediaInfo(): PlayerMediaInfo {
                      val video = exoPlayer.videoFormat
                      val audio = exoPlayer.audioFormat
-@@ -2275,6 +2283,51 @@ private fun PlayerView.applySubtitleStyle(style: SubtitleStyleState, pipScale: F
+@@ -2404,6 +2412,51 @@ private fun PlayerView.applySubtitleStyle(style: SubtitleStyleState, pipVideoHei
      }
  }
  
@@ -193,7 +193,7 @@ index c9b0f46a..5368d6a2 100644
  private fun AudioTrackRow(
      track: AudioTrack,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
-index 62eaa18e..cb2b5d55 100644
+index d93164eb..8272749f 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
 @@ -13,6 +13,10 @@ interface PlayerEngineController {
@@ -228,10 +228,10 @@ index 2702619c..6b01de89 100644
  
      SubtitleModal(
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index 03424e47..75579bbb 100644
+index e8a8919a..a64924ea 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -540,6 +540,7 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
+@@ -600,6 +600,7 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
              }
          },
          onAudioModalDismissed = { showAudioModal = false },

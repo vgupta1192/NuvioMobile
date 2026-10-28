@@ -1,8 +1,8 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index 4ef748c..6935c43 100644
+index 392b79b8..69cb5e2b 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-@@ -1188,6 +1188,7 @@ private fun ExoPlayerSurface(
+@@ -1204,6 +1204,7 @@ private fun ExoPlayerSurface(
          sourceKey = playerSourceKey,
          sample = { playerViewRef?.videoSurfaceView?.captureVideoLuma()?.detectContent() },
          onContentRect = { customStretchRect = it },
@@ -10,7 +10,7 @@ index 4ef748c..6935c43 100644
      )
      LaunchedEffect(playerViewRef, latestCustomStretchRect.value) {
          playerViewRef?.applyCustomStretchTransform(latestCustomStretchRect.value)
-@@ -1519,6 +1520,7 @@ private fun LibmpvPlayerSurface(
+@@ -1535,6 +1536,7 @@ private fun LibmpvPlayerSurface(
          sourceKey = listOf(sourceUrl, sourceAudioUrl.orEmpty(), playerViewRef),
          sample = { playerViewRef?.sampleCustomStretchContent() },
          onContentRect = { rect -> playerViewRef?.setCustomStretchContent(rect) },
@@ -19,7 +19,7 @@ index 4ef748c..6935c43 100644
  
      LaunchedEffect(playerViewRef, sourceUrl, sourceAudioUrl, sanitizedSourceHeaders, externalSubtitles) {
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
-index f789520..2d0026d 100644
+index f789520a..2d0026de 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/CustomStretch.kt
 @@ -200,6 +200,9 @@ object BlackBarDetector {

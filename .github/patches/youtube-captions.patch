@@ -40,6 +40,20 @@ index 35310702..8fa1ef20 100644
          SyncLog.i("generated subtitles: reading the stream as ${kind?.uppercase()?.plus(" manifest") ?: "a single file"}")
          val hlsSampler = kind?.let {
              HlsAudioSpotSampler(
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTrackSelection.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTrackSelection.kt
+index 7e9b972f..047a5f6b 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTrackSelection.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTrackSelection.kt
+@@ -23,7 +23,8 @@ internal fun buildAddonSubtitleFetchKey(
+         "${manifest.id}:${manifest.transportUrl}"
+     }
+ 
+-    if (compatibleSubtitleAddons.isEmpty()) return null
++    // YouStream videos have YouTube's own captions even when no add-on offers subtitles for them.
++    if (compatibleSubtitleAddons.isEmpty() && YouTubeCaptions.videoIdOrNull(normalizedVideoId) == null) return null
+     return buildString {
+         append(normalizedType)
+         append('|')
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleRepository.kt
 index 6b359c01..397b2aad 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleRepository.kt
@@ -87,7 +101,7 @@ index 6b359c01..397b2aad 100644
                  _error.value = getString(Res.string.compose_player_no_subtitles_found)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt
 new file mode 100644
-index 0000000..6c0db5d
+index 00000000..6c0db5de
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt
 @@ -0,0 +1,310 @@
@@ -401,17 +415,3 @@ index 0000000..6c0db5d
 +
 +    private fun isSrt(text: String) = "-->" in text && !text.trimStart().startsWith("<")
 +}
-diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTrackSelection.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTrackSelection.kt
-index 7e9b972f..047a5f6b 100644
---- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTrackSelection.kt
-+++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTrackSelection.kt
-@@ -23,7 +23,8 @@ internal fun buildAddonSubtitleFetchKey(
-         "${manifest.id}:${manifest.transportUrl}"
-     }
- 
--    if (compatibleSubtitleAddons.isEmpty()) return null
-+    // YouStream videos have YouTube's own captions even when no add-on offers subtitles for them.
-+    if (compatibleSubtitleAddons.isEmpty() && YouTubeCaptions.videoIdOrNull(normalizedVideoId) == null) return null
-     return buildString {
-         append(normalizedType)
-         append('|')

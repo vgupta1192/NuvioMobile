@@ -200,10 +200,10 @@ index 00000000..d4c5a2df
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-index a7a5c3a1..6f9bb8a0 100644
+index bb94a887..8c8d7809 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-@@ -637,6 +637,8 @@ private fun PlaybackSettingsSection(
+@@ -643,6 +643,8 @@ private fun PlaybackSettingsSection(
  
          VolumeBoostSettingsSection(isTablet = isTablet) // Volume boost hook
  

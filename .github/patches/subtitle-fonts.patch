@@ -1,8 +1,8 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index 11c7acab..0f60ddc1 100644
+index 64c4b15b..9ad52a2e 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-@@ -1545,6 +1545,7 @@ private class NuvioLibmpvView(
+@@ -1561,6 +1561,7 @@ private class NuvioLibmpvView(
          mpv.setOptionString("demuxer-max-bytes", "${libmpvCacheBytes()}").logIfMpvError("demuxer-max-bytes")
          mpv.setOptionString("demuxer-max-back-bytes", "${libmpvCacheBytes()}").logIfMpvError("demuxer-max-back-bytes")
          mpv.setOptionString("vd-lavc-film-grain", "cpu")
@@ -10,7 +10,7 @@ index 11c7acab..0f60ddc1 100644
          mpv.setOptionString("volume-max", com.nuvio.app.features.player.volumeboost.LIBMPV_VOLUME_MAX) // Volume boost hook
          mpv.setPropertyBoolean("keep-open", true)
          mpv.setPropertyBoolean("input-default-bindings", true)
-@@ -1928,6 +1929,7 @@ private class NuvioLibmpvView(
+@@ -1964,6 +1965,7 @@ private class NuvioLibmpvView(
                      mpv.setPropertyString("sub-border-color", style.outlineColor.toMpvColor())
                      mpv.setPropertyString("sub-border-style", style.toMpvSubtitleBorderStyle())
                      mpv.setPropertyString("sub-bold", if (style.bold) "yes" else "no")
@@ -18,7 +18,7 @@ index 11c7acab..0f60ddc1 100644
                      mpv.setPropertyInt("sub-font-size", style.toMpvSubtitleFontSize())
                      mpv.setPropertyInt("sub-outline-size", style.toMpvSubtitleOutlineSize())
                      mpv.setPropertyInt("sub-border-size", style.toMpvSubtitleOutlineSize())
-@@ -2341,7 +2343,9 @@ private fun PlayerView.applySubtitleStyle(style: SubtitleStyleState, pipVideoHei
+@@ -2383,7 +2385,9 @@ private fun PlayerView.applySubtitleStyle(style: SubtitleStyleState, pipVideoHei
                  android.graphics.Color.TRANSPARENT,
                  if (style.outlineEnabled) CaptionStyleCompat.EDGE_TYPE_OUTLINE else CaptionStyleCompat.EDGE_TYPE_NONE,
                  style.outlineColor.toArgb(),
@@ -279,10 +279,10 @@ index 00000000..ba2e02e5
 +@Composable
 +expect fun rememberSubtitleFontPicker(): SubtitleFontPickerState?
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-index 27879934..ab2ed47f 100644
+index fef83d23..d0050ddc 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-@@ -618,6 +618,8 @@ private fun PlaybackSettingsSection(
+@@ -624,6 +624,8 @@ private fun PlaybackSettingsSection(
  
          ConnectionFitSettingsSection(isTablet = isTablet) // Nuvio fork: connection-speed fit
  

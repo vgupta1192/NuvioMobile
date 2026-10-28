@@ -1,6 +1,6 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEffectsAndroid.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEffectsAndroid.kt
 new file mode 100644
-index 00000000..38997610
+index 00000000..759cba5d
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEffectsAndroid.kt
 @@ -0,0 +1,384 @@
@@ -389,10 +389,10 @@ index 00000000..38997610
 +    }
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index 7d5f6390..b244d685 100644
+index e3c00fbc..e318dc60 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-@@ -554,6 +554,14 @@ private fun ExoPlayerSurface(
+@@ -562,6 +562,14 @@ private fun ExoPlayerSurface(
          onDispose { nowPlayingController.release() }
      }
      com.nuvio.app.features.player.volumeboost.ExoVolumeBoostEffect(exoPlayer) // Volume boost hook
@@ -407,7 +407,7 @@ index 7d5f6390..b244d685 100644
      ExoThroughputEffect(exoPlayer, sourceUrl, networkBytesCounter) // Nuvio fork: connection-speed learning
  
      LaunchedEffect(exoPlayer, resolvedMediaItem, initialPositionRequestKey) {
-@@ -938,6 +946,19 @@ private fun ExoPlayerSurface(
+@@ -954,6 +962,19 @@ private fun ExoPlayerSurface(
                      exoPlayer.applySmartEnhance(enabled)
                  }
  
@@ -427,7 +427,7 @@ index 7d5f6390..b244d685 100644
                  override suspend fun getMediaInfo(): PlayerMediaInfo {
                      val video = exoPlayer.videoFormat
                      val audio = exoPlayer.audioFormat
-@@ -1869,7 +1890,36 @@ private class NuvioLibmpvView(
+@@ -1905,7 +1926,36 @@ private class NuvioLibmpvView(
  
              override fun supportsSmartEnhance(): Boolean = true
  
@@ -1319,7 +1319,7 @@ index 00000000..0e488015
 +    )
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
-index 17d23ab9..23be8ebd 100644
+index 4f5dd59c..44692f55 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
 @@ -20,6 +20,13 @@ interface PlayerEngineController {
@@ -1337,10 +1337,10 @@ index 17d23ab9..23be8ebd 100644
      fun showCastDialog() {}
      fun getSubtitleTracks(): List<SubtitleTrack>
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index 30354a0c..db860756 100644
+index 5b2a50dc..784b99df 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -33,6 +33,7 @@ import com.nuvio.app.features.player.skip.internalSkipAction
+@@ -38,6 +38,7 @@ import com.nuvio.app.features.player.skip.internalSkipAction
  import com.nuvio.app.features.servers.ServerStreams
  import com.nuvio.app.features.streams.streamAddonInstanceId
  import com.nuvio.app.isIos
@@ -1348,8 +1348,8 @@ index 30354a0c..db860756 100644
  import kotlinx.coroutines.launch
  import nuvio.composeapp.generated.resources.*
  import org.jetbrains.compose.resources.stringResource
-@@ -320,11 +321,29 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
-     val userRating = rememberUserRating(userRatingTarget.takeIf { canRate })
+@@ -350,11 +351,29 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
+     }
      // Smart Enhance: the engine applies the effect; re-applied whenever the engine (or the choice) changes.
      val smartEnhanceOn by SmartEnhance.enabled.collectAsStateWithLifecycle()
 -    LaunchedEffect(playerController, smartEnhanceOn) {
@@ -1380,10 +1380,10 @@ index 30354a0c..db860756 100644
      }
      SmartEnhanceBanner()
      AnimatedVisibility(
-@@ -592,6 +611,7 @@ private fun BoxScope.RenderPlaybackOverlays(
- 
- @Composable
- private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
+@@ -653,6 +672,7 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
+             controlsVisible = true
+         },
+     )
 +    PlayerEffectsHost(playerController)
      PlayerScreenModalHosts(
          pendingP2pSwitch = pendingP2pSwitch,

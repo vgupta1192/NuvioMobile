@@ -1,6 +1,6 @@
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxRemember.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxRemember.kt
 new file mode 100644
-index 00000000..2edd2973
+index 00000000..5ee760cc
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxRemember.kt
 @@ -0,0 +1,141 @@
@@ -184,10 +184,10 @@ index 6c69e179..e96ce8f6 100644
          val density = LocalDensity.current
          val horizontalSafePadding = playerHorizontalSafePadding()
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
-index cc81b993..025eece0 100644
+index 7f53d873..30c0ed1f 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
-@@ -278,6 +278,7 @@ internal fun PlayerScreenRuntime.cyclePlaybackSpeed() {
+@@ -279,6 +279,7 @@ internal fun PlayerScreenRuntime.cyclePlaybackSpeed() {
      val next = speeds.firstOrNull { it > current + 0.01f } ?: speeds.first()
      partyRateNudge = null
      playerController?.setPlaybackSpeed(next)
@@ -196,10 +196,10 @@ index cc81b993..025eece0 100644
      showGestureMessage(formatPlaybackSpeedLabel(next))
      controlsVisible = true
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index 665d9568..592269ad 100644
+index 2b006b0e..fc2a92e1 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -352,6 +352,11 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+@@ -382,6 +382,11 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
          val info = runCatching { controller.getMediaInfo() }.getOrNull() ?: return@LaunchedEffect
          PlayerEffects.maybeAutoEnhance(info.videoHeight, info.videoBitrate)
      }
@@ -252,10 +252,10 @@ index 00000000..a29f514f
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-index fe794ff2..ae3eafdb 100644
+index 7fb9aeb5..ec3f56f4 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-@@ -644,6 +644,7 @@ private fun PlaybackSettingsSection(
+@@ -647,6 +647,7 @@ private fun PlaybackSettingsSection(
  
          DxSoundSettingsSection(isTablet = isTablet) // dx.bi sound modes hook
          DxEnhanceSettingsSection(isTablet = isTablet) // dx.bi picture enhance hook

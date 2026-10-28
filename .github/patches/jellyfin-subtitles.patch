@@ -1,8 +1,8 @@
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index b42d32fe..252e9e39 100644
+index 8b3f29ff..a991dbee 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-@@ -118,6 +118,7 @@ import com.nuvio.app.features.home.components.shouldBlurContinueWatchingArtwork
+@@ -121,6 +121,7 @@ import com.nuvio.app.features.home.components.shouldBlurContinueWatchingArtwork
  import com.nuvio.app.features.jellyfin.JELLYFIN_META_ID_PREFIX
  import com.nuvio.app.features.jellyfin.JellyfinItem
  import com.nuvio.app.features.jellyfin.JellyfinLauncher
@@ -10,7 +10,7 @@ index b42d32fe..252e9e39 100644
  import com.nuvio.app.features.jellyfin.JellyfinRepository
  import com.nuvio.app.features.jellyfin.JellyfinDetailScreen
  import com.nuvio.app.features.jellyfin.JellyfinScreen
-@@ -914,31 +915,36 @@ internal fun MainAppContent(
+@@ -932,31 +933,36 @@ internal fun MainAppContent(
              val session = JellyfinRepository.uiState.value.session ?: return
              val sourceUrl = JellyfinRepository.streamUrlFor(item) ?: return
              val isEpisode = item.isEpisode

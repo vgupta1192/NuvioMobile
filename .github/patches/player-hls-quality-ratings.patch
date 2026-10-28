@@ -980,7 +980,7 @@ index 299dd1be..baecfeeb 100644
          visible = showQualityModal,
          videoController = videoController,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
-index c4e09f8c..cc81b993 100644
+index 8c4c84b2..7f53d873 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
 @@ -68,6 +68,7 @@ internal fun PlayerScreenRuntime.lockPlayerControls() {
@@ -992,10 +992,10 @@ index c4e09f8c..cc81b993 100644
      showSubtitleModal = false
      showVideoSettingsModal = false
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSourceActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSourceActions.kt
-index 1488ec0e..55763bb1 100644
+index f5cdb250..d960c29b 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSourceActions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeSourceActions.kt
-@@ -622,3 +622,18 @@ private fun PlayerScreenRuntime.saveDirectStreamForReuse(
+@@ -626,3 +626,18 @@ private fun PlayerScreenRuntime.saveDirectStreamForReuse(
          contentLanguage = contentLanguage,
      )
  }
@@ -1015,10 +1015,10 @@ index 1488ec0e..55763bb1 100644
 +    controlsVisible = true
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
-index ce1d0be0..46f0cc27 100644
+index b0f522c7..a41ec991 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
-@@ -200,6 +200,10 @@ internal class PlayerScreenRuntime(
+@@ -205,6 +205,10 @@ internal class PlayerScreenRuntime(
  
      var showAudioModal by mutableStateOf(false)
      var showQualityModal by mutableStateOf(false)
@@ -1030,10 +1030,10 @@ index ce1d0be0..46f0cc27 100644
      var isMiniPresentation by mutableStateOf(false)
      var showSubtitleModal by mutableStateOf(false)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index 1d813255..234a77d7 100644
+index a3cc8c2a..a7b32b92 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -128,6 +128,22 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+@@ -136,6 +136,22 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
  
      BindAutoSyncRuntimeEffects() // AutoSync hook
  
@@ -1056,7 +1056,7 @@ index 1d813255..234a77d7 100644
      Box(
          modifier = Modifier
              .fillMaxSize()
-@@ -161,7 +177,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+@@ -169,7 +185,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
                  commitHorizontalSeekState = gestureCallbacks.commitHorizontalSeek,
              ),
      ) {
@@ -1065,17 +1065,17 @@ index 1d813255..234a77d7 100644
          val playbackKey = activePlaybackKey
          val initialPositionRequestKey = currentInitialPositionRequestKey()
          if (playerSurfaceSourceUrl != null) {
-@@ -301,9 +317,6 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+@@ -325,9 +341,6 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
      val userRatingTarget = currentUserRatingTarget()
      val canRate = rememberCanRate(userRatingTarget)
      val userRating = rememberUserRating(userRatingTarget.takeIf { canRate })
 -    val hasVideoQualities = remember(playerController, audioTracks, playbackSnapshot.durationMs) {
 -        playerController?.getVideoQualities().orEmpty().size > 1
 -    }
-     AnimatedVisibility(
-         visible = (controlsVisible || showParentalGuide) && !playerControlsLocked && !isInPip && !seekPreview.showSyncPanel,
-         enter = fadeIn(),
-@@ -443,10 +456,10 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+     LaunchedEffect(folded) {
+         if (folded) {
+             controlsVisible = true
+@@ -476,10 +489,10 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
                  null
              },
              userRating = userRating,
@@ -1088,7 +1088,7 @@ index 1d813255..234a77d7 100644
                  }
              } else {
                  null
-@@ -598,6 +611,18 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
+@@ -659,6 +672,18 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
          onAudioModalDismissed = { showAudioModal = false },
          showQualityModal = showQualityModal,
          onQualityModalDismissed = { showQualityModal = false },

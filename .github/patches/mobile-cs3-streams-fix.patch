@@ -1,5 +1,5 @@
 diff --git a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/cloudstream/CloudStreamPlatformRuntime.android.kt b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/cloudstream/CloudStreamPlatformRuntime.android.kt
-index e5521ae..149c46a 100644
+index e5521aef..149c46a8 100644
 --- a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/cloudstream/CloudStreamPlatformRuntime.android.kt
 +++ b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/cloudstream/CloudStreamPlatformRuntime.android.kt
 @@ -253,7 +253,7 @@ internal actual object CloudStreamPlatformRuntime {
@@ -12,7 +12,7 @@ index e5521ae..149c46a 100644
          require(BasePlugin::class.java.isAssignableFrom(pluginClass)) {
              "CloudStream entry point does not extend BasePlugin"
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/cloudstream/CloudStreamNuvioAdapter.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/cloudstream/CloudStreamNuvioAdapter.kt
-index 5d9f900..21db5c7 100644
+index 5d9f9008..21db5c70 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/cloudstream/CloudStreamNuvioAdapter.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/cloudstream/CloudStreamNuvioAdapter.kt
 @@ -127,9 +127,9 @@ fun CloudStreamPlaybackSource.toStreamItem(
@@ -28,7 +28,7 @@ index 5d9f900..21db5c7 100644
  private data class ParsedCloudStreamPlaybackUrl(
      val url: String,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerStreamsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerStreamsRepository.kt
-index e22179f..1ac8208 100644
+index e22179f0..1ac82087 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerStreamsRepository.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerStreamsRepository.kt
 @@ -61,7 +61,7 @@ object PlayerStreamsRepository {
@@ -41,7 +41,7 @@ index e22179f..1ac8208 100644
      // source panel
      private val _sourceState = MutableStateFlow(StreamsUiState())
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/PlaybackAvailability.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/PlaybackAvailability.kt
-index 5299665..851d413 100644
+index 52996659..851d4134 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/PlaybackAvailability.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/PlaybackAvailability.kt
 @@ -9,6 +9,7 @@ import com.nuvio.app.features.addons.AddonManifest
@@ -112,7 +112,7 @@ index 5299665..851d413 100644
      }
  }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
-index 8e75c67..6a3861c 100644
+index 8e75c67b..6a3861cd 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
 @@ -42,7 +42,7 @@ object StreamsRepository {

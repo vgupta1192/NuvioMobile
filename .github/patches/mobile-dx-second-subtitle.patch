@@ -175,17 +175,17 @@ index 00000000..79b66949
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index 592269ad..efec777e 100644
+index fc2a92e1..105886cf 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -359,6 +359,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+@@ -389,6 +389,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
      }
      SmartEnhanceBanner()
      DxPlayerHintHost() // dx.bi player hints hook
 +    DxSecondSubtitleOverlay() // dx.bi second subtitle hook
      AnimatedVisibility(
-         visible = (controlsVisible || showParentalGuide) && !playerControlsLocked && !isInPip && !seekPreview.showSyncPanel,
-         enter = fadeIn(),
+         visible = (controlsVisible || folded || showParentalGuide) && !playerControlsLocked && !isInPip &&
+             !(folded && isPanelOpen) && !seekPreview.showSyncPanel,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt
 index 0d429941..197fcae1 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/SubtitleModal.kt
@@ -230,10 +230,10 @@ index 00000000..a4481a35
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-index ae3eafdb..08827007 100644
+index ec3f56f4..4f63b8e8 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-@@ -645,6 +645,7 @@ private fun PlaybackSettingsSection(
+@@ -648,6 +648,7 @@ private fun PlaybackSettingsSection(
          DxSoundSettingsSection(isTablet = isTablet) // dx.bi sound modes hook
          DxEnhanceSettingsSection(isTablet = isTablet) // dx.bi picture enhance hook
          DxRememberSettingsSection(isTablet = isTablet) // dx.bi remember hook

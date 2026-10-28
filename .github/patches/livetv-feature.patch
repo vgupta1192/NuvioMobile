@@ -1,8 +1,8 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
-index 2ecdbeb5..c13fb52d 100644
+index eee68bdd..5c2ea6c4 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
-@@ -92,6 +92,7 @@ open class MainActivity : AppCompatActivity() {
+@@ -94,6 +94,7 @@ open class MainActivity : AppCompatActivity() {
          SyncClientIdentityStorage.initialize(applicationContext)
          AddonHttpClientProvider.initialize(applicationContext)
          AddonStorage.initialize(applicationContext)
@@ -118,10 +118,10 @@ index 00000000..80a3169a
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt
-index ecc72636..a048b310 100644
+index 78fb6c3c..4a8e5af9 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt
-@@ -47,6 +47,7 @@ internal val navigationSavedStateConfiguration = SavedStateConfiguration {
+@@ -48,6 +48,7 @@ internal val navigationSavedStateConfiguration = SavedStateConfiguration {
              subclass(StreamRoute::class, StreamRoute.serializer())
              subclass(CatalogRoute::class, CatalogRoute.serializer())
              subclass(PlayerRoute::class, PlayerRoute.serializer())
@@ -130,10 +130,10 @@ index ecc72636..a048b310 100644
      }
  }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index 4d476215..8b272fdb 100644
+index 632c9d0d..5c9db049 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-@@ -101,6 +101,13 @@ import com.nuvio.app.features.collection.CollectionSyncService
+@@ -104,6 +104,13 @@ import com.nuvio.app.features.collection.CollectionSyncService
  import com.nuvio.app.features.details.MetaDetailsRepository
  import com.nuvio.app.features.details.MetaScreenSettingsRepository
  import com.nuvio.app.features.downloads.DownloadItem
@@ -147,7 +147,7 @@ index 4d476215..8b272fdb 100644
  import com.nuvio.app.features.downloads.DownloadSubtitles
  import com.nuvio.app.features.downloads.DownloadsRepository
  import com.nuvio.app.features.home.HomeCatalogSection
-@@ -705,6 +712,13 @@ internal fun MainAppContent(
+@@ -715,6 +722,13 @@ internal fun MainAppContent(
          }
      }
  
@@ -161,7 +161,7 @@ index 4d476215..8b272fdb 100644
          LaunchedEffect(navController) {
              if (!ownsAppRuntime) return@LaunchedEffect
              AppDeepLinkRepository.pendingDeepLink.collectLatest { deepLink ->
-@@ -854,6 +868,33 @@ internal fun MainAppContent(
+@@ -872,6 +886,33 @@ internal fun MainAppContent(
              navController.navigate(PlayerRoute(launchId = launchId, title = playerLaunch.title))
          }
  
@@ -195,7 +195,7 @@ index 4d476215..8b272fdb 100644
          fun openExternalStreamUrl(url: String): Boolean {
              val opened = runCatching {
                  uriHandler.openUri(url)
-@@ -1539,6 +1580,10 @@ internal fun MainAppContent(
+@@ -1610,6 +1651,10 @@ internal fun MainAppContent(
                          ) appUpdaterController::showDebugTestUpdate else null,
                      )
                  }
@@ -364,7 +364,7 @@ index 00000000..bcce7ffb
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvEpgRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvEpgRepository.kt
 new file mode 100644
-index 00000000..a7c0c83e
+index 00000000..2125f389
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvEpgRepository.kt
 @@ -0,0 +1,157 @@
@@ -2056,10 +2056,10 @@ index 182e6308..9e58fca3 100644
                      val genreExtra = catalog.genreExtra()
                      DiscoverCatalogOption(
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/navigation/Routes.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/navigation/Routes.kt
-index 7cd51dc7..cdd96650 100644
+index 786a8912..99099829 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/navigation/Routes.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/navigation/Routes.kt
-@@ -142,6 +142,10 @@ data class CatalogRoute(
+@@ -148,6 +148,10 @@ data class CatalogRoute(
      override val subtitle: String? = null,
  ) : AppRoute
  

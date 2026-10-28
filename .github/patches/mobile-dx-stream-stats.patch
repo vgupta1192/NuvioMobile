@@ -1,6 +1,6 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/DxStreamStatsAndroid.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/DxStreamStatsAndroid.kt
 new file mode 100644
-index 00000000..e3688763
+index 00000000..43a2f7a9
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/DxStreamStatsAndroid.kt
 @@ -0,0 +1,128 @@
@@ -133,7 +133,7 @@ index 00000000..e3688763
 +    return rows
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index 8e877164..d6f908da 100644
+index a0814de0..e114530f 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 @@ -565,6 +565,7 @@ private fun ExoPlayerSurface(
@@ -144,7 +144,7 @@ index 8e877164..d6f908da 100644
      DisposableEffect(exoAudioFx, exoPictureFx) { // Player effects hook
          onDispose {
              exoAudioFx.release()
-@@ -975,6 +976,8 @@ private fun ExoPlayerSurface(
+@@ -983,6 +984,8 @@ private fun ExoPlayerSurface(
                      exoAudioFx.apply(state)
                  }
  
@@ -153,7 +153,7 @@ index 8e877164..d6f908da 100644
                  override suspend fun getMediaInfo(): PlayerMediaInfo {
                      val video = exoPlayer.videoFormat
                      val audio = exoPlayer.audioFormat
-@@ -1743,6 +1746,13 @@ private class NuvioLibmpvView(
+@@ -1769,6 +1772,13 @@ private class NuvioLibmpvView(
          }
      }
  
@@ -167,7 +167,7 @@ index 8e877164..d6f908da 100644
      suspend fun mediaInfo(): PlayerMediaInfo {
          if (released.get()) return PlayerMediaInfo()
          return withContext(mpvDispatcher) {
-@@ -1895,6 +1905,8 @@ private class NuvioLibmpvView(
+@@ -1923,6 +1933,8 @@ private class NuvioLibmpvView(
  
              override suspend fun getMediaInfo(): PlayerMediaInfo = mediaInfo()
  
@@ -311,10 +311,10 @@ index 00000000..4f013fd0
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
-index 8357b8c6..9ba1b2c2 100644
+index f5aebc15..115c3b5c 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
-@@ -82,6 +82,7 @@ internal fun PlayerToolbar(
+@@ -83,6 +83,7 @@ internal fun PlayerToolbar(
          Spacer(Modifier.weight(1f))
          SmartEnhanceToolbarAction()
          DxEnhanceToolbarAction() // dx.bi picture enhance hook
@@ -323,10 +323,10 @@ index 8357b8c6..9ba1b2c2 100644
              PlayerAction(
                  description = stringResource(Res.string.player_cast),
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
-index 0ca4ff59..9fa2cfbe 100644
+index 7c3b4031..0d6a8b85 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
-@@ -477,6 +477,7 @@ private fun PlayerHeader(
+@@ -535,6 +535,7 @@ private fun PlayerHeader(
                  ) {
                      SmartEnhanceHeaderButton(metrics)
                      DxEnhanceHeaderButton(metrics) // dx.bi picture enhance hook
@@ -335,30 +335,30 @@ index 0ca4ff59..9fa2cfbe 100644
                          PlayerHeaderIconButton(
                              icon = if (castActive) Icons.Rounded.CastConnected else Icons.Rounded.Cast,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
-index 23be8ebd..e8a83fd3 100644
+index 44692f55..d1582355 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
-@@ -50,6 +50,8 @@ interface PlayerEngineController {
-     fun updateNowPlayingMetadata(info: PlayerNowPlayingInfo) {}
-     fun clearNowPlayingInfo() {}
+@@ -52,6 +52,8 @@ interface PlayerEngineController {
      suspend fun getMediaInfo(): PlayerMediaInfo = PlayerMediaInfo()
+     /** The loaded file's chapters, unsorted; empty when the engine cannot read them. */
+     suspend fun getChapters(): List<PlayerChapter> = emptyList()
 +    /** dx.bi stream stats: label and value rows for the stats overlay (empty where an engine has none). */
 +    suspend fun dxStreamStats(): List<Pair<String, String>> = emptyList()
  }
  
  internal fun sanitizePlaybackHeaders(headers: Map<String, String>?): Map<String, String> {
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index efec777e..c1e0fabd 100644
+index 105886cf..74e0850f 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -360,6 +360,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+@@ -390,6 +390,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
      SmartEnhanceBanner()
      DxPlayerHintHost() // dx.bi player hints hook
      DxSecondSubtitleOverlay() // dx.bi second subtitle hook
 +    DxStatsOverlay() // dx.bi stream stats hook
      AnimatedVisibility(
-         visible = (controlsVisible || showParentalGuide) && !playerControlsLocked && !isInPip && !seekPreview.showSyncPanel,
-         enter = fadeIn(),
+         visible = (controlsVisible || folded || showParentalGuide) && !playerControlsLocked && !isInPip &&
+             !(folded && isPanelOpen) && !seekPreview.showSyncPanel,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxStatsSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxStatsSettings.kt
 new file mode 100644
 index 00000000..a2e8330d
@@ -391,10 +391,10 @@ index 00000000..a2e8330d
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-index 08827007..69c3b040 100644
+index 4f63b8e8..322e63dc 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-@@ -646,6 +646,7 @@ private fun PlaybackSettingsSection(
+@@ -649,6 +649,7 @@ private fun PlaybackSettingsSection(
          DxEnhanceSettingsSection(isTablet = isTablet) // dx.bi picture enhance hook
          DxRememberSettingsSection(isTablet = isTablet) // dx.bi remember hook
          DxSecondSubtitleSettingsSection(isTablet = isTablet) // dx.bi second subtitle hook

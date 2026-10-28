@@ -1,6 +1,6 @@
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/DxSoundModesAndroid.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/DxSoundModesAndroid.kt
 new file mode 100644
-index 00000000..4e9cc1ff
+index 00000000..637cda36
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/DxSoundModesAndroid.kt
 @@ -0,0 +1,146 @@
@@ -151,7 +151,7 @@ index 00000000..4e9cc1ff
 +    }
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index 75011edf..04ef76bd 100644
+index 69cb5e2b..576c07f5 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 @@ -564,6 +564,7 @@ private fun ExoPlayerSurface(
@@ -162,7 +162,7 @@ index 75011edf..04ef76bd 100644
      DisposableEffect(exoAudioFx, exoPictureFx) { // Player effects hook
          onDispose {
              exoAudioFx.release()
-@@ -1939,7 +1940,7 @@ private class NuvioLibmpvView(
+@@ -1967,7 +1968,7 @@ private class NuvioLibmpvView(
  
              // Equaliser bands and the dialogue compressor run as one ffmpeg filter chain; an empty string clears it.
              override fun applyAudioEffects(state: AudioFxState) {
@@ -327,10 +327,10 @@ index 0e488015..a7394f20 100644
          } else {
              EqualizerTab(state)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index db860756..8baf44ec 100644
+index 784b99df..9653a62f 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -333,7 +333,9 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long,
+@@ -363,7 +363,9 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
          SmartEnhance.available.value = controller?.supportsSmartEnhance() == true
          controller?.applyPicture(pictureState.copy(smartEnhance = smartEnhanceOn))
      }
@@ -390,10 +390,10 @@ index 00000000..fe7e5e1f
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-index c8a990e2..9c0b03d0 100644
+index 8c8d7809..24e7ef4e 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
-@@ -642,6 +642,8 @@ private fun PlaybackSettingsSection(
+@@ -645,6 +645,8 @@ private fun PlaybackSettingsSection(
  
          PictureSoundSettingsSection(isTablet = isTablet) // Picture and sound hook
  

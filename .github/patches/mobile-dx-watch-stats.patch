@@ -284,10 +284,10 @@ index 00000000..36a95e18
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
-index c2f18b24..06d106ca 100644
+index c3c405c5..666d8402 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
-@@ -437,6 +437,14 @@ private fun PlayerScreenRuntime.BindPlayerUiVisibilityEffects() {
+@@ -447,6 +447,14 @@ private fun PlayerScreenRuntime.BindPlayerUiVisibilityEffects() {
          playbackSnapshot.isEnded,
          playbackSnapshot.durationMs,
      ) {
