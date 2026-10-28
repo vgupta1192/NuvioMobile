@@ -27,7 +27,7 @@ index 00000000..87da56c4
 +    }
 +
 +    private fun ensureInitialized(): Boolean {
-+        if (!ensureInitialized()) {
++        if (!::preferences.isInitialized) {
 +            val context = com.nuvio.app.core.storage.AppContextHolder.get() ?: return false
 +            initialize(context)
 +        }
@@ -100,7 +100,7 @@ index 00000000..87da56c4
 +    }
 +
 +    private fun ensureInitialized(): Boolean {
-+        if (!ensureInitialized()) {
++        if (!::preferences.isInitialized) {
 +            val context = com.nuvio.app.core.storage.AppContextHolder.get() ?: return false
 +            initialize(context)
 +        }
