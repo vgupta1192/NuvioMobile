@@ -139,10 +139,10 @@ index c1fed4b2f..62f895a8f 100644
                      }
                  }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
-index eeb76d4cf..9bae5d2fb 100644
+index eeb76d4cf..75ed9941d 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
-@@ -83,59 +83,75 @@ internal fun PlayerToolbar(
+@@ -83,59 +83,76 @@ internal fun PlayerToolbar(
  ) {
      Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
          Spacer(Modifier.weight(1f))
@@ -187,12 +187,6 @@ index eeb76d4cf..9bae5d2fb 100644
 -                onClick = onPartyClick,
 -                tint = if (partyActive) MaterialTheme.colorScheme.primary else Color.White,
 -            )
--        }
--        val hideLock by remember {
--            com.nuvio.app.features.settings.ForkPrefs.hidePlayerLock.ensureLoaded()
--            com.nuvio.app.features.settings.ForkPrefs.hidePlayerLock.value
--        }.collectAsStateWithLifecycle()
--        if (!hideLock || isLocked) {
 +        var expanded by remember { mutableStateOf(false) }
 +        val items = buildList<@Composable () -> Unit> {
 +            add { SmartEnhanceToolbarAction() }
@@ -252,6 +246,12 @@ index eeb76d4cf..9bae5d2fb 100644
 +                )
 +            }
 +            }
+         }
+-        val hideLock by remember {
+-            com.nuvio.app.features.settings.ForkPrefs.hidePlayerLock.ensureLoaded()
+-            com.nuvio.app.features.settings.ForkPrefs.hidePlayerLock.value
+-        }.collectAsStateWithLifecycle()
+-        if (!hideLock || isLocked) {
 +        val limit = 4
 +        val overflow = items.size > limit
 +        items.take(if (expanded) items.size else limit).forEach { it() }
@@ -268,7 +268,7 @@ index eeb76d4cf..9bae5d2fb 100644
              )
          }
          NuvioBackButton(
-@@ -199,7 +215,7 @@ internal fun PlayerControlActions(
+@@ -199,7 +216,7 @@ internal fun PlayerControlActions(
      val actions = toolbarEntries
          .filter { it.visible }
          .mapNotNull { entry -> actionsById[entry.id] }
