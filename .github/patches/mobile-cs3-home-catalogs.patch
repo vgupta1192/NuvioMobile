@@ -1296,6 +1296,39 @@ index c12464a6..ff56275a 100644
      }
  }
  
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxRemember.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxRemember.kt
+index 5ee760cc..dd2d9c9e 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxRemember.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxRemember.kt
+@@ -130,7 +130,27 @@ internal fun Modifier.dxPlayerKeys(runtime: PlayerScreenRuntime): Modifier = com
+             if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+             if (event.isCtrlPressed || event.isAltPressed || event.isMetaPressed) return@onKeyEvent false
+             if (!DxRemember.keys.value || runtime.isMiniPresentation) return@onKeyEvent false
+-            val digit = DxRemember.digitFor(event.key) ?: return@onKeyEvent false
++            val digit = DxRemember.digitFor(event.key)
++            if (digit == null) {
++                // Hardware keyboard: space toggles playback, left/right seek.
++                val keyController = runtime.playerController
++                if (keyController == null || runtime.partyBlocksControl()) return@onKeyEvent false
++                return@onKeyEvent when (event.key) {
++                    Key.Spacebar -> {
++                        if (runtime.playbackSnapshot.isPlaying) keyController.pause() else keyController.play()
++                        true
++                    }
++                    Key.DirectionLeft -> {
++                        runtime.handleDoubleTapSeek(PlayerSeekDirection.Backward)
++                        true
++                    }
++                    Key.DirectionRight -> {
++                        runtime.handleDoubleTapSeek(PlayerSeekDirection.Forward)
++                        true
++                    }
++                    else -> false
++                }
++            }
+             val durationMs = runtime.playbackSnapshot.durationMs
+             val controller = runtime.playerController
+             if (durationMs <= 0L || controller == null || runtime.partyBlocksControl()) return@onKeyEvent false
 diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/cloudstream/CloudStreamRepository.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/cloudstream/CloudStreamRepository.kt
 index 0863597c..4afb39ca 100644
 --- a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/cloudstream/CloudStreamRepository.kt
