@@ -1,0 +1,134 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailMetaInfo.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailMetaInfo.kt
+index 645aec5d..3ef2d083 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailMetaInfo.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailMetaInfo.kt
+@@ -83,6 +83,16 @@ fun DetailMetaInfo(
+         com.nuvio.app.features.settings.ForkPrefs.nuvioRead.ensureLoaded()
+         com.nuvio.app.features.settings.ForkPrefs.nuvioRead.value
+     }.collectAsStateWithLifecycle()
++    if (forkReadCard) {
++        ForkNuvioReadCard(
++            meta = meta,
++            modifier = modifier,
++            horizontalScrollPadding = horizontalScrollPadding,
++            showOverallRatings = showOverallRatings,
++            isMdbListActive = isMdbListActive,
++        )
++        return
++    }
+     Column(
+         modifier = modifier
+             .fillMaxWidth()
+@@ -442,3 +452,112 @@ private fun formatOneDecimal(value: Double): String {
+ private fun formatWhole(value: Double): String = value.roundToInt().toString()
+ 
+ private fun formatPercent(value: Double): String = "${value.roundToInt()}%"
++
++
++@Composable
++private fun ForkNuvioReadCard(
++    meta: MetaDetails,
++    modifier: Modifier,
++    horizontalScrollPadding: Dp,
++    showOverallRatings: Boolean,
++    isMdbListActive: Boolean,
++) {
++    val pills = buildList {
++        formatMetaReleaseLineForDetails(meta)?.let(::add)
++        formatRuntimeForDisplay(meta.runtime)?.let(::add)
++        meta.ageRating?.trim()?.takeIf { it.isNotBlank() }?.let(::add)
++        meta.imdbRating
++            ?.takeIf { showOverallRatings && !isMdbListActive }
++            ?.takeIf { raw -> raw.toDoubleOrNull()?.let { it > 0.0 } == true }
++            ?.let { add("IMDb $it") }
++    }
++    val description = meta.description?.trim()?.takeIf { it.isNotBlank() }
++    val onSurface = MaterialTheme.colorScheme.onSurface
++    androidx.compose.material3.Surface(
++        modifier = modifier.fillMaxWidth().animateContentSize(),
++        shape = RoundedCornerShape(28.dp),
++        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
++        border = BorderStroke(1.dp, onSurface.copy(alpha = 0.10f)),
++    ) {
++        Column(
++            modifier = Modifier
++                .background(
++                    androidx.compose.ui.graphics.Brush.verticalGradient(
++                        listOf(onSurface.copy(alpha = 0.055f), Color.Transparent),
++                    ),
++                )
++                .padding(16.dp),
++            verticalArrangement = Arrangement.spacedBy(14.dp),
++        ) {
++            if (pills.isNotEmpty()) {
++                Row(
++                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
++                    horizontalArrangement = Arrangement.spacedBy(8.dp),
++                    verticalAlignment = Alignment.CenterVertically,
++                ) {
++                    pills.forEach { pill ->
++                        androidx.compose.material3.Surface(
++                            shape = RoundedCornerShape(999.dp),
++                            color = onSurface.copy(alpha = 0.07f),
++                            border = BorderStroke(1.dp, onSurface.copy(alpha = 0.11f)),
++                        ) {
++                            Text(
++                                text = pill,
++                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
++                                style = MaterialTheme.typography.labelMedium,
++                                color = onSurface,
++                                fontWeight = FontWeight.SemiBold,
++                                maxLines = 1,
++                                overflow = TextOverflow.Ellipsis,
++                            )
++                        }
++                    }
++                }
++            }
++            if (isMdbListActive && meta.externalRatings.isNotEmpty()) {
++                DetailRatingsRow(
++                    ratings = meta.externalRatings,
++                    horizontalScrollPadding = 0.dp,
++                )
++            }
++            if (meta.director.isNotEmpty()) {
++                MetaLabelValueRow(
++                    label = stringResource(Res.string.details_director),
++                    value = meta.director.joinToString(", "),
++                )
++            }
++            if (meta.writer.isNotEmpty()) {
++                MetaLabelValueRow(
++                    label = stringResource(Res.string.details_writer),
++                    value = meta.writer.joinToString(", "),
++                )
++            }
++            if (description != null) {
++                androidx.compose.material3.Surface(
++                    modifier = Modifier.fillMaxWidth(),
++                    shape = RoundedCornerShape(22.dp),
++                    color = onSurface.copy(alpha = 0.055f),
++                    border = BorderStroke(1.dp, onSurface.copy(alpha = 0.08f)),
++                ) {
++                    Column(
++                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 13.dp),
++                        verticalArrangement = Arrangement.spacedBy(8.dp),
++                    ) {
++                        Text(
++                            text = "Story",
++                            style = MaterialTheme.typography.labelMedium,
++                            color = MaterialTheme.colorScheme.primary,
++                            fontWeight = FontWeight.SemiBold,
++                            maxLines = 1,
++                        )
++                        ExpandableDescription(
++                            text = description,
++                            collapsedMaxLines = 4,
++                            style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 23.sp),
++                        )
++                    }
++                }
++            }
++        }
++    }
++}
