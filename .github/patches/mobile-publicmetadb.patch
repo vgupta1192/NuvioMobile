@@ -1,0 +1,3905 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbPlatform.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbPlatform.android.kt
+new file mode 100644
+index 00000000..87da56c4
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbPlatform.android.kt
+@@ -0,0 +1,123 @@
++package com.nuvio.app.features.publicmetadb
++
++import android.content.Context
++import android.content.SharedPreferences
++import android.security.keystore.KeyGenParameterSpec
++import android.security.keystore.KeyProperties
++import android.util.Base64
++import java.io.IOException
++import java.security.KeyStore
++import javax.crypto.Cipher
++import javax.crypto.KeyGenerator
++import javax.crypto.SecretKey
++import javax.crypto.spec.GCMParameterSpec
++
++internal actual object PlatformPublicMetaDbAuthPersistence : PublicMetaDbAuthPersistence {
++    private const val keyAlias = "com.nuvio.media.publicmetadb.credentials.v1"
++    private lateinit var preferences: android.content.SharedPreferences
++
++    fun initialize(context: Context) {
++        preferences = context.applicationContext.getSharedPreferences("nuvio_publicmetadb_auth", Context.MODE_PRIVATE)
++    }
++
++    private fun ensureInitialized(): Boolean {
++        if (!ensureInitialized()) {
++            val context = com.nuvio.app.core.storage.AppContextHolder.get() ?: return false
++            initialize(context)
++        }
++        return true
++    }
++
++    private val lock = Any()
++
++    actual override fun read(profileId: Int): String? = synchronized(lock) {
++        if (!ensureInitialized()) return@synchronized null
++        val key = "profile.$profileId"
++        val value = preferences.getString(key, null) ?: return@synchronized null
++        try {
++            val parts = value.split('.', limit = 2)
++            require(parts.size == 2)
++            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
++            cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(128, decode(parts[0])))
++            cipher.updateAAD("$keyAlias:$key".toByteArray(Charsets.UTF_8))
++            cipher.doFinal(decode(parts[1])).toString(Charsets.UTF_8)
++        } catch (_: Exception) {
++            if (!preferences.edit().remove(key).commit()) throw IOException("Unable to clear protected credentials")
++            null
++        }
++    }
++
++    actual override fun write(profileId: Int, value: String?) = synchronized(lock) {
++        if (!ensureInitialized()) return@synchronized
++        val key = "profile.$profileId"
++        val editor = preferences.edit()
++        if (value == null) {
++            editor.remove(key)
++        } else {
++            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
++            cipher.init(Cipher.ENCRYPT_MODE, secretKey())
++            cipher.updateAAD("$keyAlias:$key".toByteArray(Charsets.UTF_8))
++            val encrypted = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
++            editor.putString(key, "${encode(cipher.iv)}.${encode(encrypted)}")
++        }
++        if (!editor.commit()) throw IOException("Unable to save protected credentials")
++    }
++
++    actual override fun clear() = synchronized(lock) {
++        if (!ensureInitialized()) return@synchronized
++        if (!preferences.edit().clear().commit()) throw IOException("Unable to clear protected credentials")
++    }
++
++    private fun secretKey(): SecretKey {
++        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
++        (keyStore.getKey(keyAlias, null) as? SecretKey)?.let { return it }
++        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").run {
++            init(
++                KeyGenParameterSpec.Builder(keyAlias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
++                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
++                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
++                    .build()
++            )
++            generateKey()
++        }
++    }
++
++    private fun encode(value: ByteArray): String = Base64.encodeToString(value, Base64.NO_WRAP)
++    private fun decode(value: String): ByteArray = Base64.decode(value, Base64.NO_WRAP)
++}
++
++internal actual object PlatformPublicMetaDbSyncStorage : PublicMetaDbSyncStorage {
++    private lateinit var preferences: SharedPreferences
++
++    fun initialize(context: Context) {
++        preferences = context.applicationContext.getSharedPreferences("nuvio_publicmetadb_sync", Context.MODE_PRIVATE)
++    }
++
++    private fun ensureInitialized(): Boolean {
++        if (!ensureInitialized()) {
++            val context = com.nuvio.app.core.storage.AppContextHolder.get() ?: return false
++            initialize(context)
++        }
++        return true
++    }
++
++    actual override suspend fun load(profileId: Int): String? =
++        if (ensureInitialized()) preferences.getString("profile.$profileId", null) else null
++
++    actual override suspend fun save(profileId: Int, payload: String, checkScope: () -> Unit) {
++        checkScope()
++        if (!ensureInitialized()) return
++        if (!preferences.edit().putString("profile.$profileId", payload).commit()) throw IOException("Unable to save PublicMetaDB cache")
++    }
++
++    actual override suspend fun remove(profileId: Int, checkScope: () -> Unit) {
++        checkScope()
++        if (!ensureInitialized()) return
++        if (!preferences.edit().remove("profile.$profileId").commit()) throw IOException("Unable to remove PublicMetaDB cache")
++    }
++
++    actual fun clearAll() {
++        if (!ensureInitialized()) return
++        if (!preferences.edit().clear().commit()) throw IOException("Unable to clear PublicMetaDB cache")
++    }
++}
+diff --git a/composeApp/src/commonMain/composeResources/drawable/publicmetadb_logo.xml b/composeApp/src/commonMain/composeResources/drawable/publicmetadb_logo.xml
+new file mode 100644
+index 00000000..dd653656
+--- /dev/null
++++ b/composeApp/src/commonMain/composeResources/drawable/publicmetadb_logo.xml
+@@ -0,0 +1,18 @@
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24">
++    <path
++        android:fillColor="#EBEBEB"
++        android:pathData="M5,0h14a5,5 0,0 1,5 5v14a5,5 0,0 1,-5 5h-14a5,5 0,0 1,-5 -5v-14a5,5 0,0 1,5 -5z" />
++    <path
++        android:fillColor="#0A0A0B"
++        android:pathData="M6,7a6,2.2 0,1 0,12 0a6,2.2 0,1 0,-12 0z" />
++    <path
++        android:fillColor="#0A0A0B"
++        android:pathData="M6,9.2v2.6c0,1.2 2.7,2.2 6,2.2s6,-1 6,-2.2v-2.6c-1.1,1 -3.4,1.6 -6,1.6s-4.9,-0.6 -6,-1.6z" />
++    <path
++        android:fillColor="#0A0A0B"
++        android:pathData="M6,14v3c0,1.2 2.7,2.2 6,2.2s6,-1 6,-2.2v-3c-1.1,1 -3.4,1.6 -6,1.6s-4.9,-0.6 -6,-1.6z" />
++</vector>
+diff --git a/composeApp/src/commonMain/composeResources/values/strings_publicmetadb.xml b/composeApp/src/commonMain/composeResources/values/strings_publicmetadb.xml
+new file mode 100644
+index 00000000..f6e2377d
+--- /dev/null
++++ b/composeApp/src/commonMain/composeResources/values/strings_publicmetadb.xml
+@@ -0,0 +1,36 @@
++<resources>
++    <string name="tracking_source_publicmetadb">PublicMetaDB</string>
++    <string name="settings_publicmetadb_library_description">Your PublicMetaDB watchlist and custom lists.</string>
++    <string name="settings_publicmetadb_progress_description">Continue Watching and Up Next from your PublicMetaDB resume points and watch history.</string>
++    <string name="library_publicmetadb_title">PublicMetaDB Library</string>
++    <string name="library_publicmetadb_load_failed">Could not load your PublicMetaDB library</string>
++    <string name="library_publicmetadb_empty_title">Your PublicMetaDB library is empty</string>
++    <string name="library_publicmetadb_empty_message">Add movies and shows to your PublicMetaDB lists to see them here.</string>
++    <string name="settings_publicmetadb_connect">Connect PublicMetaDB</string>
++    <string name="settings_publicmetadb_connected_as">Connected with key ending %1$s</string>
++    <string name="settings_publicmetadb_connected_description">Sync your lists, watch history, ratings, scrobbles and Continue Watching with PublicMetaDB.</string>
++    <string name="settings_publicmetadb_sign_in_description">Connect PublicMetaDB with an API key to sync your lists, watch history, ratings, scrobbles and Continue Watching.</string>
++    <string name="settings_publicmetadb_finish_sign_in">Finish connecting</string>
++    <string name="settings_publicmetadb_approval_description">Enter your PublicMetaDB API key to finish connecting.</string>
++    <string name="settings_publicmetadb_open_login">Enter API key</string>
++    <string name="settings_publicmetadb_disconnect">Disconnect PublicMetaDB</string>
++    <string name="settings_publicmetadb_missing_credentials">PublicMetaDB connection is unavailable in this build.</string>
++    <string name="settings_publicmetadb_sync_now">Sync now</string>
++    <string name="settings_publicmetadb_visit">Visit PublicMetaDB</string>
++    <string name="settings_publicmetadb_disconnect_description">Stop sending watch updates from this profile and forget the API key. Your PublicMetaDB lists and history are kept.</string>
++    <string name="settings_publicmetadb_account_fallback">your API key</string>
++    <string name="settings_publicmetadb_syncing">Syncing your PublicMetaDB lists…</string>
++    <string name="settings_publicmetadb_last_synced">Last synced %1$s</string>
++    <string name="settings_publicmetadb_api_key_title">Connect PublicMetaDB</string>
++    <string name="settings_publicmetadb_api_key_description">Create an API key on PublicMetaDB under Settings → API, then paste it here. Keys usually start with pm-.</string>
++    <string name="settings_publicmetadb_api_key_label">API key</string>
++    <string name="settings_publicmetadb_get_api_key">Get an API key</string>
++    <string name="settings_publicmetadb_connect_action">Connect</string>
++    <string name="settings_publicmetadb_missing_key">Enter your PublicMetaDB API key.</string>
++    <string name="settings_publicmetadb_invalid_key">PublicMetaDB did not accept this API key. Check it and try again.</string>
++    <string name="settings_publicmetadb_request_failed">Could not reach PublicMetaDB. Please try again.</string>
++    <string name="settings_publicmetadb_rate_limited">PublicMetaDB’s request limit has been reached. Try again shortly.</string>
++    <string name="settings_publicmetadb_blocked">PublicMetaDB blocked this request. Please try again later.</string>
++    <string name="settings_publicmetadb_auth_revoked">Your PublicMetaDB API key is no longer valid. Connect again with a new key.</string>
++    <string name="settings_publicmetadb_unavailable">Could not sync with PublicMetaDB. Please try again.</string>
++</resources>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+index 866ff2fe..4b893fec 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+@@ -1329,6 +1329,7 @@ internal fun MainAppContent(
+                                     LibrarySourceMode.MDBLIST -> stringResource(Res.string.library_mdblist_title)
+             LibrarySourceMode.ANILIST -> stringResource(Res.string.library_anilist_title)
+             LibrarySourceMode.WETRAKR -> stringResource(Res.string.library_wetrakr_title)
++            LibrarySourceMode.PUBLICMETADB -> stringResource(Res.string.library_publicmetadb_title)
+         }
+ 
+         val resolveLibrarySectionTitle = rememberLibrarySectionTitleResolver()
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/tracking/TrackingProviderBootstrap.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/tracking/TrackingProviderBootstrap.kt
+index 297615c9..6ff25e5f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/tracking/TrackingProviderBootstrap.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/tracking/TrackingProviderBootstrap.kt
+@@ -19,11 +19,13 @@ import com.nuvio.app.features.trakt.TraktTrackingLibraryProvider
+ import com.nuvio.app.features.trakt.TraktTrackingProgressProvider
+ import com.nuvio.app.features.watching.sync.TraktWatchedSyncAdapter
+ import com.nuvio.app.features.wetrakr.WeTrakrTracker
++import com.nuvio.app.features.publicmetadb.PublicMetaDbTracker
+ 
+ fun ensureTrackingProvidersRegistered() {
+     MdbListTracker.register()
+     AniListTracker.register()
+     WeTrakrTracker.register()
++    PublicMetaDbTracker.register()
+     TraktAuthRepository.descriptor
+     TraktScrobbleRepository.ensureRegistered()
+     SimklAuthRepository.descriptor
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryModels.kt
+index 4d022bdf..3694aec1 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryModels.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryModels.kt
+@@ -56,6 +56,7 @@ enum class LibrarySourceMode {
+     MDBLIST,
+     ANILIST,
+     WETRAKR,
++    PUBLICMETADB,
+ }
+ 
+ data class LibraryUiState(
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryScreen.kt
+index fd254ce9..4112bb7c 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/library/LibraryScreen.kt
+@@ -330,6 +330,7 @@ fun LibraryScreen(
+                                     LibrarySourceMode.MDBLIST -> stringResource(Res.string.library_mdblist_title)
+                                     LibrarySourceMode.ANILIST -> stringResource(Res.string.library_anilist_title)
+                                     LibrarySourceMode.WETRAKR -> stringResource(Res.string.library_wetrakr_title)
++                                    LibrarySourceMode.PUBLICMETADB -> stringResource(Res.string.library_publicmetadb_title)
+                                 }
+                             },
+                             modifier = Modifier.padding(horizontal = 16.dp),
+@@ -461,6 +462,7 @@ fun LibraryScreen(
+                                         LibrarySourceMode.MDBLIST -> stringResource(Res.string.library_mdblist_load_failed)
+                                         LibrarySourceMode.ANILIST -> stringResource(Res.string.library_anilist_load_failed)
+                                         LibrarySourceMode.WETRAKR -> stringResource(Res.string.library_wetrakr_load_failed)
++                                        LibrarySourceMode.PUBLICMETADB -> stringResource(Res.string.library_publicmetadb_load_failed)
+                                     },
+                                     message = uiState.errorMessage.orEmpty(),
+                                     actionLabel = stringResource(Res.string.action_retry),
+@@ -481,6 +483,7 @@ fun LibraryScreen(
+                                     LibrarySourceMode.MDBLIST -> stringResource(Res.string.library_mdblist_empty_title)
+                                     LibrarySourceMode.ANILIST -> stringResource(Res.string.library_anilist_empty_title)
+                                     LibrarySourceMode.WETRAKR -> stringResource(Res.string.library_wetrakr_empty_title)
++                                    LibrarySourceMode.PUBLICMETADB -> stringResource(Res.string.library_publicmetadb_empty_title)
+                                 },
+                                 message = when (uiState.sourceMode) {
+                                     LibrarySourceMode.LOCAL -> stringResource(Res.string.library_empty_message)
+@@ -489,6 +492,7 @@ fun LibraryScreen(
+                                     LibrarySourceMode.MDBLIST -> stringResource(Res.string.library_mdblist_empty_message)
+                                     LibrarySourceMode.ANILIST -> stringResource(Res.string.library_anilist_empty_message)
+                                     LibrarySourceMode.WETRAKR -> stringResource(Res.string.library_wetrakr_empty_message)
++                                    LibrarySourceMode.PUBLICMETADB -> stringResource(Res.string.library_publicmetadb_empty_message)
+                                 },
+                             )
+                         }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbApiClient.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbApiClient.kt
+new file mode 100644
+index 00000000..6977cd6e
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbApiClient.kt
+@@ -0,0 +1,267 @@
++package com.nuvio.app.features.publicmetadb
++
++import com.nuvio.app.core.network.createApiHttpClient
++import com.nuvio.app.core.network.readBoundedResponseBody
++import io.ktor.client.HttpClient
++import io.ktor.client.request.header
++import io.ktor.client.request.prepareRequest
++import io.ktor.client.request.setBody
++import io.ktor.client.statement.bodyAsChannel
++import io.ktor.http.ContentType
++import io.ktor.http.HttpMethod
++import io.ktor.http.content.TextContent
++import io.ktor.http.contentLength
++import io.ktor.http.encodeURLParameter
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.sync.Mutex
++import kotlinx.coroutines.sync.withLock
++import kotlinx.serialization.json.JsonArray
++import kotlinx.serialization.json.JsonElement
++import kotlinx.serialization.json.JsonObject
++
++internal enum class PublicMetaDbKeyCheck { VALID, INVALID, RATE_LIMITED, BLOCKED, FAILED }
++
++internal data class PublicMetaDbResponse(
++    val status: Int,
++    val body: String,
++    val headers: Map<String, String>,
++) {
++    fun json(): JsonElement? = runCatching { publicMetaDbJson.parseToJsonElement(body) }.getOrNull()
++
++    fun header(name: String): String? = headers[name.lowercase()]?.trim()?.takeIf(String::isNotEmpty)
++
++    val isChallenge: Boolean
++        get() = status == 403 && (header("cf-mitigated") != null || body.contains("Just a moment", ignoreCase = true))
++
++    fun errorMessage(): String? {
++        val root = json() as? JsonObject ?: return null
++        return root.publicMetaDbString("message")
++            ?: root["error"].publicMetaDbObject()?.publicMetaDbString("message")
++            ?: root.publicMetaDbString("error")
++    }
++
++    fun items(): List<JsonObject> {
++        val root = json()
++        val array = when (root) {
++            is JsonArray -> root
++            is JsonObject -> ITEM_KEYS.firstNotNullOfOrNull { key -> root[key] as? JsonArray }
++            else -> null
++        }
++        return array.orEmpty().mapNotNull { it as? JsonObject }
++    }
++
++    fun totalPages(): Int? {
++        val root = json() as? JsonObject ?: return null
++        return root.publicMetaDbInt("totalPages") ?: root.publicMetaDbInt("total_pages")
++    }
++
++    fun item(): JsonObject? {
++        val root = json() as? JsonObject ?: return null
++        return SINGLE_KEYS.firstNotNullOfOrNull { key -> root[key] as? JsonObject } ?: root
++    }
++
++    fun itemId(): String? {
++        val root = json() as? JsonObject ?: return null
++        return SINGLE_KEYS.firstNotNullOfOrNull { key -> (root[key] as? JsonObject)?.publicMetaDbString("id") }
++            ?: root.publicMetaDbString("id")
++            ?: root.publicMetaDbString("list_id")
++            ?: root.publicMetaDbString("rating_id")
++    }
++
++    private companion object {
++        val ITEM_KEYS = listOf("items", "results", "data", "watched_history", "lists", "ratings")
++        val SINGLE_KEYS = listOf("item", "watch_entry", "rating_entry", "list", "data")
++    }
++}
++
++internal class PublicMetaDbApiClient(
++    private val store: PublicMetaDbAuthStore,
++    private val client: HttpClient = createApiHttpClient(),
++    private val now: () -> Long = { kotlin.time.Clock.System.now().toEpochMilliseconds() },
++) {
++    private val throttle = Mutex()
++    private var lastRequestAtEpochMs = 0L
++    private var blockedUntilEpochMs = 0L
++
++    suspend fun verify(apiKey: String): PublicMetaDbKeyCheck {
++        val key = apiKey.trim()
++        if (key.isEmpty()) return PublicMetaDbKeyCheck.INVALID
++        val response = try {
++            send(HttpMethod.Get, "/api/external/lists", listOf("page" to "1", "perPage" to "1"), null, key)
++        } catch (error: CancellationException) {
++            throw error
++        } catch (_: Exception) {
++            return PublicMetaDbKeyCheck.FAILED
++        }
++        return when {
++            response.status in 200..299 -> PublicMetaDbKeyCheck.VALID
++            response.status == 401 -> PublicMetaDbKeyCheck.INVALID
++            response.status == 429 -> PublicMetaDbKeyCheck.RATE_LIMITED
++            response.isChallenge -> PublicMetaDbKeyCheck.BLOCKED
++            response.status == 403 -> PublicMetaDbKeyCheck.INVALID
++            else -> PublicMetaDbKeyCheck.FAILED
++        }
++    }
++
++    suspend fun get(
++        scope: PublicMetaDbAuthScope,
++        path: String,
++        query: List<Pair<String, String>> = emptyList(),
++        allowNotFound: Boolean = false,
++    ): PublicMetaDbResponse = authorized(scope, HttpMethod.Get, path, query, null, allowNotFound, allowConflict = false)
++
++    suspend fun post(
++        scope: PublicMetaDbAuthScope,
++        path: String,
++        body: JsonElement,
++        query: List<Pair<String, String>> = emptyList(),
++        allowNotFound: Boolean = false,
++        allowConflict: Boolean = false,
++    ): PublicMetaDbResponse = authorized(scope, HttpMethod.Post, path, query, body, allowNotFound, allowConflict)
++
++    suspend fun request(
++        scope: PublicMetaDbAuthScope,
++        method: HttpMethod,
++        path: String,
++        body: JsonElement?,
++        allowNotFound: Boolean = false,
++    ): PublicMetaDbResponse = authorized(scope, method, path, emptyList(), body, allowNotFound, allowConflict = false)
++
++    suspend fun delete(
++        scope: PublicMetaDbAuthScope,
++        path: String,
++        query: List<Pair<String, String>> = emptyList(),
++        allowNotFound: Boolean = true,
++    ): PublicMetaDbResponse = authorized(scope, HttpMethod.Delete, path, query, null, allowNotFound, allowConflict = false)
++
++    suspend fun paged(
++        scope: PublicMetaDbAuthScope,
++        path: String,
++        perPage: Int,
++        query: List<Pair<String, String>> = emptyList(),
++        maxPages: Int = MAX_PAGES,
++    ): List<JsonObject> {
++        val results = mutableListOf<JsonObject>()
++        var page = 1
++        while (page <= maxPages) {
++            val response = get(
++                scope,
++                path,
++                query + listOf("page" to page.toString(), "perPage" to perPage.toString()),
++                allowNotFound = true,
++            )
++            if (response.status == 404) break
++            val items = response.items()
++            results += items
++            val totalPages = response.totalPages()
++            val hasMore = if (totalPages != null) page < totalPages else items.size >= perPage
++            if (items.isEmpty() || !hasMore) break
++            page += 1
++        }
++        return results
++    }
++
++    private suspend fun authorized(
++        scope: PublicMetaDbAuthScope,
++        method: HttpMethod,
++        path: String,
++        query: List<Pair<String, String>>,
++        body: JsonElement?,
++        allowNotFound: Boolean,
++        allowConflict: Boolean,
++    ): PublicMetaDbResponse {
++        var attempt = 0
++        while (true) {
++            attempt += 1
++            store.checkScope(scope)
++            val apiKey = store.apiKey() ?: throw PublicMetaDbAuthException(PublicMetaDbAuthError.AUTHORIZATION_REVOKED)
++            val response = send(method, path, query, body?.toString(), apiKey)
++            store.checkScope(scope)
++            when {
++                response.status == 401 -> {
++                    store.clearAuth(scope, PublicMetaDbAuthError.AUTHORIZATION_REVOKED, apiKey)
++                    throw PublicMetaDbAuthException(PublicMetaDbAuthError.AUTHORIZATION_REVOKED)
++                }
++                response.status == 429 -> {
++                    val waitSeconds = (
++                        response.header("retry-after")?.toLongOrNull()
++                            ?: response.header("x-ratelimit-reset-after")?.toDoubleOrNull()?.toLong()
++                            ?: 10L
++                        ).coerceIn(1L, 60L)
++                    blockedUntilEpochMs = now() + waitSeconds * 1_000L
++                    if (attempt >= MAX_ATTEMPTS) {
++                        throw PublicMetaDbApiException(429, blockedUntilEpochMs, response.errorMessage())
++                    }
++                    delay(waitSeconds * 1_000L)
++                }
++                response.status >= 500 && method == HttpMethod.Get && attempt < MAX_ATTEMPTS -> delay(1_500L * attempt)
++                response.status == 404 -> {
++                    if (allowNotFound) return response
++                    throw PublicMetaDbNotFoundException(response.errorMessage())
++                }
++                response.status == 409 && allowConflict -> return response
++                response.status !in 200..299 -> throw PublicMetaDbApiException(
++                    response.status,
++                    message = response.errorMessage(),
++                )
++                else -> return response
++            }
++        }
++    }
++
++    private suspend fun send(
++        requestMethod: HttpMethod,
++        path: String,
++        query: List<Pair<String, String>>,
++        body: String?,
++        apiKey: String,
++    ): PublicMetaDbResponse {
++        awaitSlot()
++        val url = buildString {
++            append(PublicMetaDbConfig.API_BASE_URL)
++            append(path)
++            if (query.isNotEmpty()) {
++                append(if ('?' in path) '&' else '?')
++                append(query.joinToString("&") { (key, value) -> "${key.encodeURLParameter()}=${value.encodeURLParameter()}" })
++            }
++        }
++        return client.prepareRequest(url) {
++            method = requestMethod
++            header("Accept", "application/json")
++            header("User-Agent", PublicMetaDbConfig.USER_AGENT)
++            header("Authorization", "Bearer $apiKey")
++            body?.let { setBody(TextContent(it, ContentType.Application.Json)) }
++        }.execute { response ->
++            PublicMetaDbResponse(
++                status = response.status.value,
++                body = readBoundedResponseBody(response.bodyAsChannel(), response.contentLength()),
++                headers = RESPONSE_HEADERS.mapNotNull { name ->
++                    response.headers[name]?.let { value -> name.lowercase() to value }
++                }.toMap(),
++            )
++        }
++    }
++
++    private suspend fun awaitSlot() {
++        throttle.withLock {
++            val current = now()
++            val waitUntil = maxOf(lastRequestAtEpochMs + MIN_REQUEST_SPACING_MS, blockedUntilEpochMs)
++            if (waitUntil > current) delay(waitUntil - current)
++            lastRequestAtEpochMs = now()
++        }
++    }
++
++    companion object {
++        private const val MAX_ATTEMPTS = 3
++        private const val MIN_REQUEST_SPACING_MS = 60L
++        private const val MAX_PAGES = 200
++        private val RESPONSE_HEADERS = listOf(
++            "Retry-After",
++            "X-RateLimit-Reset-After",
++            "cf-mitigated",
++        )
++
++        internal fun pathSegment(value: String): String = value.encodeURLParameter()
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbAuthStore.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbAuthStore.kt
+new file mode 100644
+index 00000000..2deb33ef
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbAuthStore.kt
+@@ -0,0 +1,142 @@
++package com.nuvio.app.features.publicmetadb
++
++import kotlinx.atomicfu.locks.SynchronizedObject
++import kotlinx.atomicfu.locks.synchronized
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++
++interface PublicMetaDbAuthPersistence {
++    fun read(profileId: Int): String?
++    fun write(profileId: Int, value: String?)
++    fun clear()
++}
++
++internal expect object PlatformPublicMetaDbAuthPersistence : PublicMetaDbAuthPersistence {
++    override fun read(profileId: Int): String?
++    override fun write(profileId: Int, value: String?)
++    override fun clear()
++}
++
++class PublicMetaDbAuthStore(
++    private val persistence: PublicMetaDbAuthPersistence,
++    initialProfileId: Int = 1,
++) {
++    private val lock = SynchronizedObject()
++    private var currentScope = PublicMetaDbAuthScope(initialProfileId, 0)
++    private var stored = load(initialProfileId)
++    private var busy = false
++    private var lastError: PublicMetaDbAuthError? = null
++    private val mutableState = MutableStateFlow(stateFor())
++
++    val state: StateFlow<PublicMetaDbAuthState> = mutableState.asStateFlow()
++
++    fun scope(): PublicMetaDbAuthScope = synchronized(lock) { currentScope }
++
++    fun isCurrent(scope: PublicMetaDbAuthScope): Boolean = synchronized(lock) { currentScope == scope }
++
++    fun checkScope(scope: PublicMetaDbAuthScope) {
++        if (!isCurrent(scope)) throw CancellationException("PublicMetaDB account changed")
++    }
++
++    fun apiKey(): String? = synchronized(lock) { stored.apiKey?.takeIf(String::isNotBlank) }
++
++    fun selectProfile(profileId: Int) = synchronized(lock) {
++        if (currentScope.profileId == profileId) return@synchronized
++        stored = load(profileId)
++        currentScope = PublicMetaDbAuthScope(profileId, currentScope.generation + 1)
++        busy = false
++        lastError = null
++        publish()
++    }
++
++    internal fun authorize(apiKey: String, connectedAtEpochMs: Long, scope: PublicMetaDbAuthScope): Boolean =
++        mutate(scope, advanceGeneration = true, error = null) {
++            PublicMetaDbStoredAuth(
++                apiKey = apiKey.trim(),
++                keyHint = publicMetaDbKeyHint(apiKey),
++                connectedAtEpochMs = connectedAtEpochMs,
++            )
++        }
++
++    fun setBusy(value: Boolean, scope: PublicMetaDbAuthScope) = synchronized(lock) {
++        if (currentScope != scope) return@synchronized
++        busy = value
++        publish()
++    }
++
++    fun setError(error: PublicMetaDbAuthError?, scope: PublicMetaDbAuthScope) = synchronized(lock) {
++        if (currentScope != scope) return@synchronized
++        lastError = error
++        publish()
++    }
++
++    fun clearAuth(
++        scope: PublicMetaDbAuthScope = scope(),
++        error: PublicMetaDbAuthError? = null,
++        expectedApiKey: String? = null,
++    ): Boolean = synchronized(lock) {
++        if (expectedApiKey != null && stored.apiKey != expectedApiKey) return@synchronized false
++        mutate(scope, advanceGeneration = true, error = error) { PublicMetaDbStoredAuth() }
++    }
++
++    fun removeProfile(profileId: Int) = synchronized(lock) {
++        persistence.write(profileId, null)
++        if (currentScope.profileId == profileId) {
++            currentScope = currentScope.copy(generation = currentScope.generation + 1)
++            stored = PublicMetaDbStoredAuth()
++            busy = false
++            lastError = null
++            publish()
++        }
++    }
++
++    fun clearAllProfiles() = synchronized(lock) {
++        persistence.clear()
++        currentScope = currentScope.copy(generation = currentScope.generation + 1)
++        stored = PublicMetaDbStoredAuth()
++        busy = false
++        lastError = null
++        publish()
++    }
++
++    private fun mutate(
++        scope: PublicMetaDbAuthScope,
++        advanceGeneration: Boolean = false,
++        error: PublicMetaDbAuthError? = null,
++        transform: (PublicMetaDbStoredAuth) -> PublicMetaDbStoredAuth,
++    ): Boolean = synchronized(lock) {
++        if (currentScope != scope) return@synchronized false
++        val value = transform(stored)
++        persistence.write(
++            scope.profileId,
++            if (value.apiKey.isNullOrBlank()) null else publicMetaDbJson.encodeToString(PublicMetaDbStoredAuth.serializer(), value),
++        )
++        stored = value
++        if (advanceGeneration) currentScope = currentScope.copy(generation = currentScope.generation + 1)
++        lastError = error
++        publish()
++        true
++    }
++
++    private fun load(profileId: Int): PublicMetaDbStoredAuth = persistence.read(profileId)?.let { value ->
++        runCatching { publicMetaDbJson.decodeFromString(PublicMetaDbStoredAuth.serializer(), value) }.getOrNull()
++    } ?: PublicMetaDbStoredAuth()
++
++    private fun publish() {
++        mutableState.value = stateFor()
++    }
++
++    private fun stateFor(): PublicMetaDbAuthState {
++        val authorized = !stored.apiKey.isNullOrBlank()
++        return PublicMetaDbAuthState(
++            scope = currentScope,
++            isAuthenticated = authorized,
++            keyHint = stored.keyHint.takeIf { authorized },
++            connectedAtEpochMs = stored.connectedAtEpochMs.takeIf { authorized },
++            isBusy = busy,
++            error = lastError,
++        )
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbIdResolver.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbIdResolver.kt
+new file mode 100644
+index 00000000..5d4d26ab
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbIdResolver.kt
+@@ -0,0 +1,224 @@
++package com.nuvio.app.features.publicmetadb
++
++import com.nuvio.app.features.tmdb.TmdbService
++import com.nuvio.app.features.tracking.TrackingAnimeIdMapper
++import com.nuvio.app.features.tracking.TrackingExternalIds
++import com.nuvio.app.features.tracking.TrackingMediaKind
++import com.nuvio.app.features.tracking.TrackingMediaReference
++import com.nuvio.app.features.tracking.parseTrackingExternalIds
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.sync.Mutex
++import kotlinx.coroutines.sync.withLock
++import kotlinx.serialization.json.JsonArray
++import kotlinx.serialization.json.JsonElement
++import kotlinx.serialization.json.JsonObject
++
++internal data class PublicMetaDbTarget(
++    val tmdbId: Long,
++    val isMovie: Boolean,
++    val season: Int? = null,
++    val episode: Int? = null,
++    val imdb: String? = null,
++    val title: String? = null,
++    val year: Int? = null,
++) {
++    val mediaType: String
++        get() = if (isMovie) PublicMetaDbMediaType.MOVIE else PublicMetaDbMediaType.TV
++
++    val ref: PublicMetaDbTitleRef
++        get() = PublicMetaDbTitleRef(mediaType, tmdbId)
++
++    val hasEpisode: Boolean
++        get() = !isMovie && season != null && episode != null
++
++    fun seedMedia(): PublicMetaDbMedia = PublicMetaDbMedia(
++        tmdbId = tmdbId,
++        mediaType = mediaType,
++        title = title,
++        year = year,
++        imdb = imdb,
++    )
++}
++
++private data class PublicMetaDbAnimeSeason(
++    val seasonNumber: Int,
++    val tmdbSeason: Int,
++    val episodeStart: Int,
++    val episodeEnd: Int?,
++    val votes: Long,
++)
++
++internal class PublicMetaDbIdResolver(
++    private val api: PublicMetaDbApiClient,
++    private val sync: PublicMetaDbSyncRepository,
++) {
++    private val lock = Mutex()
++    private val lookupCache = mutableMapOf<String, Long?>()
++    private val animeSeasonCache = mutableMapOf<Long, List<PublicMetaDbAnimeSeason>>()
++
++    suspend fun resolve(media: TrackingMediaReference): PublicMetaDbTarget? {
++        val scope = sync.currentScope()
++        val originalIds = media.ids.mergeMissing(media.catalog?.contentId?.let(::parseTrackingExternalIds) ?: TrackingExternalIds())
++        val isAnimeSource = media.kind == TrackingMediaKind.ANIME || originalIds.hasAnimeIds()
++        val mapped = if (isAnimeSource) TrackingAnimeIdMapper.toImdbReference(media) else media
++        val wasMapped = mapped !== media
++        val isMovie = when (mapped.kind) {
++            TrackingMediaKind.MOVIE -> true
++            TrackingMediaKind.SHOW -> false
++            TrackingMediaKind.ANIME -> mapped.episode == null &&
++                mapped.catalog?.contentType?.trim()?.lowercase()?.let { it == "movie" || it == "film" } == true
++        }
++        val ids = mapped.ids.mergeMissing(
++            mapped.catalog?.contentId?.let(::parseTrackingExternalIds) ?: TrackingExternalIds(),
++        ).let { if (wasMapped) it else it.mergeMissing(originalIds) }
++        val tmdbId = resolveTmdb(scope, ids, isMovie) ?: return null
++        val imdb = ids.imdb?.trim()?.takeIf { it.startsWith("tt", ignoreCase = true) }
++        if (isMovie) {
++            return PublicMetaDbTarget(tmdbId = tmdbId, isMovie = true, imdb = imdb, title = mapped.title, year = mapped.year)
++        }
++        val episodeRef = mapped.episode
++            ?: return PublicMetaDbTarget(tmdbId = tmdbId, isMovie = false, imdb = imdb, title = mapped.title, year = mapped.year)
++        val number = episodeRef.number
++        val season = episodeRef.season ?: 1
++        val adjusted = if (isAnimeSource) animeSeasonEpisode(scope, tmdbId, season, number) else null
++        return PublicMetaDbTarget(
++            tmdbId = tmdbId,
++            isMovie = false,
++            season = adjusted?.first ?: season,
++            episode = adjusted?.second ?: number,
++            imdb = imdb,
++            title = mapped.title,
++            year = mapped.year,
++        )
++    }
++
++    private suspend fun resolveTmdb(scope: PublicMetaDbAuthScope, ids: TrackingExternalIds, isMovie: Boolean): Long? {
++        ids.tmdb?.takeIf { it > 0L }?.let { return it }
++        val mediaType = if (isMovie) PublicMetaDbMediaType.MOVIE else PublicMetaDbMediaType.TV
++        val imdb = ids.imdb?.trim()?.takeIf { it.startsWith("tt", ignoreCase = true) }
++        if (imdb != null) {
++            sync.currentProjection().tmdbForImdb(imdb, isMovie)?.let { return it }
++            val viaTmdb = try {
++                TmdbService.ensureTmdbId(imdb, if (isMovie) "movie" else "tv")?.toLongOrNull()
++            } catch (error: CancellationException) {
++                throw error
++            } catch (_: Exception) {
++                null
++            }
++            viaTmdb?.takeIf { it > 0L }?.let { return it }
++            lookup(scope, "imdb", imdb, mediaType)?.let { return it }
++        }
++        ids.tvdb?.trim()?.takeIf(String::isNotEmpty)?.let { tvdb -> lookup(scope, "tvdb", tvdb, mediaType)?.let { return it } }
++        ids.mal?.let { mal -> lookup(scope, "mal", mal.toString(), mediaType)?.let { return it } }
++        ids.anilist?.let { anilist -> lookup(scope, "anilist", anilist.toString(), mediaType)?.let { return it } }
++        ids.anidb?.let { anidb -> lookup(scope, "anidb", anidb.toString(), mediaType)?.let { return it } }
++        ids.trakt?.let { trakt -> lookup(scope, "trakt", trakt.toString(), mediaType)?.let { return it } }
++        return null
++    }
++
++    private suspend fun lookup(scope: PublicMetaDbAuthScope, idType: String, idValue: String, mediaType: String): Long? {
++        val key = "$idType:$idValue:$mediaType"
++        lock.withLock { if (lookupCache.containsKey(key)) return lookupCache[key] }
++        val result = try {
++            val response = api.get(
++                scope,
++                "/api/external/mappings/lookup",
++                listOf("id_type" to idType, "id_value" to idValue, "media_type" to mediaType),
++                allowNotFound = true,
++            )
++            if (response.status == 404) null else extractLookupTmdbId(response.json(), mediaType)
++        } catch (error: CancellationException) {
++            throw error
++        } catch (error: PublicMetaDbAuthException) {
++            throw error
++        } catch (_: Exception) {
++            return null
++        }
++        lock.withLock {
++            if (lookupCache.size >= MAX_CACHE_ENTRIES) lookupCache.clear()
++            lookupCache[key] = result
++        }
++        return result
++    }
++
++    private fun extractLookupTmdbId(root: JsonElement?, mediaType: String): Long? {
++        val obj = root as? JsonObject
++        val candidates = (obj?.get("results") ?: obj?.get("items") ?: obj?.get("data") ?: root) as? JsonArray
++        if (candidates != null) {
++            return candidates
++                .mapNotNull { it as? JsonObject }
++                .filter { row ->
++                    row.publicMetaDbFirstString("media_type", "mediaType")
++                        ?.let { normalizePublicMetaDbMediaType(it) == mediaType } ?: true
++                }
++                .sortedByDescending { it.publicMetaDbLong("votes") ?: 0L }
++                .firstNotNullOfOrNull { row -> row.publicMetaDbTmdbId(mediaType) }
++        }
++        return obj?.publicMetaDbTmdbId(mediaType)
++    }
++
++    private suspend fun animeSeasonEpisode(
++        scope: PublicMetaDbAuthScope,
++        tmdbId: Long,
++        season: Int,
++        episode: Int,
++    ): Pair<Int, Int>? {
++        if (season <= 0) return null
++        val seasons = animeSeasons(scope, tmdbId)
++        val match = seasons.filter { it.seasonNumber == season }.maxByOrNull(PublicMetaDbAnimeSeason::votes) ?: return null
++        val mappedEpisode = match.episodeStart + episode - 1
++        if (match.episodeEnd != null && mappedEpisode > match.episodeEnd) return null
++        return match.tmdbSeason to mappedEpisode
++    }
++
++    private suspend fun animeSeasons(scope: PublicMetaDbAuthScope, tmdbId: Long): List<PublicMetaDbAnimeSeason> {
++        lock.withLock { animeSeasonCache[tmdbId]?.let { return it } }
++        val seasons = try {
++            api.get(
++                scope,
++                "/api/external/anime-seasons",
++                listOf("tmdb_id" to tmdbId.toString()),
++                allowNotFound = true,
++            ).takeIf { it.status in 200..299 }?.items().orEmpty().mapNotNull { row ->
++                val seasonNumber = row.publicMetaDbFirstInt("season_number", "season", "anime_season") ?: return@mapNotNull null
++                val tmdbSeason = row.publicMetaDbFirstInt("tmdb_season", "tmdb_season_number") ?: return@mapNotNull null
++                val start = row.publicMetaDbFirstInt("tmdb_episode_start", "episode_start", "start_episode") ?: return@mapNotNull null
++                PublicMetaDbAnimeSeason(
++                    seasonNumber = seasonNumber,
++                    tmdbSeason = tmdbSeason,
++                    episodeStart = start.coerceAtLeast(1),
++                    episodeEnd = row.publicMetaDbFirstInt("tmdb_episode_end", "episode_end", "end_episode"),
++                    votes = row.publicMetaDbLong("votes") ?: 0L,
++                )
++            }
++        } catch (error: CancellationException) {
++            throw error
++        } catch (error: PublicMetaDbAuthException) {
++            throw error
++        } catch (_: Exception) {
++            return emptyList()
++        }
++        lock.withLock {
++            if (animeSeasonCache.size >= MAX_CACHE_ENTRIES) animeSeasonCache.clear()
++            animeSeasonCache[tmdbId] = seasons
++        }
++        return seasons
++    }
++
++    fun clear() {
++        if (!lock.tryLock()) return
++        try {
++            lookupCache.clear()
++            animeSeasonCache.clear()
++        } finally {
++            lock.unlock()
++        }
++    }
++
++    private fun TrackingExternalIds.hasAnimeIds(): Boolean =
++        mal != null || anilist != null || anidb != null || kitsu != null
++
++    private companion object {
++        const val MAX_CACHE_ENTRIES = 512
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbModels.kt
+new file mode 100644
+index 00000000..7531b04d
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbModels.kt
+@@ -0,0 +1,342 @@
++package com.nuvio.app.features.publicmetadb
++
++import com.nuvio.app.core.time.parseZonedIsoDateTimeToEpochMs
++import com.nuvio.app.features.watchprogress.WatchProgressEntry
++import kotlinx.serialization.Serializable
++import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.JsonArray
++import kotlinx.serialization.json.JsonElement
++import kotlinx.serialization.json.JsonNull
++import kotlinx.serialization.json.JsonObject
++import kotlinx.serialization.json.JsonPrimitive
++
++object PublicMetaDbConfig {
++    const val API_BASE_URL = "https://publicmetadb.com"
++    const val WEBSITE_URL = "https://publicmetadb.com"
++    const val API_KEY_URL = "https://publicmetadb.com/settings"
++    const val USER_AGENT = "NuvioMobile"
++    const val IMAGE_BASE_URL = "https://image.tmdb.org/t/p"
++    const val RATING_LABEL = "Overall"
++    const val DEFAULT_WATCHLIST_NAME = "Watchlist"
++}
++
++internal val publicMetaDbJson = Json {
++    ignoreUnknownKeys = true
++    coerceInputValues = true
++    encodeDefaults = true
++    isLenient = true
++    explicitNulls = false
++}
++
++object PublicMetaDbMediaType {
++    const val MOVIE = "movie"
++    const val TV = "tv"
++}
++
++object PublicMetaDbListType {
++    const val WATCHLIST = "watchlist"
++    const val CUSTOM = "custom"
++}
++
++@Serializable
++data class PublicMetaDbMedia(
++    val tmdbId: Long,
++    val mediaType: String,
++    val title: String? = null,
++    val year: Int? = null,
++    val imdb: String? = null,
++    val tvdb: Long? = null,
++    val posterPath: String? = null,
++    val backdropPath: String? = null,
++    val genres: List<String> = emptyList(),
++    val runtimeMinutes: Int? = null,
++    val resolvedAtEpochMs: Long = 0L,
++    val complete: Boolean = false,
++)
++
++@Serializable
++data class PublicMetaDbList(
++    val id: String,
++    val name: String,
++    val description: String? = null,
++    val type: String = PublicMetaDbListType.CUSTOM,
++    val isPublic: Boolean = false,
++    val itemCount: Int = 0,
++    val createdAtEpochMs: Long = 0L,
++)
++
++@Serializable
++data class PublicMetaDbListItem(
++    val id: String? = null,
++    val tmdbId: Long,
++    val mediaType: String,
++    val title: String? = null,
++    val year: Int? = null,
++    val posterPath: String? = null,
++    val addedAtEpochMs: Long = 0L,
++)
++
++@Serializable
++data class PublicMetaDbWatchedEntry(
++    val id: String? = null,
++    val tmdbId: Long,
++    val mediaType: String,
++    val season: Int? = null,
++    val episode: Int? = null,
++    val watchedAtEpochMs: Long = 0L,
++)
++
++@Serializable
++data class PublicMetaDbResumePoint(
++    val id: String? = null,
++    val tmdbId: Long,
++    val mediaType: String,
++    val season: Int? = null,
++    val episode: Int? = null,
++    val positionMs: Long = 0L,
++    val runtimeMs: Long = 0L,
++    val progressPercent: Double = 0.0,
++    val updatedAtEpochMs: Long = 0L,
++    val title: String? = null,
++    val posterPath: String? = null,
++)
++
++@Serializable
++data class PublicMetaDbRatingEntry(
++    val id: String? = null,
++    val tmdbId: Long,
++    val mediaType: String,
++    val season: Int? = null,
++    val episode: Int? = null,
++    val imdb: String? = null,
++    val rating: Int,
++    val ratedAtEpochMs: Long = 0L,
++)
++
++@Serializable
++data class PublicMetaDbSyncSnapshot(
++    val accountKey: String = "",
++    val lists: List<PublicMetaDbList> = emptyList(),
++    val listItems: Map<String, List<PublicMetaDbListItem>> = emptyMap(),
++    val watched: List<PublicMetaDbWatchedEntry> = emptyList(),
++    val resume: List<PublicMetaDbResumePoint> = emptyList(),
++    val ratings: List<PublicMetaDbRatingEntry> = emptyList(),
++    val media: Map<String, PublicMetaDbMedia> = emptyMap(),
++    val localPlayback: List<WatchProgressEntry> = emptyList(),
++    val dismissed: Map<String, Long> = emptyMap(),
++    val checkedAtEpochMs: Long? = null,
++)
++
++data class PublicMetaDbSyncState(
++    val scope: PublicMetaDbAuthScope? = null,
++    val snapshot: PublicMetaDbSyncSnapshot? = null,
++    val isLoading: Boolean = false,
++    val error: PublicMetaDbSyncError? = null,
++    val retryAtEpochMs: Long? = null,
++    val attemptedAtEpochMs: Long? = null,
++) {
++    val hasLoaded: Boolean
++        get() = snapshot?.checkedAtEpochMs != null
++}
++
++enum class PublicMetaDbSyncError { UNAVAILABLE, RATE_LIMIT, AUTHORIZATION_REVOKED, BLOCKED }
++
++data class PublicMetaDbAuthScope(val profileId: Int, val generation: Long)
++
++enum class PublicMetaDbAuthError {
++    MISSING_KEY,
++    INVALID_KEY,
++    REQUEST_FAILED,
++    RATE_LIMITED,
++    BLOCKED,
++    AUTHORIZATION_REVOKED,
++}
++
++data class PublicMetaDbAuthState(
++    val scope: PublicMetaDbAuthScope = PublicMetaDbAuthScope(1, 0),
++    val isAuthenticated: Boolean = false,
++    val keyHint: String? = null,
++    val connectedAtEpochMs: Long? = null,
++    val isBusy: Boolean = false,
++    val error: PublicMetaDbAuthError? = null,
++)
++
++@Serializable
++internal data class PublicMetaDbStoredAuth(
++    val apiKey: String? = null,
++    val keyHint: String? = null,
++    val connectedAtEpochMs: Long? = null,
++) {
++    override fun toString(): String = "PublicMetaDbStoredAuth()"
++}
++
++class PublicMetaDbAuthException(val error: PublicMetaDbAuthError) : Exception(error.name)
++
++open class PublicMetaDbApiException(
++    val status: Int,
++    val retryAtEpochMs: Long? = null,
++    message: String? = null,
++) : Exception(message ?: "PublicMetaDB request failed ($status)")
++
++class PublicMetaDbNotFoundException(message: String? = null) : PublicMetaDbApiException(404, message = message)
++
++internal fun Throwable.toPublicMetaDbSyncError(): PublicMetaDbSyncError = when {
++    this is PublicMetaDbAuthException -> PublicMetaDbSyncError.AUTHORIZATION_REVOKED
++    this is PublicMetaDbApiException && status == 429 -> PublicMetaDbSyncError.RATE_LIMIT
++    this is PublicMetaDbApiException && status == 403 -> PublicMetaDbSyncError.BLOCKED
++    else -> PublicMetaDbSyncError.UNAVAILABLE
++}
++
++internal fun publicMetaDbSyncErrorMessage(error: PublicMetaDbSyncError): String = when (error) {
++    PublicMetaDbSyncError.UNAVAILABLE -> "Could not sync with PublicMetaDB. Please try again."
++    PublicMetaDbSyncError.RATE_LIMIT -> "PublicMetaDB's request limit has been reached. Syncing will resume shortly."
++    PublicMetaDbSyncError.AUTHORIZATION_REVOKED -> "Your PublicMetaDB API key is no longer valid. Connect again with a new key."
++    PublicMetaDbSyncError.BLOCKED -> "PublicMetaDB blocked this request. Please try again later."
++}
++
++internal fun publicMetaDbKeyHint(apiKey: String): String = apiKey.trim().takeLast(4)
++
++internal fun publicMetaDbMediaKey(mediaType: String, tmdbId: Long): String =
++    "${normalizePublicMetaDbMediaType(mediaType)}:$tmdbId"
++
++internal fun normalizePublicMetaDbMediaType(value: String?): String = when (value?.trim()?.lowercase()) {
++    "movie", "movies", "film" -> PublicMetaDbMediaType.MOVIE
++    else -> PublicMetaDbMediaType.TV
++}
++
++internal fun isPublicMetaDbMovieType(value: String?): Boolean =
++    normalizePublicMetaDbMediaType(value) == PublicMetaDbMediaType.MOVIE
++
++internal fun publicMetaDbContentType(mediaType: String): String =
++    if (isPublicMetaDbMovieType(mediaType)) "movie" else "series"
++
++internal fun publicMetaDbTypeMatches(mediaType: String, contentType: String?): Boolean {
++    val normalized = contentType?.trim()?.lowercase()?.takeIf(String::isNotEmpty) ?: return true
++    val isMovie = isPublicMetaDbMovieType(mediaType)
++    return if (normalized == "movie" || normalized == "film") isMovie else !isMovie
++}
++
++internal val PublicMetaDbMedia.key: String
++    get() = publicMetaDbMediaKey(mediaType, tmdbId)
++
++internal val PublicMetaDbMedia.isMovie: Boolean
++    get() = isPublicMetaDbMovieType(mediaType)
++
++internal fun PublicMetaDbMedia.contentId(): String =
++    imdb?.takeIf { it.startsWith("tt", ignoreCase = true) } ?: "tmdb:$tmdbId"
++
++internal fun PublicMetaDbMedia.aliases(): List<String> = listOfNotNull(
++    imdb?.takeIf { it.startsWith("tt", ignoreCase = true) },
++    "tmdb:$tmdbId",
++    tvdb?.let { "tvdb:$it" },
++)
++
++internal fun PublicMetaDbMedia.displayTitle(): String =
++    title?.trim()?.takeIf(String::isNotEmpty) ?: "PublicMetaDB $tmdbId"
++
++internal fun PublicMetaDbMedia.posterUrl(): String? = posterPath?.let { publicMetaDbImageUrl("w500", it) }
++
++internal fun PublicMetaDbMedia.backdropUrl(): String? = backdropPath?.let { publicMetaDbImageUrl("w1280", it) }
++
++internal fun PublicMetaDbMedia.providerItemId(): String = "publicmetadb:$mediaType:$tmdbId"
++
++internal fun PublicMetaDbMedia.mergeMissing(other: PublicMetaDbMedia): PublicMetaDbMedia = copy(
++    title = title?.takeIf(String::isNotBlank) ?: other.title,
++    year = year ?: other.year,
++    imdb = imdb?.takeIf(String::isNotBlank) ?: other.imdb,
++    tvdb = tvdb ?: other.tvdb,
++    posterPath = posterPath?.takeIf(String::isNotBlank) ?: other.posterPath,
++    backdropPath = backdropPath?.takeIf(String::isNotBlank) ?: other.backdropPath,
++    genres = genres.ifEmpty { other.genres },
++    runtimeMinutes = runtimeMinutes ?: other.runtimeMinutes,
++)
++
++internal fun publicMetaDbImageUrl(size: String, path: String): String? {
++    val trimmed = path.trim().takeIf(String::isNotEmpty) ?: return null
++    if (trimmed.startsWith("http", ignoreCase = true)) return trimmed
++    return "${PublicMetaDbConfig.IMAGE_BASE_URL}/$size${if (trimmed.startsWith('/')) trimmed else "/$trimmed"}"
++}
++
++internal fun normalizePublicMetaDbContentId(value: String): String {
++    val trimmed = value.trim().lowercase()
++    if (trimmed.startsWith("tt")) return trimmed.substringBefore(':')
++    val prefix = trimmed.substringBefore(':', "")
++    if (prefix in setOf("tmdb", "tvdb", "imdb")) {
++        val parts = trimmed.split(':')
++        val id = if (parts.size >= 3 && parts[1] in setOf("movie", "tv", "series", "show")) parts[2] else parts.getOrNull(1).orEmpty()
++        return if (prefix == "imdb") id else "$prefix:$id"
++    }
++    return trimmed
++}
++
++internal fun JsonElement?.publicMetaDbObject(): JsonObject? = this as? JsonObject
++
++internal fun JsonElement?.publicMetaDbArray(): List<JsonElement> = (this as? JsonArray).orEmpty()
++
++internal fun JsonObject.publicMetaDbString(key: String): String? =
++    (this[key] as? JsonPrimitive)?.takeUnless { it is JsonNull }?.content?.trim()?.takeIf { it.isNotEmpty() && it != "null" }
++
++internal fun JsonObject.publicMetaDbLong(key: String): Long? =
++    publicMetaDbString(key)?.let { it.toLongOrNull() ?: it.toDoubleOrNull()?.toLong() }
++
++internal fun JsonObject.publicMetaDbInt(key: String): Int? = publicMetaDbLong(key)?.toInt()
++
++internal fun JsonObject.publicMetaDbDouble(key: String): Double? = publicMetaDbString(key)?.toDoubleOrNull()
++
++internal fun JsonObject.publicMetaDbBoolean(key: String): Boolean? = when (publicMetaDbString(key)?.lowercase()) {
++    "true", "1" -> true
++    "false", "0" -> false
++    else -> null
++}
++
++internal fun JsonObject.publicMetaDbFirstString(vararg keys: String): String? =
++    keys.firstNotNullOfOrNull { publicMetaDbString(it) }
++
++internal fun JsonObject.publicMetaDbFirstInt(vararg keys: String): Int? =
++    keys.firstNotNullOfOrNull { publicMetaDbInt(it) }
++
++internal fun JsonObject.publicMetaDbEpochMs(vararg keys: String): Long? = keys.firstNotNullOfOrNull { key ->
++    parsePublicMetaDbTimestamp(publicMetaDbString(key))
++}
++
++internal fun parsePublicMetaDbTimestamp(raw: String?): Long? {
++    val value = raw?.trim()?.takeIf(String::isNotEmpty) ?: return null
++    value.toLongOrNull()?.let { number ->
++        val ms = if (number in 1..99_999_999_999L) number * 1_000L else number
++        return ms.takeIf { it > 86_400_000L }
++    }
++    var iso = value.replaceFirst(' ', 'T')
++    if (iso.length == 10) iso += "T00:00:00Z"
++    if (iso.length >= 16 && iso[13] == ':' && (iso.length == 16 || iso[16] != ':')) {
++        iso = iso.substring(0, 16) + ":00" + iso.substring(16)
++    }
++    val hasZone = iso.endsWith("Z", ignoreCase = true) ||
++        Regex("""[+-]\d{2}:?\d{2}$""").containsMatchIn(iso.substringAfter('T', ""))
++    if (!hasZone) iso += "Z"
++    iso = iso.replace("z", "Z")
++    return parseZonedIsoDateTimeToEpochMs(iso)?.takeIf { it > 86_400_000L }
++}
++
++internal fun JsonObject.publicMetaDbTmdbId(mediaType: String? = null): Long? =
++    coercePublicMetaDbTmdbId(this["tmdb_id"] ?: this["tmdbId"] ?: this["tmdb"], mediaType)
++        ?: this["ids"].publicMetaDbObject()?.let { coercePublicMetaDbTmdbId(it["tmdb"], mediaType) }
++        ?: this["media"].publicMetaDbObject()?.let { coercePublicMetaDbTmdbId(it["tmdb_id"] ?: it["tmdb"], mediaType) }
++
++internal fun coercePublicMetaDbTmdbId(element: JsonElement?, mediaType: String? = null): Long? = when (element) {
++    is JsonPrimitive -> element.takeUnless { it is JsonNull }?.content?.trim()?.let { it.toLongOrNull() ?: it.toDoubleOrNull()?.toLong() }
++    is JsonObject -> {
++        val normalized = mediaType?.let(::normalizePublicMetaDbMediaType)
++        val keys = buildList {
++            if (normalized == PublicMetaDbMediaType.TV) addAll(listOf("tv", "show", "series"))
++            if (normalized == PublicMetaDbMediaType.MOVIE) addAll(listOf("movie", "movies"))
++            addAll(listOf("tv", "show", "series", "movie", "movies"))
++        }
++        keys.firstNotNullOfOrNull { key -> element[key]?.let { coercePublicMetaDbTmdbId(it, mediaType) } }
++    }
++    is JsonArray -> element.firstNotNullOfOrNull { coercePublicMetaDbTmdbId(it, mediaType) }
++    else -> null
++}?.takeIf { it > 0L }
++
++internal fun JsonObject.publicMetaDbMediaType(): String? =
++    publicMetaDbFirstString("media_type", "mediaType", "type")
++        ?: this["media"].publicMetaDbObject()?.publicMetaDbFirstString("media_type", "type")
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbProjection.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbProjection.kt
+new file mode 100644
+index 00000000..65886c39
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbProjection.kt
+@@ -0,0 +1,366 @@
++package com.nuvio.app.features.publicmetadb
++
++import com.nuvio.app.features.home.PosterShape
++import com.nuvio.app.features.library.LibraryItem
++import com.nuvio.app.features.library.LibrarySection
++import com.nuvio.app.features.tracking.LibraryListPrivacy
++import com.nuvio.app.features.tracking.TrackingLibraryTab
++import com.nuvio.app.features.tracking.TrackingLibraryTabKind
++import com.nuvio.app.features.tracking.TrackingProviderId
++import com.nuvio.app.features.watched.WatchedItem
++import com.nuvio.app.features.watched.watchedItemKeys
++import com.nuvio.app.features.watchprogress.WatchProgressEntry
++import com.nuvio.app.features.watchprogress.buildPlaybackVideoId
++
++internal const val PUBLICMETADB_LIST_KEY_PREFIX = "publicmetadb:list:"
++internal const val PUBLICMETADB_PENDING_WATCHLIST_KEY = "publicmetadb:watchlist"
++internal const val PUBLICMETADB_SOURCE_PLAYBACK = "publicmetadb_playback"
++internal const val PUBLICMETADB_SOURCE_PROGRESS = "publicmetadb_progress"
++internal const val PUBLICMETADB_SOURCE_LOCAL = "publicmetadb_local"
++private const val PUBLICMETADB_MIN_PLAYBACK_PERCENT = 1.0
++private const val PUBLICMETADB_MAX_PLAYBACK_PERCENT = 97.0
++private const val PUBLICMETADB_MAX_NEXT_UP_SEEDS = 120
++
++private val publicMetaDbSupportedContentTypes = setOf("movie", "series", "tv", "show", "anime")
++
++internal fun publicMetaDbListKey(listId: String): String = "$PUBLICMETADB_LIST_KEY_PREFIX$listId"
++
++internal fun publicMetaDbListId(key: String): String? =
++    key.takeIf { it.startsWith(PUBLICMETADB_LIST_KEY_PREFIX) }?.removePrefix(PUBLICMETADB_LIST_KEY_PREFIX)?.takeIf(String::isNotBlank)
++
++internal data class PublicMetaDbTitleRef(val mediaType: String, val tmdbId: Long) {
++    val key: String get() = publicMetaDbMediaKey(mediaType, tmdbId)
++    val isMovie: Boolean get() = isPublicMetaDbMovieType(mediaType)
++}
++
++internal class PublicMetaDbProjection(val snapshot: PublicMetaDbSyncSnapshot) {
++    private val media: Map<String, PublicMetaDbMedia> = snapshot.media
++
++    private val aliasIndex: Map<String, List<PublicMetaDbTitleRef>> = buildMap<String, MutableList<PublicMetaDbTitleRef>> {
++        media.values.forEach { item ->
++            val ref = PublicMetaDbTitleRef(normalizePublicMetaDbMediaType(item.mediaType), item.tmdbId)
++            item.aliases().forEach { alias ->
++                val list = getOrPut(alias.lowercase()) { mutableListOf() }
++                if (ref !in list) list.add(ref)
++            }
++        }
++    }
++
++    val lists: List<PublicMetaDbList> = snapshot.lists
++        .sortedWith(compareBy<PublicMetaDbList> { if (it.type == PublicMetaDbListType.WATCHLIST) 0 else 1 }.thenBy { it.createdAtEpochMs })
++
++    val watchlist: PublicMetaDbList? = lists.firstOrNull { it.type == PublicMetaDbListType.WATCHLIST }
++
++    val tabs: List<TrackingLibraryTab> = buildList {
++        if (watchlist == null) {
++            add(
++                TrackingLibraryTab(
++                    key = PUBLICMETADB_PENDING_WATCHLIST_KEY,
++                    title = PublicMetaDbConfig.DEFAULT_WATCHLIST_NAME,
++                    providerId = TrackingProviderId.PUBLICMETADB,
++                    kind = TrackingLibraryTabKind.WATCHLIST,
++                    supportedContentTypes = publicMetaDbSupportedContentTypes,
++                    privacy = LibraryListPrivacy.PRIVATE,
++                ),
++            )
++        }
++        lists.forEach { list ->
++            add(
++                TrackingLibraryTab(
++                    key = publicMetaDbListKey(list.id),
++                    title = list.name,
++                    providerId = TrackingProviderId.PUBLICMETADB,
++                    kind = if (list.type == PublicMetaDbListType.WATCHLIST) TrackingLibraryTabKind.WATCHLIST else TrackingLibraryTabKind.PERSONAL,
++                    supportedContentTypes = publicMetaDbSupportedContentTypes,
++                    description = list.description,
++                    privacy = if (list.isPublic) LibraryListPrivacy.PUBLIC else LibraryListPrivacy.PRIVATE,
++                ),
++            )
++        }
++    }
++
++    val watchlistKey: String
++        get() = watchlist?.let { publicMetaDbListKey(it.id) } ?: PUBLICMETADB_PENDING_WATCHLIST_KEY
++
++    fun mediaFor(ref: PublicMetaDbTitleRef): PublicMetaDbMedia =
++        media[ref.key] ?: PublicMetaDbMedia(tmdbId = ref.tmdbId, mediaType = normalizePublicMetaDbMediaType(ref.mediaType))
++
++    fun contentIdFor(ref: PublicMetaDbTitleRef): String = mediaFor(ref).contentId()
++
++    fun aliasesFor(ref: PublicMetaDbTitleRef): List<String> = mediaFor(ref).aliases()
++
++    fun resolve(contentId: String, contentType: String? = null): PublicMetaDbTitleRef? {
++        val normalized = normalizePublicMetaDbContentId(contentId)
++        if (normalized.startsWith("tmdb:")) {
++            val tmdbId = normalized.substringAfter(':').toLongOrNull() ?: return null
++            val explicitType = contentId.trim().lowercase().split(':').getOrNull(1)
++                ?.takeIf { it in setOf("movie", "tv", "series", "show") }
++            val type = explicitType ?: contentType
++            if (type != null) return PublicMetaDbTitleRef(normalizePublicMetaDbMediaType(type), tmdbId)
++            return listOf(PublicMetaDbMediaType.TV, PublicMetaDbMediaType.MOVIE)
++                .map { PublicMetaDbTitleRef(it, tmdbId) }
++                .firstOrNull { media.containsKey(it.key) || hasActivity(it) }
++        }
++        return aliasIndex[normalized].orEmpty()
++            .firstOrNull { ref -> publicMetaDbTypeMatches(ref.mediaType, contentType) }
++    }
++
++    fun tmdbForImdb(imdb: String, isMovie: Boolean): Long? =
++        aliasIndex[imdb.trim().lowercase()].orEmpty().firstOrNull { it.isMovie == isMovie }?.tmdbId
++
++    private fun hasActivity(ref: PublicMetaDbTitleRef): Boolean =
++        snapshot.watched.any { it.tmdbId == ref.tmdbId && isPublicMetaDbMovieType(it.mediaType) == ref.isMovie } ||
++            snapshot.listItems.values.any { items -> items.any { it.tmdbId == ref.tmdbId && isPublicMetaDbMovieType(it.mediaType) == ref.isMovie } }
++
++    fun listItem(listId: String, ref: PublicMetaDbTitleRef): PublicMetaDbListItem? =
++        snapshot.listItems[listId].orEmpty().firstOrNull { it.tmdbId == ref.tmdbId && isPublicMetaDbMovieType(it.mediaType) == ref.isMovie }
++
++    fun membershipKeys(ref: PublicMetaDbTitleRef): Set<String> =
++        lists.filter { list -> listItem(list.id, ref) != null }.mapTo(linkedSetOf()) { publicMetaDbListKey(it.id) }
++
++    val librarySections: List<LibrarySection>
++    val libraryItems: List<LibraryItem>
++
++    init {
++        val keysByTitle = linkedMapOf<String, MutableSet<String>>()
++        lists.forEach { list ->
++            snapshot.listItems[list.id].orEmpty().forEach { item ->
++                keysByTitle.getOrPut(publicMetaDbMediaKey(item.mediaType, item.tmdbId)) { linkedSetOf() } += publicMetaDbListKey(list.id)
++            }
++        }
++        val sections = lists.mapNotNull { list ->
++            val key = publicMetaDbListKey(list.id)
++            val items = snapshot.listItems[list.id].orEmpty()
++                .map { item ->
++                    item.toLibraryItem(keysByTitle[publicMetaDbMediaKey(item.mediaType, item.tmdbId)].orEmpty().ifEmpty { setOf(key) })
++                }
++                .distinctBy { "${it.type}|${it.id}" }
++                .sortedByDescending(LibraryItem::savedAtEpochMs)
++            items.takeIf(List<LibraryItem>::isNotEmpty)?.let { LibrarySection(type = key, displayTitle = list.name, items = it) }
++        }
++        librarySections = sections
++        libraryItems = sections.flatMap(LibrarySection::items)
++            .groupBy { "${it.type}|${it.id}" }
++            .map { (_, group) -> group.maxBy(LibraryItem::savedAtEpochMs) }
++            .sortedByDescending(LibraryItem::savedAtEpochMs)
++    }
++
++    fun libraryItem(contentId: String, contentType: String? = null): LibraryItem? {
++        val ref = resolve(contentId, contentType) ?: return null
++        return libraryItems.firstOrNull { it.tmdbId?.toLong() == ref.tmdbId && publicMetaDbTypeMatches(ref.mediaType, it.type) }
++    }
++
++    val watchedItems: List<WatchedItem> = snapshot.watched.mapNotNull { entry ->
++        val ref = PublicMetaDbTitleRef(normalizePublicMetaDbMediaType(entry.mediaType), entry.tmdbId)
++        val title = mediaFor(ref)
++        val contentId = title.contentId()
++        if (ref.isMovie) {
++            WatchedItem(
++                id = contentId,
++                type = "movie",
++                name = title.displayTitle(),
++                poster = title.posterUrl(),
++                releaseInfo = title.year?.toString(),
++                markedAtEpochMs = entry.watchedAtEpochMs,
++                trackingProviderId = TrackingProviderId.PUBLICMETADB.storageId,
++                trackingProviderItemId = title.providerItemId(),
++                trackingSourceUrl = PublicMetaDbConfig.WEBSITE_URL,
++            )
++        } else {
++            val season = entry.season ?: return@mapNotNull null
++            val episode = entry.episode ?: return@mapNotNull null
++            WatchedItem(
++                id = contentId,
++                type = "series",
++                name = title.displayTitle(),
++                poster = title.posterUrl(),
++                releaseInfo = title.year?.toString(),
++                season = season,
++                episode = episode,
++                videoId = buildPlaybackVideoId(contentId, season, episode),
++                markedAtEpochMs = entry.watchedAtEpochMs,
++                trackingProviderId = TrackingProviderId.PUBLICMETADB.storageId,
++                trackingProviderItemId = title.providerItemId(),
++                trackingSourceUrl = PublicMetaDbConfig.WEBSITE_URL,
++            )
++        }
++    }.sortedByDescending(WatchedItem::markedAtEpochMs)
++
++    val watchedKeys: Set<String> = buildSet {
++        snapshot.watched.forEach { entry ->
++            val ref = PublicMetaDbTitleRef(normalizePublicMetaDbMediaType(entry.mediaType), entry.tmdbId)
++            val aliases = aliasesFor(ref)
++            if (ref.isMovie) {
++                aliases.forEach { alias -> addAll(watchedItemKeys("movie", alias)) }
++            } else {
++                val season = entry.season ?: return@forEach
++                val episode = entry.episode ?: return@forEach
++                aliases.forEach { alias -> addAll(watchedItemKeys("series", alias, season, episode)) }
++            }
++        }
++    }
++
++    val showIdSiblings: Map<String, Set<String>> = buildMap {
++        media.values.filterNot(PublicMetaDbMedia::isMovie).forEach { item ->
++            val aliases = item.aliases().toSet()
++            if (aliases.size > 1) aliases.forEach { alias -> put(alias, aliases) }
++        }
++    }
++
++    fun isWatched(ref: PublicMetaDbTitleRef, season: Int? = null, episode: Int? = null): Boolean =
++        snapshot.watched.any { entry ->
++            entry.tmdbId == ref.tmdbId &&
++                isPublicMetaDbMovieType(entry.mediaType) == ref.isMovie &&
++                (ref.isMovie || (entry.season == season && entry.episode == episode))
++        }
++
++    fun resumeFor(ref: PublicMetaDbTitleRef, season: Int?, episode: Int?): PublicMetaDbResumePoint? =
++        snapshot.resume.firstOrNull { point ->
++            point.tmdbId == ref.tmdbId &&
++                isPublicMetaDbMovieType(point.mediaType) == ref.isMovie &&
++                (ref.isMovie || (point.season == season && point.episode == episode))
++        }
++
++    fun resumeFor(entry: WatchProgressEntry): PublicMetaDbResumePoint? {
++        val ref = resolve(entry.parentMetaId, entry.parentMetaType) ?: return null
++        return resumeFor(ref, entry.seasonNumber, entry.episodeNumber)
++    }
++
++    fun rating(ref: PublicMetaDbTitleRef, season: Int?, episode: Int?): PublicMetaDbRatingEntry? =
++        snapshot.ratings.firstOrNull { rating ->
++            rating.tmdbId == ref.tmdbId &&
++                isPublicMetaDbMovieType(rating.mediaType) == ref.isMovie &&
++                rating.season == season &&
++                rating.episode == episode
++        }
++
++    val continueWatching: List<WatchProgressEntry> = buildContinueWatching()
++
++    fun progressEntries(localPlayback: List<WatchProgressEntry>): List<WatchProgressEntry> {
++        val local = localPlayback.filterNot { it.isEffectivelyCompleted }
++        val localContentIds = local.mapTo(mutableSetOf()) { it.parentMetaId.lowercase() }
++        return (local + continueWatching.filter { candidate ->
++            candidate.source == PUBLICMETADB_SOURCE_PROGRESS || candidate.parentMetaId.lowercase() !in localContentIds
++        }).sortedByDescending(WatchProgressEntry::lastUpdatedEpochMs)
++    }
++
++    private fun buildContinueWatching(): List<WatchProgressEntry> {
++        val playback = snapshot.resume.mapNotNull { it.toProgressEntry() }
++        val playingShows = snapshot.resume
++            .filterNot { isPublicMetaDbMovieType(it.mediaType) }
++            .mapTo(mutableSetOf()) { it.tmdbId }
++        val seeds = snapshot.watched
++            .filterNot { isPublicMetaDbMovieType(it.mediaType) }
++            .filter { it.season != null && it.episode != null }
++            .groupBy(PublicMetaDbWatchedEntry::tmdbId)
++            .mapNotNull { (tmdbId, episodes) ->
++                if (tmdbId in playingShows) return@mapNotNull null
++                val latest = (episodes.filter { (it.season ?: 0) > 0 }.ifEmpty { episodes })
++                    .maxWithOrNull(
++                        compareBy<PublicMetaDbWatchedEntry> { it.watchedAtEpochMs }
++                            .thenBy { it.season ?: 0 }
++                            .thenBy { it.episode ?: 0 },
++                    ) ?: return@mapNotNull null
++                if (snapshot.dismissed[publicMetaDbShowKey(tmdbId)] == latest.watchedAtEpochMs) return@mapNotNull null
++                latest
++            }
++            .sortedByDescending(PublicMetaDbWatchedEntry::watchedAtEpochMs)
++            .take(PUBLICMETADB_MAX_NEXT_UP_SEEDS)
++            .mapNotNull { latest ->
++                val season = latest.season ?: return@mapNotNull null
++                val episode = latest.episode ?: return@mapNotNull null
++                val title = mediaFor(PublicMetaDbTitleRef(PublicMetaDbMediaType.TV, latest.tmdbId))
++                val contentId = title.contentId()
++                val runtimeMs = (title.runtimeMinutes ?: 0).toLong() * 60_000L
++                WatchProgressEntry(
++                    contentType = "series",
++                    parentMetaId = contentId,
++                    parentMetaType = "series",
++                    videoId = buildPlaybackVideoId(contentId, season, episode),
++                    title = title.displayTitle(),
++                    poster = title.posterUrl(),
++                    background = title.backdropUrl(),
++                    seasonNumber = season,
++                    episodeNumber = episode,
++                    lastPositionMs = runtimeMs,
++                    durationMs = runtimeMs,
++                    lastUpdatedEpochMs = latest.watchedAtEpochMs,
++                    isCompleted = true,
++                    progressPercent = 100f,
++                    source = PUBLICMETADB_SOURCE_PROGRESS,
++                    trackingProviderId = TrackingProviderId.PUBLICMETADB.storageId,
++                    trackingProviderItemId = title.providerItemId(),
++                    trackingSourceUrl = PublicMetaDbConfig.WEBSITE_URL,
++                )
++            }
++        return (playback + seeds).sortedByDescending(WatchProgressEntry::lastUpdatedEpochMs)
++    }
++
++    private fun PublicMetaDbResumePoint.toProgressEntry(): WatchProgressEntry? {
++        if (progressPercent < PUBLICMETADB_MIN_PLAYBACK_PERCENT || progressPercent >= PUBLICMETADB_MAX_PLAYBACK_PERCENT) return null
++        val ref = PublicMetaDbTitleRef(normalizePublicMetaDbMediaType(mediaType), tmdbId)
++        val title = mediaFor(ref).let { known ->
++            known.copy(
++                title = known.title ?: this.title,
++                posterPath = known.posterPath ?: posterPath,
++            )
++        }
++        val contentId = title.contentId()
++        val isEpisode = !ref.isMovie
++        if (isEpisode && (season == null || episode == null)) return null
++        val durationMs = runtimeMs.takeIf { it > 0L } ?: (title.runtimeMinutes ?: 0).toLong() * 60_000L
++        val position = positionMs.takeIf { it > 0L } ?: (durationMs * (progressPercent / 100.0)).toLong()
++        return WatchProgressEntry(
++            contentType = if (isEpisode) "series" else "movie",
++            parentMetaId = contentId,
++            parentMetaType = if (isEpisode) "series" else "movie",
++            videoId = if (isEpisode) buildPlaybackVideoId(contentId, season, episode) else contentId,
++            title = title.displayTitle(),
++            poster = title.posterUrl(),
++            background = title.backdropUrl(),
++            seasonNumber = if (isEpisode) season else null,
++            episodeNumber = if (isEpisode) episode else null,
++            lastPositionMs = position,
++            durationMs = durationMs,
++            lastUpdatedEpochMs = updatedAtEpochMs,
++            isCompleted = false,
++            progressPercent = progressPercent.toFloat(),
++            source = PUBLICMETADB_SOURCE_PLAYBACK,
++            trackingProviderId = TrackingProviderId.PUBLICMETADB.storageId,
++            trackingProviderItemId = title.providerItemId(),
++            trackingSourceUrl = PublicMetaDbConfig.WEBSITE_URL,
++        )
++    }
++
++    private fun PublicMetaDbListItem.toLibraryItem(listKeys: Set<String>): LibraryItem {
++        val ref = PublicMetaDbTitleRef(normalizePublicMetaDbMediaType(mediaType), tmdbId)
++        val known = mediaFor(ref)
++        val title = known.copy(
++            title = known.title ?: this.title,
++            year = known.year ?: year,
++            posterPath = known.posterPath ?: posterPath,
++        )
++        return LibraryItem(
++            id = title.contentId(),
++            type = publicMetaDbContentType(ref.mediaType),
++            name = title.displayTitle(),
++            poster = title.posterUrl(),
++            banner = title.backdropUrl(),
++            releaseInfo = title.year?.toString(),
++            genres = title.genres,
++            posterShape = PosterShape.Poster,
++            listKeys = listKeys,
++            imdbId = title.imdb,
++            tmdbId = tmdbId.toInt(),
++            rawPosterUrl = title.posterUrl(),
++            trackingProviderId = TrackingProviderId.PUBLICMETADB.storageId,
++            trackingProviderItemId = title.providerItemId(),
++            trackingSourceUrl = PublicMetaDbConfig.WEBSITE_URL,
++            savedAtEpochMs = addedAtEpochMs,
++        )
++    }
++
++    companion object {
++        val Empty = PublicMetaDbProjection(PublicMetaDbSyncSnapshot())
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbSyncRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbSyncRepository.kt
+new file mode 100644
+index 00000000..d1b7ee05
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbSyncRepository.kt
+@@ -0,0 +1,650 @@
++package com.nuvio.app.features.publicmetadb
++
++import com.nuvio.app.features.addons.httpGetText
++import com.nuvio.app.features.tmdb.TmdbSettingsRepository
++import com.nuvio.app.features.tmdb.buildTmdbUrl
++import com.nuvio.app.features.tracking.TrackingRefreshGate
++import com.nuvio.app.features.tracking.TrackingRefreshIntent
++import com.nuvio.app.features.watchprogress.WatchProgressEntry
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.Job
++import kotlinx.coroutines.async
++import kotlinx.coroutines.awaitAll
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import kotlinx.coroutines.flow.collectLatest
++import kotlinx.coroutines.flow.combine
++import kotlinx.coroutines.flow.distinctUntilChanged
++import kotlinx.coroutines.launch
++import kotlinx.coroutines.sync.Mutex
++import kotlinx.coroutines.sync.withLock
++import kotlinx.coroutines.withContext
++import kotlinx.serialization.json.JsonObject
++import kotlinx.serialization.json.JsonPrimitive
++
++interface PublicMetaDbSyncStorage {
++    suspend fun load(profileId: Int): String?
++    suspend fun save(profileId: Int, payload: String, checkScope: () -> Unit)
++    suspend fun remove(profileId: Int, checkScope: () -> Unit)
++}
++
++internal expect object PlatformPublicMetaDbSyncStorage : PublicMetaDbSyncStorage {
++    override suspend fun load(profileId: Int): String?
++    override suspend fun save(profileId: Int, payload: String, checkScope: () -> Unit)
++    override suspend fun remove(profileId: Int, checkScope: () -> Unit)
++    fun clearAll()
++}
++
++internal data class PublicMetaDbProjectionState(
++    val scope: PublicMetaDbAuthScope? = null,
++    val projection: PublicMetaDbProjection = PublicMetaDbProjection.Empty,
++)
++
++class PublicMetaDbSyncRepository internal constructor(
++    private val storage: PublicMetaDbSyncStorage,
++    private val auth: PublicMetaDbAuthStore,
++    private val api: PublicMetaDbApiClient,
++    private val activeProfileId: StateFlow<Int>,
++    private val coroutineScope: CoroutineScope,
++    private val now: () -> Long = { kotlin.time.Clock.System.now().toEpochMilliseconds() },
++) {
++    private val mutex = Mutex()
++    private val gate = TrackingRefreshGate()
++    private val mutableState = MutableStateFlow(PublicMetaDbSyncState())
++    private val mutableProjection = MutableStateFlow(PublicMetaDbProjectionState())
++    private val mutableLocalPlayback = MutableStateFlow<List<WatchProgressEntry>>(emptyList())
++    private var localPlaybackScope: PublicMetaDbAuthScope? = null
++    private var persistJob: Job? = null
++    val state: StateFlow<PublicMetaDbSyncState> = mutableState.asStateFlow()
++    internal val projectionState: StateFlow<PublicMetaDbProjectionState> = mutableProjection.asStateFlow()
++    internal val localPlayback: StateFlow<List<WatchProgressEntry>> = mutableLocalPlayback.asStateFlow()
++
++    init {
++        coroutineScope.launch {
++            combine(activeProfileId, auth.state) { profileId, authorization ->
++                Triple(profileId, authorization.scope, authorization.isAuthenticated)
++            }.distinctUntilChanged().collectLatest {
++                if (!matchesCurrent(mutableState.value.scope)) clearPublished()
++                try {
++                    ensureLoaded()
++                } catch (error: CancellationException) {
++                    throw error
++                } catch (error: Exception) {
++                    if (matchesCurrent(auth.scope())) {
++                        mutableState.value = PublicMetaDbSyncState(scope = auth.scope(), error = error.toPublicMetaDbSyncError())
++                    }
++                }
++            }
++        }
++    }
++
++    fun currentScope(): PublicMetaDbAuthScope = auth.scope().also { checkScope(it) }
++
++    fun currentSnapshot(): PublicMetaDbSyncSnapshot? = mutableState.value.takeIf { matchesCurrent(it.scope) }?.snapshot
++
++    internal fun currentProjection(): PublicMetaDbProjection = mutableProjection.value
++        .takeIf { matchesCurrent(it.scope) && auth.state.value.isAuthenticated }
++        ?.projection
++        ?: PublicMetaDbProjection.Empty
++
++    internal fun currentLocalPlayback(): List<WatchProgressEntry> =
++        if (matchesCurrent(localPlaybackScope) && auth.state.value.isAuthenticated) mutableLocalPlayback.value else emptyList()
++
++    suspend fun ensureLoaded() = withContext(Dispatchers.Default) { mutex.withLock { loadCurrent() } }
++
++    fun refreshAsync(intent: TrackingRefreshIntent) {
++        coroutineScope.launch {
++            try {
++                refresh(intent)
++            } catch (error: CancellationException) {
++                throw error
++            } catch (_: Exception) {
++            }
++        }
++    }
++
++    suspend fun refresh(intent: TrackingRefreshIntent): Unit = withContext(Dispatchers.Default) {
++        val scope = auth.scope()
++        gate.runIfNeeded(scope.generation, shouldRun = {
++            auth.state.value.isAuthenticated && matchesCurrent(scope) && shouldRefresh(intent)
++        }) {
++            mutex.withLock {
++                checkScope(scope)
++                val attemptedAt = now()
++                try {
++                    val previous = loadCurrent() ?: return@withLock
++                    mutableState.value = mutableState.value.copy(isLoading = true, error = null, attemptedAtEpochMs = attemptedAt)
++                    val lists = fetchLists(scope)
++                    checkScope(scope)
++                    val listItems = linkedMapOf<String, List<PublicMetaDbListItem>>()
++                    lists.forEach { list ->
++                        listItems[list.id] = fetchListItems(scope, list.id)
++                        checkScope(scope)
++                    }
++                    val watched = fetchWatched(scope)
++                    checkScope(scope)
++                    val resume = fetchResume(scope) ?: previous.resume
++                    checkScope(scope)
++                    val media = enrichMedia(
++                        scope = scope,
++                        previous = previous.media,
++                        wanted = wantedMedia(listItems.values.flatten(), watched, resume, previous.ratings),
++                    )
++                    checkScope(scope)
++                    val liveShowKeys = watched
++                        .filterNot { isPublicMetaDbMovieType(it.mediaType) }
++                        .mapTo(mutableSetOf()) { publicMetaDbShowKey(it.tmdbId) }
++                    commit(
++                        scope,
++                        previous.copy(
++                            accountKey = auth.state.value.keyHint.orEmpty(),
++                            lists = lists,
++                            listItems = listItems,
++                            watched = watched,
++                            resume = resume,
++                            media = media,
++                            dismissed = previous.dismissed.filterKeys(liveShowKeys::contains),
++                            checkedAtEpochMs = attemptedAt,
++                        ),
++                    )
++                    mutableState.value = mutableState.value.copy(isLoading = false, attemptedAtEpochMs = attemptedAt)
++                } catch (error: CancellationException) {
++                    if (matchesCurrent(scope)) mutableState.value = mutableState.value.copy(isLoading = false)
++                    throw error
++                } catch (error: Exception) {
++                    if (matchesCurrent(scope)) {
++                        mutableState.value = mutableState.value.copy(
++                            scope = scope,
++                            isLoading = false,
++                            error = error.toPublicMetaDbSyncError(),
++                            retryAtEpochMs = (error as? PublicMetaDbApiException)?.retryAtEpochMs,
++                            attemptedAtEpochMs = attemptedAt,
++                        )
++                    }
++                }
++            }
++        }
++        Unit
++    }
++
++    internal suspend fun <T> mutate(
++        scope: PublicMetaDbAuthScope,
++        block: suspend (PublicMetaDbSyncSnapshot) -> Pair<PublicMetaDbSyncSnapshot, T>,
++    ): T = withContext(Dispatchers.Default) {
++        mutex.withLock {
++            checkScope(scope)
++            val previous = loadCurrent() ?: throw PublicMetaDbAuthException(PublicMetaDbAuthError.AUTHORIZATION_REVOKED)
++            val (next, result) = block(previous)
++            if (next != previous) commit(scope, next)
++            result
++        }
++    }
++
++    internal suspend fun applyWatched(
++        scope: PublicMetaDbAuthScope,
++        added: List<PublicMetaDbWatchedEntry>,
++        removed: (PublicMetaDbWatchedEntry) -> Boolean = { false },
++    ) {
++        mutate(scope) { snapshot ->
++            val remaining = snapshot.watched.filterNot(removed)
++            snapshot.copy(watched = dedupePublicMetaDbWatched(added + remaining)) to Unit
++        }
++    }
++
++    internal suspend fun applyListItem(
++        scope: PublicMetaDbAuthScope,
++        listId: String,
++        added: PublicMetaDbListItem?,
++        removed: (PublicMetaDbListItem) -> Boolean = { false },
++    ) {
++        mutate(scope) { snapshot ->
++            val current = snapshot.listItems[listId].orEmpty().filterNot(removed)
++            val items = if (added == null) {
++                current
++            } else {
++                listOf(added) + current.filterNot { it.tmdbId == added.tmdbId && isPublicMetaDbMovieType(it.mediaType) == isPublicMetaDbMovieType(added.mediaType) }
++            }
++            val lists = snapshot.lists.map { list -> if (list.id == listId) list.copy(itemCount = items.size) else list }
++            snapshot.copy(lists = lists, listItems = snapshot.listItems + (listId to items)) to Unit
++        }
++    }
++
++    internal suspend fun applyLists(
++        scope: PublicMetaDbAuthScope,
++        transform: (List<PublicMetaDbList>) -> List<PublicMetaDbList>,
++    ) {
++        mutate(scope) { snapshot ->
++            val lists = transform(snapshot.lists)
++            val ids = lists.mapTo(mutableSetOf(), PublicMetaDbList::id)
++            snapshot.copy(
++                lists = lists,
++                listItems = snapshot.listItems.filterKeys(ids::contains) + lists.filter { it.id !in snapshot.listItems }.associate { it.id to emptyList() },
++            ) to Unit
++        }
++    }
++
++    internal suspend fun applyResume(
++        scope: PublicMetaDbAuthScope,
++        point: PublicMetaDbResumePoint?,
++        matches: (PublicMetaDbResumePoint) -> Boolean,
++    ) {
++        mutate(scope) { snapshot ->
++            val remaining = snapshot.resume.filterNot(matches)
++            snapshot.copy(resume = if (point == null) remaining else listOf(point) + remaining) to Unit
++        }
++    }
++
++    internal suspend fun applyRating(scope: PublicMetaDbAuthScope, entry: PublicMetaDbRatingEntry, value: Int?) {
++        mutate(scope) { snapshot ->
++            val remaining = snapshot.ratings.filterNot { it.sameTargetAs(entry) }
++            snapshot.copy(ratings = if (value == null) remaining else listOf(entry.copy(rating = value)) + remaining) to Unit
++        }
++    }
++
++    internal suspend fun rememberMedia(scope: PublicMetaDbAuthScope, media: PublicMetaDbMedia) {
++        mutate(scope) { snapshot ->
++            val existing = snapshot.media[media.key]
++            val merged = existing?.mergeMissing(media) ?: media
++            if (merged == existing) return@mutate snapshot to Unit
++            snapshot.copy(media = snapshot.media + (media.key to merged)) to Unit
++        }
++    }
++
++    internal suspend fun dismiss(scope: PublicMetaDbAuthScope, keys: Map<String, Long>) {
++        if (keys.isEmpty()) return
++        mutate(scope) { snapshot -> snapshot.copy(dismissed = snapshot.dismissed + keys) to Unit }
++    }
++
++    internal suspend fun upsertLocalPlayback(scope: PublicMetaDbAuthScope, entry: WatchProgressEntry) {
++        withContext(Dispatchers.Default) {
++            mutex.withLock {
++                checkScope(scope)
++                loadCurrent() ?: return@withLock
++                val key = entry.localKey()
++                val remaining = mutableLocalPlayback.value.filterNot { it.localKey() == key }
++                val next = if (entry.isEffectivelyCompleted) remaining else (listOf(entry) + remaining).take(MAX_LOCAL_PLAYBACK)
++                if (next == mutableLocalPlayback.value) return@withLock
++                localPlaybackScope = scope
++                mutableLocalPlayback.value = next
++                schedulePersist(scope, if (entry.isEffectivelyCompleted) 0L else LOCAL_PERSIST_DELAY_MS)
++            }
++        }
++    }
++
++    internal suspend fun removeLocalPlayback(scope: PublicMetaDbAuthScope, entries: Collection<WatchProgressEntry>) {
++        val keys = entries.mapTo(mutableSetOf()) { it.localKey() }
++        withContext(Dispatchers.Default) {
++            mutex.withLock {
++                checkScope(scope)
++                loadCurrent() ?: return@withLock
++                localPlaybackScope = scope
++                mutableLocalPlayback.value = mutableLocalPlayback.value.filterNot { it.localKey() in keys }
++            }
++        }
++        schedulePersist(scope, 0L)
++    }
++
++    private fun schedulePersist(scope: PublicMetaDbAuthScope, delayMs: Long) {
++        persistJob?.cancel()
++        persistJob = coroutineScope.launch {
++            if (delayMs > 0L) delay(delayMs)
++            try {
++                withContext(Dispatchers.Default) {
++                    mutex.withLock {
++                        if (!matchesCurrent(scope)) return@withLock
++                        val snapshot = mutableState.value.snapshot ?: return@withLock
++                        val payload = publicMetaDbJson.encodeToString(
++                            PublicMetaDbSyncSnapshot.serializer(),
++                            snapshot.copy(localPlayback = mutableLocalPlayback.value),
++                        )
++                        storage.save(scope.profileId, payload) { checkScope(scope) }
++                    }
++                }
++            } catch (error: CancellationException) {
++                throw error
++            } catch (_: Exception) {
++            }
++        }
++    }
++
++    private suspend fun fetchLists(scope: PublicMetaDbAuthScope): List<PublicMetaDbList> =
++        api.paged(scope, "/api/external/lists", LIST_PAGE_SIZE)
++            .mapNotNull(::parseList)
++            .distinctBy(PublicMetaDbList::id)
++
++    private suspend fun fetchListItems(scope: PublicMetaDbAuthScope, listId: String): List<PublicMetaDbListItem> =
++        api.paged(scope, "/api/external/lists/${PublicMetaDbApiClient.pathSegment(listId)}/items", ITEM_PAGE_SIZE)
++            .mapNotNull(::parseListItem)
++            .distinctBy { publicMetaDbMediaKey(it.mediaType, it.tmdbId) }
++
++    private suspend fun fetchWatched(scope: PublicMetaDbAuthScope): List<PublicMetaDbWatchedEntry> =
++        dedupePublicMetaDbWatched(
++            api.paged(scope, "/api/external/watched", ITEM_PAGE_SIZE).mapNotNull(::parseWatched),
++        )
++
++    private suspend fun fetchResume(scope: PublicMetaDbAuthScope): List<PublicMetaDbResumePoint>? = try {
++        api.paged(scope, "/api/external/resume", RESUME_PAGE_SIZE)
++            .mapNotNull(::parseResume)
++            .groupBy { "${publicMetaDbMediaKey(it.mediaType, it.tmdbId)}|${it.season}|${it.episode}" }
++            .map { (_, group) -> group.maxBy(PublicMetaDbResumePoint::updatedAtEpochMs) }
++    } catch (error: CancellationException) {
++        throw error
++    } catch (error: PublicMetaDbAuthException) {
++        throw error
++    } catch (_: Exception) {
++        null
++    }
++
++    private fun wantedMedia(
++        listItems: List<PublicMetaDbListItem>,
++        watched: List<PublicMetaDbWatchedEntry>,
++        resume: List<PublicMetaDbResumePoint>,
++        ratings: List<PublicMetaDbRatingEntry>,
++    ): Map<String, PublicMetaDbMedia> {
++        val wanted = linkedMapOf<String, PublicMetaDbMedia>()
++        fun add(seed: PublicMetaDbMedia) {
++            wanted[seed.key] = wanted[seed.key]?.mergeMissing(seed) ?: seed
++        }
++        listItems.forEach { item ->
++            add(
++                PublicMetaDbMedia(
++                    tmdbId = item.tmdbId,
++                    mediaType = normalizePublicMetaDbMediaType(item.mediaType),
++                    title = item.title,
++                    year = item.year,
++                    posterPath = item.posterPath,
++                ),
++            )
++        }
++        resume.forEach { point ->
++            add(
++                PublicMetaDbMedia(
++                    tmdbId = point.tmdbId,
++                    mediaType = normalizePublicMetaDbMediaType(point.mediaType),
++                    title = point.title,
++                    posterPath = point.posterPath,
++                ),
++            )
++        }
++        watched.forEach { entry ->
++            add(PublicMetaDbMedia(tmdbId = entry.tmdbId, mediaType = normalizePublicMetaDbMediaType(entry.mediaType)))
++        }
++        ratings.forEach { rating ->
++            add(
++                PublicMetaDbMedia(
++                    tmdbId = rating.tmdbId,
++                    mediaType = normalizePublicMetaDbMediaType(rating.mediaType),
++                    imdb = rating.imdb,
++                ),
++            )
++        }
++        return wanted
++    }
++
++    private suspend fun enrichMedia(
++        scope: PublicMetaDbAuthScope,
++        previous: Map<String, PublicMetaDbMedia>,
++        wanted: Map<String, PublicMetaDbMedia>,
++    ): Map<String, PublicMetaDbMedia> {
++        val result = linkedMapOf<String, PublicMetaDbMedia>()
++        wanted.forEach { (key, seed) -> result[key] = previous[key]?.mergeMissing(seed) ?: seed }
++        val nowMs = now()
++        val pending = result.values
++            .filter { !it.complete && nowMs - it.resolvedAtEpochMs !in 0 until MEDIA_RETRY_MS }
++            .take(MAX_MEDIA_LOOKUPS_PER_REFRESH)
++        pending.chunked(MEDIA_LOOKUP_PARALLELISM).forEach { chunk ->
++            checkScope(scope)
++            val fetched = withContext(Dispatchers.Default) {
++                chunk.map { media -> async { fetchTmdbMedia(media) } }.awaitAll()
++            }
++            fetched.forEach { media -> result[media.key] = media }
++        }
++        return result
++    }
++
++    internal suspend fun fetchTmdbMedia(media: PublicMetaDbMedia): PublicMetaDbMedia {
++        val resolvedAt = now()
++        val root = try {
++            val endpoint = if (media.isMovie) "movie/${media.tmdbId}" else "tv/${media.tmdbId}"
++            val url = buildTmdbUrl(
++                endpoint = endpoint,
++                apiKey = TmdbSettingsRepository.effectiveApiKey(),
++                query = mapOf("append_to_response" to "external_ids"),
++            )
++            publicMetaDbJson.parseToJsonElement(httpGetText(url)) as? JsonObject
++        } catch (error: CancellationException) {
++            throw error
++        } catch (_: Exception) {
++            null
++        } ?: return media.copy(resolvedAtEpochMs = resolvedAt)
++        val externalIds = root["external_ids"].publicMetaDbObject()
++        val imdb = (externalIds?.publicMetaDbString("imdb_id") ?: root.publicMetaDbString("imdb_id"))
++            ?.takeIf { it.startsWith("tt", ignoreCase = true) }
++        val tvdb = externalIds?.publicMetaDbLong("tvdb_id")?.takeIf { it > 0L }
++        val genres = root["genres"].publicMetaDbArray().mapNotNull { genre -> genre.publicMetaDbObject()?.publicMetaDbString("name") }
++        val runtime = root.publicMetaDbInt("runtime")?.takeIf { it > 0 }
++            ?: root["episode_run_time"].publicMetaDbArray().firstNotNullOfOrNull { value ->
++                (value as? JsonPrimitive)?.content?.toIntOrNull()?.takeIf { it > 0 }
++            }
++            ?: root["last_episode_to_air"].publicMetaDbObject()?.publicMetaDbInt("runtime")?.takeIf { it > 0 }
++        val year = root.publicMetaDbFirstString("release_date", "first_air_date")?.take(4)?.toIntOrNull()?.takeIf { it in 1870..2200 }
++        return media.copy(
++            title = root.publicMetaDbFirstString("title", "name") ?: media.title,
++            year = year ?: media.year,
++            imdb = imdb ?: media.imdb,
++            tvdb = tvdb ?: media.tvdb,
++            posterPath = root.publicMetaDbString("poster_path") ?: media.posterPath,
++            backdropPath = root.publicMetaDbString("backdrop_path") ?: media.backdropPath,
++            genres = genres.ifEmpty { media.genres },
++            runtimeMinutes = runtime ?: media.runtimeMinutes,
++            resolvedAtEpochMs = resolvedAt,
++            complete = true,
++        )
++    }
++
++    private fun parseList(row: JsonObject): PublicMetaDbList? {
++        val id = row.publicMetaDbString("id") ?: return null
++        return PublicMetaDbList(
++            id = id,
++            name = row.publicMetaDbFirstString("name", "title") ?: PublicMetaDbConfig.DEFAULT_WATCHLIST_NAME,
++            description = row.publicMetaDbString("description"),
++            type = row.publicMetaDbString("type")?.lowercase() ?: PublicMetaDbListType.CUSTOM,
++            isPublic = row.publicMetaDbBoolean("is_public") ?: row.publicMetaDbBoolean("isPublic") ?: false,
++            itemCount = row.publicMetaDbFirstInt("item_count", "items_count", "itemCount") ?: 0,
++            createdAtEpochMs = row.publicMetaDbEpochMs("created", "created_at") ?: 0L,
++        )
++    }
++
++    private fun parseListItem(row: JsonObject): PublicMetaDbListItem? {
++        val rawType = row.publicMetaDbFirstString("media_type", "mediaType")
++            ?: row["media"].publicMetaDbObject()?.publicMetaDbFirstString("media_type", "type")
++        val mediaType = normalizePublicMetaDbMediaType(rawType)
++        val tmdbId = row.publicMetaDbTmdbId(mediaType) ?: return null
++        val media = row["media"].publicMetaDbObject()
++        return PublicMetaDbListItem(
++            id = row.publicMetaDbFirstString("id", "item_id"),
++            tmdbId = tmdbId,
++            mediaType = mediaType,
++            title = row.publicMetaDbFirstString("title", "name") ?: media?.publicMetaDbFirstString("title", "name"),
++            year = row.publicMetaDbInt("year")
++                ?: row.publicMetaDbFirstString("release_date", "first_air_date")?.take(4)?.toIntOrNull(),
++            posterPath = row.publicMetaDbFirstString("poster", "poster_path") ?: media?.publicMetaDbFirstString("poster", "poster_path"),
++            addedAtEpochMs = row.publicMetaDbEpochMs("added_at", "created", "created_at", "updated") ?: 0L,
++        )
++    }
++
++    private fun parseWatched(row: JsonObject): PublicMetaDbWatchedEntry? {
++        val season = row.publicMetaDbFirstInt("season", "season_number")
++        val episode = row.publicMetaDbFirstInt("episode", "episode_number")
++        val rawType = row.publicMetaDbFirstString("media_type", "mediaType")
++        val mediaType = when {
++            rawType != null -> normalizePublicMetaDbMediaType(rawType)
++            episode != null -> PublicMetaDbMediaType.TV
++            else -> PublicMetaDbMediaType.MOVIE
++        }
++        val tmdbId = row.publicMetaDbTmdbId(mediaType) ?: return null
++        val isMovie = mediaType == PublicMetaDbMediaType.MOVIE
++        if (!isMovie && (season == null || episode == null || episode <= 0 || season < 0)) return null
++        return PublicMetaDbWatchedEntry(
++            id = row.publicMetaDbString("id"),
++            tmdbId = tmdbId,
++            mediaType = mediaType,
++            season = if (isMovie) null else season,
++            episode = if (isMovie) null else episode,
++            watchedAtEpochMs = row.publicMetaDbEpochMs("watched_at", "watchedAt", "created", "updated") ?: 0L,
++        )
++    }
++
++    private fun parseResume(row: JsonObject): PublicMetaDbResumePoint? {
++        val rawType = row.publicMetaDbFirstString("media_type", "mediaType")
++        val season = row.publicMetaDbFirstInt("season", "season_number")
++        val episode = row.publicMetaDbFirstInt("episode", "episode_number")
++        val mediaType = when {
++            rawType != null -> normalizePublicMetaDbMediaType(rawType)
++            episode != null && episode > 0 -> PublicMetaDbMediaType.TV
++            else -> PublicMetaDbMediaType.MOVIE
++        }
++        val tmdbId = row.publicMetaDbTmdbId(mediaType) ?: return null
++        val isMovie = mediaType == PublicMetaDbMediaType.MOVIE
++        if (!isMovie && (season == null || episode == null || episode <= 0)) return null
++        val position = row.publicMetaDbLong("position_ms") ?: row.publicMetaDbLong("progress_ms") ?: 0L
++        val runtime = row.publicMetaDbLong("runtime_ms") ?: row.publicMetaDbLong("duration_ms") ?: 0L
++        val rawProgress = row.publicMetaDbDouble("progress")
++        val percent = when {
++            runtime > 0L && position > 0L -> position.toDouble() * 100.0 / runtime.toDouble()
++            rawProgress != null && rawProgress <= 1.0 -> rawProgress * 100.0
++            rawProgress != null -> rawProgress
++            else -> 0.0
++        }.coerceIn(0.0, 100.0)
++        return PublicMetaDbResumePoint(
++            id = row.publicMetaDbString("id"),
++            tmdbId = tmdbId,
++            mediaType = mediaType,
++            season = if (isMovie) null else season,
++            episode = if (isMovie) null else episode,
++            positionMs = position,
++            runtimeMs = runtime,
++            progressPercent = percent,
++            updatedAtEpochMs = row.publicMetaDbEpochMs("updated", "updated_at", "created", "created_at") ?: 0L,
++            title = row.publicMetaDbFirstString("title", "name"),
++            posterPath = row.publicMetaDbFirstString("poster", "poster_path"),
++        )
++    }
++
++    private suspend fun loadCurrent(): PublicMetaDbSyncSnapshot? {
++        val scope = auth.scope()
++        if (!matchesCurrent(scope)) throw CancellationException("PublicMetaDB account changed")
++        val authorization = auth.state.value
++        if (!authorization.isAuthenticated) {
++            clearPublished()
++            storage.remove(scope.profileId) { if (!matchesCurrent(scope)) throw CancellationException("PublicMetaDB account changed") }
++            return null
++        }
++        val accountKey = authorization.keyHint.orEmpty()
++        val current = mutableState.value
++        if (current.scope == scope && current.snapshot != null &&
++            (accountKey.isEmpty() || current.snapshot.accountKey.isEmpty() || current.snapshot.accountKey == accountKey)
++        ) {
++            return current.snapshot
++        }
++        val payload = storage.load(scope.profileId)
++        val snapshot = payload
++            ?.let { runCatching { publicMetaDbJson.decodeFromString(PublicMetaDbSyncSnapshot.serializer(), it) }.getOrNull() }
++            ?.takeIf { accountKey.isEmpty() || it.accountKey.isEmpty() || it.accountKey == accountKey }
++            ?: PublicMetaDbSyncSnapshot(accountKey = accountKey)
++        if (!matchesCurrent(scope)) throw CancellationException("PublicMetaDB account changed")
++        val projection = runCatching { PublicMetaDbProjection(snapshot) }.getOrNull()
++        val usable = if (projection != null) snapshot else PublicMetaDbSyncSnapshot(accountKey = accountKey)
++        mutableProjection.value = PublicMetaDbProjectionState(scope, projection ?: PublicMetaDbProjection(usable))
++        mutableLocalPlayback.value = usable.localPlayback
++            .filter { now() - it.lastUpdatedEpochMs < LOCAL_PLAYBACK_TTL_MS }
++            .take(MAX_LOCAL_PLAYBACK)
++        localPlaybackScope = scope
++        mutableState.value = PublicMetaDbSyncState(scope = scope, snapshot = usable)
++        return usable
++    }
++
++    private suspend fun commit(scope: PublicMetaDbAuthScope, snapshot: PublicMetaDbSyncSnapshot) {
++        checkScope(scope)
++        val previous = mutableProjection.value
++        val projection = if (
++            previous.scope == scope &&
++            previous.projection.snapshot == snapshot.copy(localPlayback = previous.projection.snapshot.localPlayback)
++        ) {
++            previous.projection
++        } else {
++            PublicMetaDbProjection(snapshot)
++        }
++        persistJob?.cancel()
++        val payload = publicMetaDbJson.encodeToString(
++            PublicMetaDbSyncSnapshot.serializer(),
++            snapshot.copy(localPlayback = if (localPlaybackScope == scope) mutableLocalPlayback.value else snapshot.localPlayback),
++        )
++        storage.save(scope.profileId, payload) { checkScope(scope) }
++        checkScope(scope)
++        mutableProjection.value = PublicMetaDbProjectionState(scope, projection)
++        mutableState.value = mutableState.value.copy(scope = scope, snapshot = snapshot)
++    }
++
++    private fun shouldRefresh(intent: TrackingRefreshIntent): Boolean {
++        val current = mutableState.value.takeIf { matchesCurrent(it.scope) } ?: return true
++        val nowMs = now()
++        if (current.retryAtEpochMs?.let { it > nowMs } == true) return false
++        if (intent != TrackingRefreshIntent.AUTOMATIC) return true
++        if (current.error != null) {
++            return current.attemptedAtEpochMs?.let { nowMs - it !in 0 until ERROR_RETRY_MS } ?: true
++        }
++        return current.snapshot?.checkedAtEpochMs?.let { nowMs - it !in 0 until AUTOMATIC_INTERVAL_MS } ?: true
++    }
++
++    private fun checkScope(scope: PublicMetaDbAuthScope) {
++        if (!matchesCurrent(scope)) throw CancellationException("PublicMetaDB account changed")
++        if (!auth.state.value.isAuthenticated) throw PublicMetaDbAuthException(PublicMetaDbAuthError.AUTHORIZATION_REVOKED)
++    }
++
++    private fun matchesCurrent(scope: PublicMetaDbAuthScope?): Boolean =
++        scope != null && scope.profileId == activeProfileId.value && auth.isCurrent(scope)
++
++    private fun clearPublished() {
++        persistJob?.cancel()
++        mutableProjection.value = PublicMetaDbProjectionState()
++        mutableLocalPlayback.value = emptyList()
++        localPlaybackScope = null
++        mutableState.value = PublicMetaDbSyncState()
++    }
++
++    private fun WatchProgressEntry.localKey(): String =
++        "${parentMetaId.lowercase()}|${seasonNumber ?: -1}|${episodeNumber ?: -1}"
++
++    companion object {
++        const val AUTOMATIC_INTERVAL_MS = 10L * 60L * 1_000L
++        const val ERROR_RETRY_MS = 60_000L
++        const val LOCAL_PLAYBACK_TTL_MS = 60L * 24L * 60L * 60L * 1_000L
++        const val MAX_LOCAL_PLAYBACK = 200
++        const val LOCAL_PERSIST_DELAY_MS = 30_000L
++        private const val LIST_PAGE_SIZE = 100
++        private const val ITEM_PAGE_SIZE = 500
++        private const val RESUME_PAGE_SIZE = 100
++        private const val MEDIA_RETRY_MS = 3L * 24L * 60L * 60L * 1_000L
++        private const val MAX_MEDIA_LOOKUPS_PER_REFRESH = 300
++        private const val MEDIA_LOOKUP_PARALLELISM = 6
++    }
++}
++
++internal fun publicMetaDbShowKey(tmdbId: Long): String = "tv:$tmdbId"
++
++internal fun dedupePublicMetaDbWatched(entries: List<PublicMetaDbWatchedEntry>): List<PublicMetaDbWatchedEntry> =
++    entries
++        .groupBy { "${publicMetaDbMediaKey(it.mediaType, it.tmdbId)}|${it.season ?: -1}|${it.episode ?: -1}" }
++        .map { (_, group) -> group.maxBy(PublicMetaDbWatchedEntry::watchedAtEpochMs) }
++        .sortedByDescending(PublicMetaDbWatchedEntry::watchedAtEpochMs)
++
++internal fun PublicMetaDbRatingEntry.sameTargetAs(other: PublicMetaDbRatingEntry): Boolean =
++    tmdbId == other.tmdbId &&
++        isPublicMetaDbMovieType(mediaType) == isPublicMetaDbMovieType(other.mediaType) &&
++        season == other.season &&
++        episode == other.episode
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbTracker.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbTracker.kt
+new file mode 100644
+index 00000000..9f0e3c7b
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbTracker.kt
+@@ -0,0 +1,523 @@
++package com.nuvio.app.features.publicmetadb
++
++import com.nuvio.app.features.library.LibraryItem
++import com.nuvio.app.features.profiles.ProfileRepository
++import com.nuvio.app.features.tracking.LibraryListPrivacy
++import com.nuvio.app.features.tracking.TrackingAuthProvider
++import com.nuvio.app.features.tracking.TrackingCapability
++import com.nuvio.app.features.tracking.TrackingHistoryItem
++import com.nuvio.app.features.tracking.TrackingLibraryProvider
++import com.nuvio.app.features.tracking.TrackingLibrarySnapshot
++import com.nuvio.app.features.tracking.TrackingListManagementCapabilities
++import com.nuvio.app.features.tracking.TrackingListManager
++import com.nuvio.app.features.tracking.TrackingMembershipResolution
++import com.nuvio.app.features.tracking.TrackingProgressProvider
++import com.nuvio.app.features.tracking.TrackingProgressSnapshot
++import com.nuvio.app.features.tracking.TrackingProviderDescriptor
++import com.nuvio.app.features.tracking.TrackingProviderId
++import com.nuvio.app.features.tracking.TrackingProviderRegistry
++import com.nuvio.app.features.tracking.TrackingRefreshIntent
++import com.nuvio.app.features.tracking.TrackingWatchedProvider
++import com.nuvio.app.features.tracking.buildTrackingMediaReference
++import com.nuvio.app.features.trakt.TRAKT_CONTINUE_WATCHING_DAYS_CAP_ALL
++import com.nuvio.app.features.trakt.normalizeTraktContinueWatchingDaysCap
++import com.nuvio.app.features.watched.WatchedItem
++import com.nuvio.app.features.watchprogress.WatchProgressEntry
++import io.ktor.http.HttpMethod
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.SupervisorJob
++import kotlinx.coroutines.flow.Flow
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import kotlinx.coroutines.flow.collectLatest
++import kotlinx.coroutines.flow.combine
++import kotlinx.coroutines.flow.distinctUntilChanged
++import kotlinx.coroutines.launch
++import kotlinx.serialization.json.buildJsonObject
++import kotlinx.serialization.json.put
++
++object PublicMetaDbTracker : TrackingAuthProvider {
++    private val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
++    private val activeProfile = MutableStateFlow(ProfileRepository.activeProfileId)
++    internal val store = PublicMetaDbAuthStore(PlatformPublicMetaDbAuthPersistence, activeProfile.value)
++    internal val api = PublicMetaDbApiClient(store)
++    val sync = PublicMetaDbSyncRepository(PlatformPublicMetaDbSyncStorage, store, api, activeProfile, coroutineScope)
++    internal val resolver = PublicMetaDbIdResolver(api, sync)
++    val writes = PublicMetaDbTrackingWrites(sync, api, resolver)
++    val progressProvider = PublicMetaDbTrackingProgressProvider(sync, writes, store, activeProfile, coroutineScope, ::ensureLoaded)
++    val watchedProvider = PublicMetaDbWatchedSyncAdapter(sync, writes, store, activeProfile)
++    val libraryProvider = PublicMetaDbTrackingLibraryProvider(sync, api, writes, ::ensureLoaded)
++    internal val ratingProvider = PublicMetaDbRatingsProvider(sync, api, writes)
++    val authState: StateFlow<PublicMetaDbAuthState> = store.state
++    private val authenticated = MutableStateFlow(store.state.value.isAuthenticated)
++    override val isAuthenticated: StateFlow<Boolean> = authenticated.asStateFlow()
++    override val accountGeneration: Long get() = store.scope().generation
++    override val descriptor = TrackingProviderDescriptor(
++        TrackingProviderId.PUBLICMETADB,
++        "PublicMetaDB",
++        setOf(
++            TrackingCapability.AUTHENTICATION,
++            TrackingCapability.LIBRARY_READ,
++            TrackingCapability.LIBRARY_WRITE,
++            TrackingCapability.WATCHED_READ,
++            TrackingCapability.WATCHED_WRITE,
++            TrackingCapability.PROGRESS_READ,
++            TrackingCapability.PROGRESS_WRITE,
++            TrackingCapability.SCROBBLE,
++            TrackingCapability.RATINGS,
++        ),
++    )
++
++    init {
++        coroutineScope.launch {
++            store.state.collectLatest { state ->
++                authenticated.value = state.scope.profileId == activeProfile.value && state.isAuthenticated
++            }
++        }
++    }
++
++    fun register() {
++        if (TrackingProviderRegistry.authProvider(providerId) === this) return
++        TrackingProviderRegistry.register(this)
++        TrackingProviderRegistry.registerHistoryWriter(writes)
++        TrackingProviderRegistry.registerListWriter(writes)
++        TrackingProviderRegistry.registerScrobbler(writes)
++        TrackingProviderRegistry.registerProgressProvider(progressProvider)
++        TrackingProviderRegistry.registerWatchedProvider(watchedProvider)
++        TrackingProviderRegistry.registerLibraryProvider(libraryProvider)
++        TrackingProviderRegistry.registerRatingProvider(ratingProvider)
++    }
++
++    suspend fun connect(apiKey: String): Boolean {
++        ensureLoaded()
++        val scope = store.scope()
++        val key = apiKey.trim()
++        if (key.isEmpty()) {
++            store.setError(PublicMetaDbAuthError.MISSING_KEY, scope)
++            return false
++        }
++        store.setBusy(true, scope)
++        try {
++            val result = api.verify(key)
++            if (!store.isCurrent(scope)) return false
++            val error = when (result) {
++                PublicMetaDbKeyCheck.VALID -> null
++                PublicMetaDbKeyCheck.INVALID -> PublicMetaDbAuthError.INVALID_KEY
++                PublicMetaDbKeyCheck.RATE_LIMITED -> PublicMetaDbAuthError.RATE_LIMITED
++                PublicMetaDbKeyCheck.BLOCKED -> PublicMetaDbAuthError.BLOCKED
++                PublicMetaDbKeyCheck.FAILED -> PublicMetaDbAuthError.REQUEST_FAILED
++            }
++            if (error != null) {
++                store.setError(error, scope)
++                return false
++            }
++            if (!store.authorize(key, kotlin.time.Clock.System.now().toEpochMilliseconds(), scope)) return false
++            authenticated.value = store.state.value.isAuthenticated
++            sync.refreshAsync(TrackingRefreshIntent.INVALIDATED)
++            return true
++        } catch (error: CancellationException) {
++            throw error
++        } catch (_: Exception) {
++            store.setError(PublicMetaDbAuthError.REQUEST_FAILED, scope)
++            return false
++        } finally {
++            store.setBusy(false, store.scope())
++        }
++    }
++
++    fun clearError() {
++        store.setError(null, store.scope())
++    }
++
++    fun disconnect() {
++        store.clearAuth(store.scope())
++        resolver.clear()
++        authenticated.value = false
++    }
++
++    fun syncNow() {
++        coroutineScope.launch {
++            try {
++                sync.refresh(TrackingRefreshIntent.USER_INITIATED)
++            } catch (error: CancellationException) {
++                throw error
++            } catch (_: Exception) {
++            }
++        }
++    }
++
++    override fun ensureLoaded() {
++        if (activeProfile.value != ProfileRepository.activeProfileId) onProfileChanged()
++        authenticated.value = store.state.value.isAuthenticated
++    }
++
++    override fun onProfileChanged() {
++        activeProfile.value = ProfileRepository.activeProfileId
++        store.selectProfile(activeProfile.value)
++        resolver.clear()
++        authenticated.value = store.state.value.isAuthenticated
++    }
++
++    override fun clearLocalState() {
++        store.clearAllProfiles()
++        PlatformPublicMetaDbSyncStorage.clearAll()
++        resolver.clear()
++        authenticated.value = false
++    }
++
++    override fun removeStoredProfile(profileId: Int) {
++        store.removeProfile(profileId)
++        val scope = store.scope()
++        coroutineScope.launch {
++            try {
++                PlatformPublicMetaDbSyncStorage.remove(profileId) { store.checkScope(scope) }
++            } catch (error: CancellationException) {
++                throw error
++            } catch (_: Exception) {
++            }
++        }
++    }
++}
++
++class PublicMetaDbTrackingProgressProvider internal constructor(
++    private val sync: PublicMetaDbSyncRepository,
++    private val writes: PublicMetaDbTrackingWrites,
++    auth: PublicMetaDbAuthStore,
++    activeProfile: StateFlow<Int>,
++    private val coroutineScope: CoroutineScope,
++    private val ensureAccountLoaded: () -> Unit,
++) : TrackingProgressProvider {
++    override val providerId = TrackingProviderId.PUBLICMETADB
++    override val changes = combine(sync.projectionState, sync.localPlayback, auth.state, activeProfile) { _, _, _, _ -> Unit }
++    override val ownsCompletedHistoryProjection = true
++
++    override fun showIdSiblings(): Map<String, Set<String>> = sync.currentProjection().showIdSiblings
++
++    override fun continueWatchingCutoffEpochMs(daysCap: Int, nowEpochMs: Long): Long? {
++        val normalizedDaysCap = normalizeTraktContinueWatchingDaysCap(daysCap)
++        if (normalizedDaysCap == TRAKT_CONTINUE_WATCHING_DAYS_CAP_ALL) return null
++        return nowEpochMs - normalizedDaysCap.toLong() * MILLIS_PER_DAY
++    }
++
++    override fun ensureLoaded() = ensureAccountLoaded()
++
++    override suspend fun refresh(force: Boolean, sourceChanged: Boolean) {
++        ensureAccountLoaded()
++        sync.refresh(if (force || sourceChanged) TrackingRefreshIntent.USER_INITIATED else TrackingRefreshIntent.AUTOMATIC)
++    }
++
++    override fun snapshot(): TrackingProgressSnapshot {
++        val projection = sync.currentProjection()
++        val state = sync.state.value.takeIf { it.scope == runCatching { sync.currentScope() }.getOrNull() }
++        return TrackingProgressSnapshot(
++            entries = projection.progressEntries(sync.currentLocalPlayback()),
++            hasLoadedRemoteProgress = state?.hasLoaded == true,
++            errorMessage = state?.error?.let(::publicMetaDbSyncErrorMessage),
++        )
++    }
++
++    override suspend fun removeProgress(entries: Collection<WatchProgressEntry>) {
++        if (entries.isEmpty()) return
++        val scope = sync.currentScope()
++        val points = removeLocally(scope, entries)
++        points.forEach { point ->
++            try {
++                writes.deleteResumeById(scope, point)
++            } catch (error: CancellationException) {
++                throw error
++            } catch (error: PublicMetaDbAuthException) {
++                throw error
++            } catch (_: Exception) {
++            }
++        }
++    }
++
++    override fun applyOptimisticRemoval(entries: Collection<WatchProgressEntry>) {
++        if (entries.isEmpty()) return
++        val scope = runCatching { sync.currentScope() }.getOrNull() ?: return
++        coroutineScope.launch {
++            try {
++                removeLocally(scope, entries)
++            } catch (error: CancellationException) {
++                throw error
++            } catch (_: Exception) {
++            }
++        }
++    }
++
++    override fun applyOptimisticProgress(entry: WatchProgressEntry) {
++        if (entry.source.startsWith("publicmetadb")) return
++        val scope = runCatching { sync.currentScope() }.getOrNull() ?: return
++        val local = entry.copy(source = PUBLICMETADB_SOURCE_LOCAL)
++        coroutineScope.launch {
++            try {
++                sync.upsertLocalPlayback(scope, local)
++            } catch (error: CancellationException) {
++                throw error
++            } catch (_: Exception) {
++            }
++        }
++    }
++
++    override fun isHiddenFromProgress(contentId: String): Boolean = false
++
++    override suspend fun refreshEpisodeProgress(contentId: String, forceRefresh: Boolean) {
++        sync.refresh(if (forceRefresh) TrackingRefreshIntent.USER_INITIATED else TrackingRefreshIntent.AUTOMATIC)
++    }
++
++    private suspend fun removeLocally(
++        scope: PublicMetaDbAuthScope,
++        entries: Collection<WatchProgressEntry>,
++    ): List<PublicMetaDbResumePoint> {
++        sync.removeLocalPlayback(scope, entries)
++        val projection = sync.currentProjection()
++        val points = entries.mapNotNull { entry -> projection.resumeFor(entry) }.distinct()
++        points.forEach { point -> sync.applyResume(scope, null) { it == point } }
++        val dismissed = entries
++            .filter { it.source == PUBLICMETADB_SOURCE_PROGRESS }
++            .mapNotNull { entry ->
++                projection.resolve(entry.parentMetaId, "series")?.let { ref -> publicMetaDbShowKey(ref.tmdbId) to entry.lastUpdatedEpochMs }
++            }
++            .toMap()
++        sync.dismiss(scope, dismissed)
++        return points
++    }
++
++    private companion object {
++        const val MILLIS_PER_DAY = 24L * 60L * 60L * 1_000L
++    }
++}
++
++class PublicMetaDbTrackingLibraryProvider internal constructor(
++    private val sync: PublicMetaDbSyncRepository,
++    private val api: PublicMetaDbApiClient,
++    private val writes: PublicMetaDbTrackingWrites,
++    private val ensureAccountLoaded: () -> Unit,
++) : TrackingLibraryProvider {
++    override val providerId = TrackingProviderId.PUBLICMETADB
++    override val changes: Flow<Unit> = combine(sync.projectionState, sync.state) { _, _ -> Unit }
++    override val connectionRefreshIntent = TrackingRefreshIntent.AUTOMATIC
++    override val listManager: TrackingListManager = PublicMetaDbListManager(sync, api)
++
++    override fun ensureLoaded() = ensureAccountLoaded()
++
++    override fun prepare() {
++        sync.refreshAsync(TrackingRefreshIntent.AUTOMATIC)
++    }
++
++    override suspend fun refresh(intent: TrackingRefreshIntent) = sync.refresh(intent)
++
++    override fun snapshot(): TrackingLibrarySnapshot {
++        val projection = sync.currentProjection()
++        val state = sync.state.value.takeIf { it.scope == runCatching { sync.currentScope() }.getOrNull() }
++        return TrackingLibrarySnapshot(
++            items = projection.libraryItems,
++            sections = projection.librarySections,
++            tabs = projection.tabs,
++            hasLoaded = state?.hasLoaded == true,
++            isLoading = state?.isLoading == true,
++            errorMessage = state?.error?.let(::publicMetaDbSyncErrorMessage),
++        )
++    }
++
++    override fun contains(contentId: String, contentType: String?): Boolean {
++        val projection = sync.currentProjection()
++        val ref = projection.resolve(contentId, contentType) ?: return false
++        return projection.membershipKeys(ref).isNotEmpty()
++    }
++
++    override fun find(contentId: String): LibraryItem? = sync.currentProjection().libraryItem(contentId)
++
++    override suspend fun membership(item: LibraryItem): Map<String, Boolean> {
++        val projection = sync.currentProjection()
++        val ref = projection.resolve(item.id, item.type)
++            ?: item.tmdbId?.let { PublicMetaDbTitleRef(normalizePublicMetaDbMediaType(item.type), it.toLong()) }
++        val keys = ref?.let(projection::membershipKeys).orEmpty()
++        return projection.tabs.associate { tab -> tab.key to (tab.key in keys) }
++    }
++
++    override fun toggledDefaultMembership(currentMembership: Map<String, Boolean>): Map<String, Boolean> {
++        val key = sync.currentProjection().watchlistKey
++        return currentMembership.toMutableMap().apply {
++            this[key] = currentMembership[key] != true
++        }
++    }
++
++    override suspend fun applyMembership(
++        profileId: Int,
++        item: LibraryItem,
++        desiredMembership: Map<String, Boolean>,
++        destructiveRemovalConfirmed: Boolean,
++    ): TrackingMembershipResolution? {
++        val scope = sync.currentScope()
++        if (scope.profileId != profileId) throw CancellationException("PublicMetaDB profile changed")
++        val target = target(item) ?: throw IllegalStateException("This title could not be found on PublicMetaDB")
++        val projection = sync.currentProjection()
++        val currentKeys = projection.membershipKeys(target.ref)
++        desiredMembership.forEach { (key, desired) ->
++            val isMember = key in currentKeys
++            when {
++                desired && !isMember -> {
++                    val listId = publicMetaDbListId(key)
++                        ?: if (key == PUBLICMETADB_PENDING_WATCHLIST_KEY) writes.ensureWatchlist(scope).id else null
++                    if (listId != null) writes.addToList(scope, listId, target)
++                }
++                !desired && isMember -> publicMetaDbListId(key)?.let { listId -> writes.removeFromList(scope, listId, target) }
++            }
++        }
++        sync.refreshAsync(TrackingRefreshIntent.INVALIDATED)
++        return null
++    }
++
++    private suspend fun target(item: LibraryItem): PublicMetaDbTarget? {
++        val projection = sync.currentProjection()
++        val ref = projection.resolve(item.id, item.type)
++            ?: item.tmdbId?.let { PublicMetaDbTitleRef(normalizePublicMetaDbMediaType(item.type), it.toLong()) }
++        if (ref != null) {
++            val media = projection.mediaFor(ref)
++            return PublicMetaDbTarget(
++                tmdbId = ref.tmdbId,
++                isMovie = ref.isMovie,
++                imdb = media.imdb ?: item.imdbId?.takeIf { it.startsWith("tt", ignoreCase = true) },
++                title = media.title ?: item.name,
++                year = media.year ?: item.releaseInfo?.take(4)?.toIntOrNull(),
++            )
++        }
++        return writes.resolve(
++            buildTrackingMediaReference(
++                contentType = if (publicMetaDbTypeMatches(PublicMetaDbMediaType.MOVIE, item.type)) "movie" else "series",
++                parentMetaId = item.imdbId?.takeIf { it.startsWith("tt", ignoreCase = true) } ?: item.id,
++                title = item.name,
++                releaseInfo = item.releaseInfo,
++            ),
++        )?.copy(season = null, episode = null)
++    }
++}
++
++internal class PublicMetaDbListManager(
++    private val sync: PublicMetaDbSyncRepository,
++    private val api: PublicMetaDbApiClient,
++) : TrackingListManager {
++    override val capabilities = TrackingListManagementCapabilities(
++        privacyOptions = listOf(LibraryListPrivacy.PRIVATE, LibraryListPrivacy.PUBLIC),
++        supportsDescription = true,
++    )
++
++    override suspend fun createList(name: String, description: String?, privacy: LibraryListPrivacy) {
++        val scope = sync.currentScope()
++        val response = api.post(
++            scope,
++            "/api/external/lists",
++            buildJsonObject {
++                put("name", name.trim())
++                put("description", description?.trim().orEmpty())
++                put("is_public", privacy == LibraryListPrivacy.PUBLIC)
++                put("type", PublicMetaDbListType.CUSTOM)
++            },
++        )
++        response.itemId()?.let { id ->
++            sync.applyLists(scope) { lists ->
++                lists.filterNot { it.id == id } + PublicMetaDbList(
++                    id = id,
++                    name = name.trim(),
++                    description = description?.trim()?.takeIf(String::isNotEmpty),
++                    isPublic = privacy == LibraryListPrivacy.PUBLIC,
++                )
++            }
++        }
++        sync.refresh(TrackingRefreshIntent.INVALIDATED)
++    }
++
++    override suspend fun updateList(key: String, name: String, description: String?, privacy: LibraryListPrivacy) {
++        val scope = sync.currentScope()
++        val listId = publicMetaDbListId(key) ?: throw IllegalArgumentException("This list is no longer available")
++        val body = buildJsonObject {
++            put("name", name.trim())
++            put("description", description?.trim().orEmpty())
++            put("is_public", privacy == LibraryListPrivacy.PUBLIC)
++        }
++        val path = "/api/external/lists/${PublicMetaDbApiClient.pathSegment(listId)}"
++        val response = api.request(scope, HttpMethod.Patch, path, body, allowNotFound = true)
++        if (response.status == 404) api.request(scope, HttpMethod.Put, path, body)
++        sync.applyLists(scope) { lists ->
++            lists.map { list ->
++                if (list.id == listId) {
++                    list.copy(
++                        name = name.trim(),
++                        description = description?.trim()?.takeIf(String::isNotEmpty),
++                        isPublic = privacy == LibraryListPrivacy.PUBLIC,
++                    )
++                } else {
++                    list
++                }
++            }
++        }
++        sync.refresh(TrackingRefreshIntent.INVALIDATED)
++    }
++
++    override suspend fun deleteList(key: String) {
++        val scope = sync.currentScope()
++        val listId = publicMetaDbListId(key) ?: throw IllegalArgumentException("This list is no longer available")
++        val list = sync.currentProjection().lists.firstOrNull { it.id == listId }
++        require(list?.type != PublicMetaDbListType.WATCHLIST) { "Your PublicMetaDB watchlist cannot be deleted" }
++        api.delete(scope, "/api/external/lists/${PublicMetaDbApiClient.pathSegment(listId)}")
++        sync.applyLists(scope) { lists -> lists.filterNot { it.id == listId } }
++        sync.refresh(TrackingRefreshIntent.INVALIDATED)
++    }
++}
++
++class PublicMetaDbWatchedSyncAdapter internal constructor(
++    private val sync: PublicMetaDbSyncRepository,
++    private val writes: PublicMetaDbTrackingWrites,
++    auth: PublicMetaDbAuthStore,
++    private val activeProfile: StateFlow<Int>,
++) : TrackingWatchedProvider {
++    override val providerId = TrackingProviderId.PUBLICMETADB
++    private val changes = combine(sync.projectionState, auth.state, activeProfile) { _, _, _ -> Unit }
++
++    override suspend fun pull(profileId: Int, pageSize: Int): List<WatchedItem> {
++        val scope = scope(profileId)
++        sync.refresh(TrackingRefreshIntent.AUTOMATIC)
++        if (sync.currentScope() != scope) throw CancellationException("PublicMetaDB account changed")
++        val state = sync.state.value
++        if (!state.hasLoaded && state.error != null) throw PublicMetaDbApiException(0, message = "PublicMetaDB sync unavailable")
++        return sync.currentProjection().watchedItems
++    }
++
++    override suspend fun pullExtraWatchedKeys(profileId: Int): Set<String> {
++        scope(profileId)
++        return sync.currentProjection().watchedKeys
++    }
++
++    override fun observeExtraWatchedKeys(profileId: Int): Flow<Set<String>> =
++        combine(changes, activeProfile) { _, active ->
++            if (profileId == active) sync.currentProjection().watchedKeys else emptySet()
++        }.distinctUntilChanged()
++
++    override suspend fun push(profileId: Int, items: Collection<WatchedItem>) {
++        if (items.isEmpty()) return
++        writes.addToHistory(profileId, items.map { TrackingHistoryItem(it.reference(), it.markedAtEpochMs) })
++    }
++
++    override suspend fun delete(profileId: Int, items: Collection<WatchedItem>) {
++        if (items.isEmpty()) return
++        writes.removeFromHistory(profileId, items.map { it.reference() })
++    }
++
++    private fun scope(profileId: Int) = sync.currentScope().also {
++        if (it.profileId != profileId) throw CancellationException("PublicMetaDB profile changed")
++    }
++
++    private fun WatchedItem.reference() = buildTrackingMediaReference(
++        contentType = type,
++        parentMetaId = id,
++        videoId = videoId,
++        title = name,
++        releaseInfo = releaseInfo,
++        seasonNumber = season,
++        episodeNumber = episode,
++    )
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbTrackingWrites.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbTrackingWrites.kt
+new file mode 100644
+index 00000000..a7bc027b
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/publicmetadb/PublicMetaDbTrackingWrites.kt
+@@ -0,0 +1,625 @@
++package com.nuvio.app.features.publicmetadb
++
++import com.nuvio.app.features.tracking.TRACKING_RATING_MAX
++import com.nuvio.app.features.tracking.TRACKING_RATING_MIN
++import com.nuvio.app.features.tracking.TrackingAnimeIdMapper
++import com.nuvio.app.features.tracking.TrackingEpisode
++import com.nuvio.app.features.tracking.TrackingExternalIds
++import com.nuvio.app.features.tracking.TrackingHistoryItem
++import com.nuvio.app.features.tracking.TrackingHistoryWriter
++import com.nuvio.app.features.tracking.TrackingListStatus
++import com.nuvio.app.features.tracking.TrackingListWriter
++import com.nuvio.app.features.tracking.TrackingMediaKind
++import com.nuvio.app.features.tracking.TrackingMediaReference
++import com.nuvio.app.features.tracking.TrackingMutationResolution
++import com.nuvio.app.features.tracking.TrackingMutationResult
++import com.nuvio.app.features.tracking.TrackingProviderId
++import com.nuvio.app.features.tracking.TrackingRatingException
++import com.nuvio.app.features.tracking.TrackingRatingProvider
++import com.nuvio.app.features.tracking.TrackingRatingRecord
++import com.nuvio.app.features.tracking.TrackingRatingScope
++import com.nuvio.app.features.tracking.TrackingRatingTarget
++import com.nuvio.app.features.tracking.TrackingRefreshIntent
++import com.nuvio.app.features.tracking.TrackingScrobbleAction
++import com.nuvio.app.features.tracking.TrackingScrobbleEvent
++import com.nuvio.app.features.tracking.TrackingScrobbler
++import com.nuvio.app.features.tracking.parseTrackingExternalIds
++import kotlin.math.roundToInt
++import kotlin.math.roundToLong
++import kotlin.time.Instant
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.sync.Mutex
++import kotlinx.coroutines.sync.withLock
++import kotlinx.serialization.json.JsonObject
++import kotlinx.serialization.json.buildJsonObject
++import kotlinx.serialization.json.put
++
++class PublicMetaDbTrackingWrites internal constructor(
++    private val sync: PublicMetaDbSyncRepository,
++    private val api: PublicMetaDbApiClient,
++    private val resolver: PublicMetaDbIdResolver,
++    private val now: () -> Long = { kotlin.time.Clock.System.now().toEpochMilliseconds() },
++) : TrackingScrobbler, TrackingHistoryWriter, TrackingListWriter {
++    override val providerId = TrackingProviderId.PUBLICMETADB
++    private val writeLock = Mutex()
++    private val resumeLock = Mutex()
++
++    override suspend fun scrobble(profileId: Int, action: TrackingScrobbleAction, event: TrackingScrobbleEvent) {
++        val scope = scope(profileId)
++        val target = resolve(event.media) ?: return
++        if (!target.isMovie && !target.hasEpisode) return
++        val percent = event.progressPercent.coerceIn(0.0, 100.0)
++        if (action == TrackingScrobbleAction.STOP && percent >= COMPLETION_THRESHOLD_PERCENT) {
++            markWatched(scope, target, now())
++            deleteResume(scope, target)
++            sync.refreshAsync(TrackingRefreshIntent.INVALIDATED)
++            return
++        }
++        if (percent < MIN_RESUME_PERCENT) return
++        val runtimeMs = runtimeFor(event.media, target)
++        val positionMs = (runtimeMs * (percent / 100.0)).roundToLong().coerceIn(1L, (runtimeMs - 1L).coerceAtLeast(1L))
++        saveResume(scope, target, positionMs, runtimeMs)
++    }
++
++    override suspend fun addToHistory(profileId: Int, items: Collection<TrackingHistoryItem>): TrackingMutationResult {
++        val scope = scope(profileId)
++        var notFound = 0
++        writeLock.withLock {
++            items.forEach { item ->
++                val target = resolve(item.media)
++                if (target == null || (!target.isMovie && !target.hasEpisode)) {
++                    notFound += 1
++                    return@forEach
++                }
++                markWatched(scope, target, item.watchedAtEpochMs ?: now())
++            }
++        }
++        sync.refreshAsync(TrackingRefreshIntent.INVALIDATED)
++        return TrackingMutationResult(items.size, notFound)
++    }
++
++    override suspend fun removeFromHistory(
++        profileId: Int,
++        items: Collection<TrackingMediaReference>,
++    ): TrackingMutationResult {
++        val scope = scope(profileId)
++        var notFound = 0
++        writeLock.withLock {
++            items.forEach { media ->
++                val target = resolve(media)
++                if (target == null) {
++                    notFound += 1
++                    return@forEach
++                }
++                clearWatched(scope, target)
++            }
++        }
++        sync.refreshAsync(TrackingRefreshIntent.INVALIDATED)
++        return TrackingMutationResult(items.size, notFound)
++    }
++
++    override suspend fun moveToList(
++        profileId: Int,
++        items: Collection<TrackingMediaReference>,
++        destination: TrackingListStatus,
++    ): TrackingMutationResult {
++        val scope = scope(profileId)
++        var notFound = 0
++        val resolutions = mutableListOf<TrackingMutationResolution>()
++        writeLock.withLock {
++            items.forEach { media ->
++                val target = resolve(media)?.let { if (it.isMovie) it else it.copy(season = null, episode = null) }
++                if (target == null) {
++                    notFound += 1
++                    return@forEach
++                }
++                when (destination) {
++                    TrackingListStatus.COMPLETED -> {
++                        if (target.isMovie) {
++                            markWatched(scope, target, now())
++                        } else {
++                            val watchlist = ensureWatchlist(scope)
++                            addToList(scope, watchlist.id, target)
++                        }
++                    }
++                    TrackingListStatus.DROPPED -> {
++                        sync.currentProjection().watchlist?.let { removeFromList(scope, it.id, target) }
++                    }
++                    TrackingListStatus.PLAN_TO_WATCH,
++                    TrackingListStatus.WATCHING,
++                    TrackingListStatus.ON_HOLD,
++                    -> {
++                        val watchlist = ensureWatchlist(scope)
++                        addToList(scope, watchlist.id, target)
++                    }
++                }
++                resolutions += TrackingMutationResolution(
++                    listStatus = destination,
++                    mediaKind = if (target.isMovie) TrackingMediaKind.MOVIE else TrackingMediaKind.SHOW,
++                )
++            }
++        }
++        sync.refreshAsync(TrackingRefreshIntent.INVALIDATED)
++        return TrackingMutationResult(attemptedCount = items.size, notFoundCount = notFound, resolutions = resolutions)
++    }
++
++    override suspend fun removeFromList(
++        profileId: Int,
++        items: Collection<TrackingMediaReference>,
++    ): TrackingMutationResult {
++        val scope = scope(profileId)
++        var notFound = 0
++        writeLock.withLock {
++            val watchlist = sync.currentProjection().watchlist
++            items.forEach { media ->
++                val target = resolve(media)
++                if (target == null) {
++                    notFound += 1
++                    return@forEach
++                }
++                if (watchlist != null) removeFromList(scope, watchlist.id, target)
++            }
++        }
++        sync.refreshAsync(TrackingRefreshIntent.INVALIDATED)
++        return TrackingMutationResult(attemptedCount = items.size, notFoundCount = notFound)
++    }
++
++    internal suspend fun resolve(media: TrackingMediaReference): PublicMetaDbTarget? = try {
++        resolver.resolve(media)
++    } catch (error: CancellationException) {
++        throw error
++    } catch (error: PublicMetaDbAuthException) {
++        throw error
++    } catch (_: Exception) {
++        null
++    }
++
++    internal suspend fun markWatched(scope: PublicMetaDbAuthScope, target: PublicMetaDbTarget, watchedAtEpochMs: Long) {
++        val body = buildJsonObject {
++            put("tmdb_id", target.tmdbId)
++            put("media_type", target.mediaType)
++            if (!target.isMovie) {
++                target.season?.let { put("season", it) }
++                target.episode?.let { put("episode", it) }
++            }
++            put("watched_at", isoTimestamp(watchedAtEpochMs))
++            target.imdb?.let {
++                put("id_type", "imdb")
++                put("id_value", it)
++            }
++        }
++        val response = api.post(scope, "/api/external/watched", body, query = listOf("dedupe" to "true"), allowConflict = true)
++        sync.rememberMedia(scope, target.seedMedia())
++        sync.applyWatched(
++            scope,
++            added = listOf(
++                PublicMetaDbWatchedEntry(
++                    id = response.itemId(),
++                    tmdbId = target.tmdbId,
++                    mediaType = target.mediaType,
++                    season = target.season.takeIf { !target.isMovie },
++                    episode = target.episode.takeIf { !target.isMovie },
++                    watchedAtEpochMs = watchedAtEpochMs,
++                ),
++            ),
++        )
++    }
++
++    internal suspend fun clearWatched(scope: PublicMetaDbAuthScope, target: PublicMetaDbTarget) {
++        val query = buildList {
++            add("tmdb_id" to target.tmdbId.toString())
++            add("media_type" to target.mediaType)
++            if (!target.isMovie) {
++                target.season?.let { add("season" to it.toString()) }
++                target.episode?.let { add("episode" to it.toString()) }
++            }
++        }
++        api.delete(scope, "/api/external/watched", query)
++        sync.applyWatched(scope, added = emptyList()) { entry ->
++            entry.tmdbId == target.tmdbId &&
++                isPublicMetaDbMovieType(entry.mediaType) == target.isMovie &&
++                (target.isMovie || target.season == null || entry.season == target.season) &&
++                (target.isMovie || target.episode == null || entry.episode == target.episode)
++        }
++    }
++
++    internal suspend fun saveResume(scope: PublicMetaDbAuthScope, target: PublicMetaDbTarget, positionMs: Long, runtimeMs: Long) {
++        resumeLock.withLock {
++            val body = resumeBody(target, positionMs, runtimeMs)
++            var response = api.post(scope, "/api/external/resume", body, allowConflict = true)
++            if (response.status == 409) {
++                val existing = findResumeId(scope, target)
++                if (existing != null) {
++                    api.delete(scope, "/api/external/resume/${PublicMetaDbApiClient.pathSegment(existing)}")
++                    response = api.post(scope, "/api/external/resume", body, allowConflict = true)
++                }
++            }
++            if (response.status == 409) return@withLock
++            val action = response.json()?.publicMetaDbObject()?.publicMetaDbString("action")
++            if (action.equals("completed", ignoreCase = true)) {
++                markWatched(scope, target, now())
++                deleteResumeLocked(scope, target)
++                return@withLock
++            }
++            val nowMs = now()
++            sync.rememberMedia(scope, target.seedMedia())
++            sync.applyResume(
++                scope,
++                PublicMetaDbResumePoint(
++                    id = response.itemId(),
++                    tmdbId = target.tmdbId,
++                    mediaType = target.mediaType,
++                    season = target.season.takeIf { !target.isMovie },
++                    episode = target.episode.takeIf { !target.isMovie },
++                    positionMs = positionMs,
++                    runtimeMs = runtimeMs,
++                    progressPercent = if (runtimeMs > 0L) positionMs * 100.0 / runtimeMs else 0.0,
++                    updatedAtEpochMs = nowMs,
++                    title = target.title,
++                ),
++            ) { point -> point.matches(target) }
++        }
++    }
++
++    internal suspend fun deleteResume(scope: PublicMetaDbAuthScope, target: PublicMetaDbTarget) {
++        resumeLock.withLock { deleteResumeLocked(scope, target) }
++    }
++
++    internal suspend fun deleteResumeById(scope: PublicMetaDbAuthScope, point: PublicMetaDbResumePoint) {
++        resumeLock.withLock {
++            val id = point.id ?: findResumeId(
++                scope,
++                PublicMetaDbTarget(
++                    tmdbId = point.tmdbId,
++                    isMovie = isPublicMetaDbMovieType(point.mediaType),
++                    season = point.season,
++                    episode = point.episode,
++                ),
++            )
++            if (id != null) api.delete(scope, "/api/external/resume/${PublicMetaDbApiClient.pathSegment(id)}")
++            sync.applyResume(scope, null) { it == point }
++        }
++    }
++
++    private suspend fun deleteResumeLocked(scope: PublicMetaDbAuthScope, target: PublicMetaDbTarget) {
++        val known = sync.currentProjection().resumeFor(target.ref, target.season, target.episode)
++        val id = known?.id ?: findResumeId(scope, target)
++        if (id != null) api.delete(scope, "/api/external/resume/${PublicMetaDbApiClient.pathSegment(id)}")
++        sync.applyResume(scope, null) { point -> point.matches(target) }
++    }
++
++    private suspend fun findResumeId(scope: PublicMetaDbAuthScope, target: PublicMetaDbTarget): String? {
++        for (page in 1..RESUME_LOOKUP_MAX_PAGES) {
++            val response = api.get(
++                scope,
++                "/api/external/resume",
++                listOf("page" to page.toString(), "perPage" to RESUME_LOOKUP_PAGE_SIZE.toString()),
++                allowNotFound = true,
++            )
++            if (response.status == 404) return null
++            val items = response.items()
++            items.firstOrNull { row ->
++                val rawType = row.publicMetaDbFirstString("media_type", "mediaType")
++                val isMovie = rawType?.let(::isPublicMetaDbMovieType) ?: target.isMovie
++                isMovie == target.isMovie &&
++                    row.publicMetaDbTmdbId(target.mediaType) == target.tmdbId &&
++                    (target.isMovie || (
++                        row.publicMetaDbFirstInt("season", "season_number") == target.season &&
++                            row.publicMetaDbFirstInt("episode", "episode_number") == target.episode
++                        ))
++            }?.publicMetaDbString("id")?.let { return it }
++            val totalPages = response.totalPages() ?: 1
++            if (items.isEmpty() || page >= totalPages) return null
++        }
++        return null
++    }
++
++    internal suspend fun ensureWatchlist(scope: PublicMetaDbAuthScope): PublicMetaDbList {
++        sync.currentProjection().watchlist?.let { return it }
++        val response = api.post(
++            scope,
++            "/api/external/lists",
++            buildJsonObject {
++                put("name", PublicMetaDbConfig.DEFAULT_WATCHLIST_NAME)
++                put("description", "")
++                put("is_public", false)
++                put("type", PublicMetaDbListType.WATCHLIST)
++            },
++        )
++        val id = response.itemId() ?: throw PublicMetaDbApiException(response.status, message = "PublicMetaDB did not return the new watchlist")
++        val list = PublicMetaDbList(
++            id = id,
++            name = PublicMetaDbConfig.DEFAULT_WATCHLIST_NAME,
++            type = PublicMetaDbListType.WATCHLIST,
++            createdAtEpochMs = now(),
++        )
++        sync.applyLists(scope) { lists -> listOf(list) + lists.filterNot { it.id == id } }
++        return list
++    }
++
++    internal suspend fun addToList(scope: PublicMetaDbAuthScope, listId: String, target: PublicMetaDbTarget) {
++        if (sync.currentProjection().listItem(listId, target.ref) != null) return
++        val response = api.post(
++            scope,
++            "/api/external/lists/${PublicMetaDbApiClient.pathSegment(listId)}/items",
++            buildJsonObject {
++                put("tmdb_id", target.tmdbId)
++                put("media_type", target.mediaType)
++            },
++            allowConflict = true,
++        )
++        sync.rememberMedia(scope, target.seedMedia())
++        sync.applyListItem(
++            scope,
++            listId,
++            PublicMetaDbListItem(
++                id = response.itemId().takeIf { response.status != 409 },
++                tmdbId = target.tmdbId,
++                mediaType = target.mediaType,
++                title = target.title,
++                year = target.year,
++                addedAtEpochMs = now(),
++            ),
++        )
++    }
++
++    internal suspend fun removeFromList(scope: PublicMetaDbAuthScope, listId: String, target: PublicMetaDbTarget) {
++        var item = sync.currentProjection().listItem(listId, target.ref)
++        if (item == null || item.id == null) {
++            item = api.paged(scope, "/api/external/lists/${PublicMetaDbApiClient.pathSegment(listId)}/items", LIST_LOOKUP_PAGE_SIZE)
++                .firstOrNull { row ->
++                    val rawType = row.publicMetaDbFirstString("media_type", "mediaType")
++                    rawType?.let(::isPublicMetaDbMovieType) == target.isMovie && row.publicMetaDbTmdbId(target.mediaType) == target.tmdbId
++                }
++                ?.let { row ->
++                    PublicMetaDbListItem(
++                        id = row.publicMetaDbFirstString("id", "item_id"),
++                        tmdbId = target.tmdbId,
++                        mediaType = target.mediaType,
++                    )
++                }
++        }
++        val itemId = item?.id
++        if (itemId != null) {
++            api.delete(
++                scope,
++                "/api/external/lists/${PublicMetaDbApiClient.pathSegment(listId)}/items/${PublicMetaDbApiClient.pathSegment(itemId)}",
++            )
++        }
++        sync.applyListItem(scope, listId, null) { existing ->
++            existing.tmdbId == target.tmdbId && isPublicMetaDbMovieType(existing.mediaType) == target.isMovie
++        }
++    }
++
++    private fun runtimeFor(media: TrackingMediaReference, target: PublicMetaDbTarget): Long {
++        val contentId = media.catalog?.contentId?.lowercase()
++        val episode = media.episode
++        sync.currentLocalPlayback().firstOrNull { entry ->
++            entry.durationMs > 0L &&
++                contentId != null &&
++                entry.parentMetaId.lowercase() == contentId &&
++                (episode == null || (entry.seasonNumber == episode.season && entry.episodeNumber == episode.number))
++        }?.let { return it.durationMs }
++        val projection = sync.currentProjection()
++        projection.resumeFor(target.ref, target.season, target.episode)?.runtimeMs?.takeIf { it > 0L }?.let { return it }
++        projection.mediaFor(target.ref).runtimeMinutes?.takeIf { it > 0 }?.let { return it * 60_000L }
++        return if (target.isMovie) DEFAULT_MOVIE_RUNTIME_MS else DEFAULT_EPISODE_RUNTIME_MS
++    }
++
++    private fun resumeBody(target: PublicMetaDbTarget, positionMs: Long, runtimeMs: Long): JsonObject = buildJsonObject {
++        put("tmdb_id", target.tmdbId)
++        put("media_type", target.mediaType)
++        put("season", if (target.isMovie) 0 else target.season ?: 0)
++        put("episode", if (target.isMovie) 0 else target.episode ?: 0)
++        put("position_ms", positionMs)
++        put("runtime_ms", runtimeMs)
++    }
++
++    private fun PublicMetaDbResumePoint.matches(target: PublicMetaDbTarget): Boolean =
++        tmdbId == target.tmdbId &&
++            isPublicMetaDbMovieType(mediaType) == target.isMovie &&
++            (target.isMovie || (season == target.season && episode == target.episode))
++
++    private fun scope(profileId: Int): PublicMetaDbAuthScope = sync.currentScope().also {
++        if (it.profileId != profileId) throw CancellationException("PublicMetaDB profile changed")
++    }
++
++    companion object {
++        const val COMPLETION_THRESHOLD_PERCENT = 80.0
++        private const val MIN_RESUME_PERCENT = 1.0
++        private const val DEFAULT_MOVIE_RUNTIME_MS = 6_300_000L
++        private const val DEFAULT_EPISODE_RUNTIME_MS = 2_640_000L
++        private const val RESUME_LOOKUP_PAGE_SIZE = 100
++        private const val RESUME_LOOKUP_MAX_PAGES = 5
++        private const val LIST_LOOKUP_PAGE_SIZE = 500
++    }
++}
++
++internal fun isoTimestamp(epochMs: Long): String = Instant.fromEpochMilliseconds(epochMs).toString()
++
++internal class PublicMetaDbRatingsProvider(
++    private val sync: PublicMetaDbSyncRepository,
++    private val api: PublicMetaDbApiClient,
++    private val writes: PublicMetaDbTrackingWrites,
++    private val now: () -> Long = { kotlin.time.Clock.System.now().toEpochMilliseconds() },
++) : TrackingRatingProvider {
++    override val providerId = TrackingProviderId.PUBLICMETADB
++    override val supportedScopes = setOf(
++        TrackingRatingScope.MOVIE,
++        TrackingRatingScope.SHOW,
++        TrackingRatingScope.EPISODE,
++    )
++
++    override fun canRate(target: TrackingRatingTarget): Boolean {
++        val effective = publicMetaDbTarget(target)
++        if (effective.scope !in supportedScopes || !effective.isValid) return false
++        val catalogIds = effective.catalog?.contentId?.let(::parseTrackingExternalIds) ?: TrackingExternalIds()
++        return effective.ids.hasAny || catalogIds.hasAny
++    }
++
++    override suspend fun normalize(target: TrackingRatingTarget): TrackingRatingTarget {
++        val effective = publicMetaDbTarget(target)
++        if (effective.scope != TrackingRatingScope.EPISODE) return effective
++        val catalog = effective.catalog ?: return effective
++        val number = effective.episode ?: return effective
++        val reference = TrackingMediaReference(
++            kind = effective.kind,
++            title = effective.title,
++            year = effective.year,
++            ids = effective.ids,
++            episode = TrackingEpisode(season = effective.season, number = number, title = effective.episodeTitle),
++            catalog = catalog,
++        )
++        val mapped = TrackingAnimeIdMapper.toImdbReference(reference)
++        if (mapped === reference) return effective
++        val episode = mapped.episode ?: return effective
++        return effective.copy(
++            ids = mapped.ids,
++            season = episode.season ?: return effective,
++            episode = episode.number,
++        )
++    }
++
++    override suspend fun fetchRatings(profileId: Int, scope: TrackingRatingScope): List<TrackingRatingRecord> {
++        scope(profileId)
++        if (scope !in supportedScopes) return emptyList()
++        sync.refresh(TrackingRefreshIntent.AUTOMATIC)
++        val projection = sync.currentProjection()
++        return projection.snapshot.ratings
++            .filter { rating -> rating.scope() == scope }
++            .map { rating ->
++                val media = projection.mediaFor(PublicMetaDbTitleRef(normalizePublicMetaDbMediaType(rating.mediaType), rating.tmdbId))
++                TrackingRatingRecord(
++                    scope = scope,
++                    ids = TrackingExternalIds(
++                        imdb = media.imdb ?: rating.imdb,
++                        tmdb = rating.tmdbId,
++                        tvdb = media.tvdb?.toString(),
++                    ),
++                    rating = rating.rating.coerceIn(TRACKING_RATING_MIN, TRACKING_RATING_MAX),
++                    season = rating.season,
++                    episode = rating.episode,
++                )
++            }
++    }
++
++    override suspend fun setRating(profileId: Int, target: TrackingRatingTarget, rating: Int) {
++        val authScope = scope(profileId)
++        val resolved = resolve(target) ?: throw TrackingRatingException("This title could not be found on PublicMetaDB")
++        val value = rating.coerceIn(TRACKING_RATING_MIN, TRACKING_RATING_MAX)
++        val entry = entry(target, resolved, value)
++        val path = pathFor(target)
++        sync.currentProjection().rating(resolved.ref, entry.season, entry.episode)?.id?.let { existingId ->
++            api.delete(authScope, "$path/${PublicMetaDbApiClient.pathSegment(existingId)}")
++        }
++        val body = document(target, resolved, value)
++        val response = api.post(authScope, path, body, allowConflict = true)
++        val id = if (response.status == 409) {
++            findRatingId(authScope, path, target, resolved, value)
++                ?: throw TrackingRatingException("This title already has a different PublicMetaDB rating. Remove it on PublicMetaDB first.")
++        } else {
++            response.itemId()
++        }
++        sync.rememberMedia(authScope, resolved.seedMedia())
++        sync.applyRating(authScope, entry.copy(id = id), value)
++    }
++
++    override suspend fun removeRating(profileId: Int, target: TrackingRatingTarget) {
++        val authScope = scope(profileId)
++        val resolved = resolve(target) ?: return
++        val entry = entry(target, resolved, TRACKING_RATING_MIN)
++        val path = pathFor(target)
++        val id = sync.currentProjection().rating(resolved.ref, entry.season, entry.episode)?.id
++        if (id != null) api.delete(authScope, "$path/${PublicMetaDbApiClient.pathSegment(id)}")
++        sync.applyRating(authScope, entry, null)
++    }
++
++    private suspend fun findRatingId(
++        scope: PublicMetaDbAuthScope,
++        path: String,
++        target: TrackingRatingTarget,
++        resolved: PublicMetaDbTarget,
++        value: Int,
++    ): String? {
++        val query = buildList {
++            add("tmdb_id" to resolved.tmdbId.toString())
++            add("media_type" to resolved.mediaType)
++            add("label" to PublicMetaDbConfig.RATING_LABEL)
++            if (target.scope == TrackingRatingScope.EPISODE) {
++                target.season?.let { add("season" to it.toString()) }
++                target.episode?.let { add("episode" to it.toString()) }
++            }
++        }
++        val response = api.get(scope, path, query, allowNotFound = true)
++        if (response.status == 404) return null
++        return response.items().firstOrNull { row -> ratingFrom(row) == value }?.publicMetaDbFirstString("id", "rating_id")
++    }
++
++    private fun ratingFrom(row: JsonObject): Int? {
++        val score = row.publicMetaDbDouble("score")
++        if (score != null) return (score / 10.0).roundToInt().coerceIn(TRACKING_RATING_MIN, TRACKING_RATING_MAX)
++        val rating = row.publicMetaDbDouble("rating") ?: return null
++        val normalized = if (rating > 10.0) rating / 10.0 else rating
++        return normalized.roundToInt().coerceIn(TRACKING_RATING_MIN, TRACKING_RATING_MAX)
++    }
++
++    private suspend fun resolve(target: TrackingRatingTarget): PublicMetaDbTarget? {
++        val isMovie = target.scope == TrackingRatingScope.MOVIE
++        val resolved = writes.resolve(
++            TrackingMediaReference(
++                kind = if (isMovie) TrackingMediaKind.MOVIE else TrackingMediaKind.SHOW,
++                title = target.title,
++                year = target.year,
++                ids = target.ids,
++                catalog = target.catalog,
++            ),
++        ) ?: return null
++        return if (target.scope == TrackingRatingScope.EPISODE) {
++            resolved.copy(season = target.season, episode = target.episode)
++        } else {
++            resolved.copy(season = null, episode = null)
++        }
++    }
++
++    private fun entry(target: TrackingRatingTarget, resolved: PublicMetaDbTarget, value: Int) = PublicMetaDbRatingEntry(
++        tmdbId = resolved.tmdbId,
++        mediaType = resolved.mediaType,
++        season = target.season.takeIf { target.scope == TrackingRatingScope.EPISODE },
++        episode = target.episode.takeIf { target.scope == TrackingRatingScope.EPISODE },
++        imdb = resolved.imdb ?: target.ids.imdb,
++        rating = value,
++        ratedAtEpochMs = now(),
++    )
++
++    private fun document(target: TrackingRatingTarget, resolved: PublicMetaDbTarget, rating: Int): JsonObject = buildJsonObject {
++        put("tmdb_id", resolved.tmdbId)
++        put("media_type", resolved.mediaType)
++        if (target.scope == TrackingRatingScope.EPISODE) {
++            put("season", target.season ?: 1)
++            put("episode", target.episode ?: 1)
++        }
++        put("score", rating * 10)
++        put("label", PublicMetaDbConfig.RATING_LABEL)
++    }
++
++    private fun pathFor(target: TrackingRatingTarget): String =
++        if (target.scope == TrackingRatingScope.EPISODE) "/api/external/episode-ratings" else "/api/external/ratings"
++
++    private fun publicMetaDbTarget(target: TrackingRatingTarget): TrackingRatingTarget {
++        val catalogType = target.catalog?.contentType?.trim()?.lowercase()
++        val isAnimeMovie = target.scope == TrackingRatingScope.SHOW &&
++            target.kind == TrackingMediaKind.ANIME &&
++            (catalogType == "movie" || catalogType == "film")
++        return if (isAnimeMovie) target.copy(scope = TrackingRatingScope.MOVIE) else target
++    }
++
++    private fun PublicMetaDbRatingEntry.scope(): TrackingRatingScope = when {
++        isPublicMetaDbMovieType(mediaType) -> TrackingRatingScope.MOVIE
++        season != null && episode != null -> TrackingRatingScope.EPISODE
++        else -> TrackingRatingScope.SHOW
++    }
++
++    private fun scope(profileId: Int) = sync.currentScope().also {
++        if (it.profileId != profileId) throw CancellationException("PublicMetaDB profile changed")
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PublicMetaDbProviderCard.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PublicMetaDbProviderCard.kt
+new file mode 100644
+index 00000000..07f6dd94
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PublicMetaDbProviderCard.kt
+@@ -0,0 +1,182 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.text.KeyboardActions
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.material3.TextButton
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.rememberCoroutineScope
++import androidx.compose.runtime.saveable.rememberSaveable
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.platform.LocalUriHandler
++import androidx.compose.ui.text.input.ImeAction
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.core.format.formatLocalDateTime
++import com.nuvio.app.core.ui.DialogButton
++import com.nuvio.app.core.ui.DialogButtonStyle
++import com.nuvio.app.core.ui.DialogButtons
++import com.nuvio.app.core.ui.DialogSurface
++import com.nuvio.app.core.ui.nuvio
++import com.nuvio.app.features.publicmetadb.PublicMetaDbAuthError
++import com.nuvio.app.features.publicmetadb.PublicMetaDbConfig
++import com.nuvio.app.features.publicmetadb.PublicMetaDbSyncError
++import com.nuvio.app.features.publicmetadb.PublicMetaDbTracker
++import com.nuvio.app.features.tracking.TrackingProviderId
++import com.nuvio.app.features.tracking.TrackingRefreshIntent
++import com.nuvio.app.features.watchprogress.WatchProgressSourceCoordinator
++import kotlinx.coroutines.launch
++import nuvio.composeapp.generated.resources.*
++import org.jetbrains.compose.resources.stringResource
++
++@Composable
++internal fun PublicMetaDbProviderCard(modifier: Modifier = Modifier) {
++    val auth by remember { PublicMetaDbTracker.ensureLoaded(); PublicMetaDbTracker.authState }.collectAsStateWithLifecycle()
++    val sync by PublicMetaDbTracker.sync.state.collectAsStateWithLifecycle()
++    val scope = rememberCoroutineScope()
++    var showKeyDialog by rememberSaveable { mutableStateOf(false) }
++    val syncStatus = sync.takeIf { it.scope == auth.scope }
++    TrackingProviderCard(
++        brand = TrackingBrand.PUBLICMETADB,
++        mode = if (auth.isAuthenticated) TrackingConnectionCardMode.CONNECTED else TrackingConnectionCardMode.DISCONNECTED,
++        credentialsConfigured = true,
++        isLoading = auth.isBusy,
++        connectedLabel = stringResource(
++            Res.string.settings_publicmetadb_connected_as,
++            auth.keyHint ?: stringResource(Res.string.settings_publicmetadb_account_fallback),
++        ),
++        connectedDescription = stringResource(Res.string.settings_publicmetadb_connected_description),
++        signInDescription = stringResource(Res.string.settings_publicmetadb_sign_in_description),
++        finishSignInLabel = stringResource(Res.string.settings_publicmetadb_finish_sign_in),
++        approvalDescription = stringResource(Res.string.settings_publicmetadb_approval_description),
++        connectLabel = stringResource(Res.string.settings_publicmetadb_connect),
++        openLoginLabel = stringResource(Res.string.settings_publicmetadb_open_login),
++        disconnectLabel = stringResource(Res.string.settings_publicmetadb_disconnect),
++        missingCredentialsMessage = stringResource(Res.string.settings_publicmetadb_missing_credentials),
++        syncLabel = stringResource(Res.string.settings_publicmetadb_sync_now),
++        isSyncing = syncStatus?.isLoading == true,
++        statusMessage = when {
++            syncStatus?.isLoading == true -> stringResource(Res.string.settings_publicmetadb_syncing)
++            auth.isAuthenticated && syncStatus?.snapshot?.checkedAtEpochMs != null -> stringResource(
++                Res.string.settings_publicmetadb_last_synced,
++                formatLocalDateTime(syncStatus.snapshot.checkedAtEpochMs),
++            )
++            else -> null
++        },
++        errorMessage = publicMetaDbAccountError(auth.error.takeUnless { showKeyDialog }, syncStatus?.error),
++        websiteLabel = stringResource(Res.string.settings_publicmetadb_visit),
++        websiteUrl = PublicMetaDbConfig.WEBSITE_URL,
++        onConnectRequested = {
++            PublicMetaDbTracker.clearError()
++            showKeyDialog = true
++            null
++        },
++        onResumeAuthorization = {
++            showKeyDialog = true
++            null
++        },
++        onCancelAuthorization = { showKeyDialog = false },
++        onDisconnect = { PublicMetaDbTracker.disconnect() },
++        onSyncRequested = {
++            scope.launch {
++                WatchProgressSourceCoordinator.refreshProviderAndActiveSource(
++                    profileId = auth.scope.profileId,
++                    providerId = TrackingProviderId.PUBLICMETADB,
++                    refreshProvider = {
++                        PublicMetaDbTracker.sync.refresh(TrackingRefreshIntent.USER_INITIATED)
++                        PublicMetaDbTracker.sync.state.value.let { it.scope == auth.scope && it.hasLoaded && it.error == null }
++                    },
++                )
++            }
++        },
++        modifier = modifier,
++    )
++
++    if (showKeyDialog && !auth.isAuthenticated) {
++        PublicMetaDbApiKeyDialog(
++            isBusy = auth.isBusy,
++            errorMessage = publicMetaDbAccountError(auth.error, null),
++            onConnect = { key ->
++                scope.launch {
++                    if (PublicMetaDbTracker.connect(key)) showKeyDialog = false
++                }
++            },
++            onDismiss = {
++                showKeyDialog = false
++                PublicMetaDbTracker.clearError()
++            },
++        )
++    }
++}
++
++@Composable
++private fun PublicMetaDbApiKeyDialog(
++    isBusy: Boolean,
++    errorMessage: String?,
++    onConnect: (String) -> Unit,
++    onDismiss: () -> Unit,
++) {
++    val tokens = MaterialTheme.nuvio
++    val uriHandler = LocalUriHandler.current
++    var apiKey by rememberSaveable { mutableStateOf("") }
++    val trimmed = apiKey.trim()
++    DialogSurface(
++        onDismissRequest = { if (!isBusy) onDismiss() },
++        title = stringResource(Res.string.settings_publicmetadb_api_key_title),
++        message = stringResource(Res.string.settings_publicmetadb_api_key_description),
++    ) {
++        SettingsSecretTextField(
++            value = apiKey,
++            onValueChange = { apiKey = it },
++            label = stringResource(Res.string.settings_publicmetadb_api_key_label),
++            modifier = Modifier.fillMaxWidth(),
++            isError = errorMessage != null,
++            enabled = !isBusy,
++            imeAction = ImeAction.Done,
++            keyboardActions = KeyboardActions(onDone = { if (trimmed.isNotEmpty() && !isBusy) onConnect(trimmed) }),
++        )
++        errorMessage?.let { message ->
++            Text(
++                text = message,
++                style = MaterialTheme.typography.bodySmall,
++                color = tokens.colors.danger,
++            )
++        }
++        TextButton(onClick = { runCatching { uriHandler.openUri(PublicMetaDbConfig.API_KEY_URL) } }) {
++            Text(stringResource(Res.string.settings_publicmetadb_get_api_key))
++        }
++        DialogButtons {
++            DialogButton(
++                text = stringResource(Res.string.action_cancel),
++                onClick = onDismiss,
++                enabled = !isBusy,
++            )
++            DialogButton(
++                text = stringResource(Res.string.settings_publicmetadb_connect_action),
++                onClick = { onConnect(trimmed) },
++                style = DialogButtonStyle.Primary,
++                enabled = trimmed.isNotEmpty(),
++                loading = isBusy,
++            )
++        }
++    }
++}
++
++@Composable
++private fun publicMetaDbAccountError(auth: PublicMetaDbAuthError?, sync: PublicMetaDbSyncError?): String? = when {
++    auth == PublicMetaDbAuthError.MISSING_KEY -> stringResource(Res.string.settings_publicmetadb_missing_key)
++    auth == PublicMetaDbAuthError.INVALID_KEY -> stringResource(Res.string.settings_publicmetadb_invalid_key)
++    auth == PublicMetaDbAuthError.REQUEST_FAILED -> stringResource(Res.string.settings_publicmetadb_request_failed)
++    auth == PublicMetaDbAuthError.RATE_LIMITED -> stringResource(Res.string.settings_publicmetadb_rate_limited)
++    auth == PublicMetaDbAuthError.BLOCKED -> stringResource(Res.string.settings_publicmetadb_blocked)
++    auth == PublicMetaDbAuthError.AUTHORIZATION_REVOKED -> stringResource(Res.string.settings_publicmetadb_auth_revoked)
++    sync == PublicMetaDbSyncError.RATE_LIMIT -> stringResource(Res.string.settings_publicmetadb_rate_limited)
++    sync == PublicMetaDbSyncError.AUTHORIZATION_REVOKED -> stringResource(Res.string.settings_publicmetadb_auth_revoked)
++    sync == PublicMetaDbSyncError.BLOCKED -> stringResource(Res.string.settings_publicmetadb_blocked)
++    sync == PublicMetaDbSyncError.UNAVAILABLE -> stringResource(Res.string.settings_publicmetadb_unavailable)
++    else -> null
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/TrackingProviderCards.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/TrackingProviderCards.kt
+index 1a54ab92..161c12db 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/TrackingProviderCards.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/TrackingProviderCards.kt
+@@ -89,6 +89,8 @@ import nuvio.composeapp.generated.resources.settings_anilist_disconnect_descript
+ import nuvio.composeapp.generated.resources.anilist_logo
+ import nuvio.composeapp.generated.resources.settings_wetrakr_disconnect_description
+ import nuvio.composeapp.generated.resources.wetrakr_logo
++import nuvio.composeapp.generated.resources.settings_publicmetadb_disconnect_description
++import nuvio.composeapp.generated.resources.publicmetadb_logo
+ import nuvio.composeapp.generated.resources.Res
+ import nuvio.composeapp.generated.resources.action_cancel
+ import nuvio.composeapp.generated.resources.action_collapse
+@@ -137,6 +139,7 @@ internal enum class TrackingBrand(val displayName: String) {
+     TMDB("TMDB"),
+     ANILIST("AniList"),
+     WETRAKR("WeTrakr"),
++    PUBLICMETADB("PublicMetaDB"),
+ }
+ 
+ internal enum class TrackingConnectionCardMode {
+@@ -152,6 +155,7 @@ internal fun isTrackingBrandAvailable(
+     mdblistConnected: Boolean = false,
+     anilistConnected: Boolean = false,
+     wetrakrConnected: Boolean = false,
++    publicMetaDbConnected: Boolean = false,
+ ): Boolean = when (brand) {
+     TrackingBrand.NUVIO,
+     TrackingBrand.TMDB,
+@@ -161,6 +165,7 @@ internal fun isTrackingBrandAvailable(
+     TrackingBrand.MDBLIST -> mdblistConnected
+     TrackingBrand.ANILIST -> anilistConnected
+     TrackingBrand.WETRAKR -> wetrakrConnected
++    TrackingBrand.PUBLICMETADB -> publicMetaDbConnected
+ }
+ 
+ internal fun TraktConnectionMode.toTrackingConnectionCardMode(): TrackingConnectionCardMode = when (this) {
+@@ -220,6 +225,7 @@ internal fun TrackingProviderCards(
+         MdbListProviderCard(Modifier.fillMaxWidth())
+         AniListProviderCard(Modifier.fillMaxWidth())
+         WeTrakrProviderCard(Modifier.fillMaxWidth())
++        PublicMetaDbProviderCard(Modifier.fillMaxWidth())
+     }
+ 
+     if (showSyncInfo) {
+@@ -695,6 +701,7 @@ private fun TrackingDisconnectDialog(
+                 TrackingBrand.MDBLIST -> stringResource(Res.string.settings_mdblist_disconnect_description)
+                 TrackingBrand.ANILIST -> stringResource(Res.string.settings_anilist_disconnect_description)
+                 TrackingBrand.WETRAKR -> stringResource(Res.string.settings_wetrakr_disconnect_description)
++                TrackingBrand.PUBLICMETADB -> stringResource(Res.string.settings_publicmetadb_disconnect_description)
+                 TrackingBrand.NUVIO,
+                 TrackingBrand.TMDB,
+                 -> stringResource(
+@@ -762,6 +769,12 @@ internal fun TrackingBrandGlyph(
+             modifier = modifier,
+             contentScale = ContentScale.Fit,
+         )
++        TrackingBrand.PUBLICMETADB -> Image(
++            painter = painterResource(Res.drawable.publicmetadb_logo),
++            contentDescription = contentDescription,
++            modifier = modifier,
++            contentScale = ContentScale.Fit,
++        )
+         TrackingBrand.NUVIO -> Icon(
+             imageVector = Icons.Rounded.Sync,
+             contentDescription = contentDescription,
+@@ -782,11 +795,12 @@ private fun TrackingBrandWordmark(
+         TrackingBrand.MDBLIST -> integrationLogoPainter(IntegrationLogo.MdbList)
+         TrackingBrand.ANILIST -> painterResource(Res.drawable.anilist_logo)
+         TrackingBrand.WETRAKR -> painterResource(Res.drawable.wetrakr_logo)
++        TrackingBrand.PUBLICMETADB -> painterResource(Res.drawable.publicmetadb_logo)
+         TrackingBrand.NUVIO,
+         TrackingBrand.TMDB,
+         -> return
+     }
+-    if (brand == TrackingBrand.MDBLIST || brand == TrackingBrand.ANILIST || brand == TrackingBrand.WETRAKR) {
++    if (brand == TrackingBrand.MDBLIST || brand == TrackingBrand.ANILIST || brand == TrackingBrand.WETRAKR || brand == TrackingBrand.PUBLICMETADB) {
+         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+             Image(painter, contentDescription = null, modifier = Modifier.size(32.dp))
+             Text(contentDescription, style = MaterialTheme.typography.titleLarge, color = Color.White, fontWeight = FontWeight.Bold)
+@@ -806,6 +820,7 @@ private fun TrackingBrandWordmark(
+             TrackingBrand.MDBLIST,
+             TrackingBrand.ANILIST,
+             TrackingBrand.WETRAKR,
++            TrackingBrand.PUBLICMETADB,
+             -> Modifier.width(130.dp).height(32.dp)
+             TrackingBrand.NUVIO,
+             TrackingBrand.TMDB,
+@@ -832,6 +847,9 @@ private fun TrackingBrand.cardBrush(): Brush = when (this) {
+     TrackingBrand.WETRAKR -> Brush.linearGradient(
+         colors = listOf(Color(0xFF0A0A0C), Color(0xFF1F1C0A), Color(0xFF0A0A0C)),
+     )
++    TrackingBrand.PUBLICMETADB -> Brush.linearGradient(
++        colors = listOf(Color(0xFF0A0A0B), Color(0xFF1C2333), Color(0xFF0A0A0B)),
++    )
+     TrackingBrand.NUVIO,
+     TrackingBrand.TMDB,
+     -> Brush.linearGradient(colors = listOf(Color(0xFF242424), Color(0xFF111111)))
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/TrackingSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/TrackingSettingsPage.kt
+index 830f78e9..7cd2bbfa 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/TrackingSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/TrackingSettingsPage.kt
+@@ -45,6 +45,7 @@ import com.nuvio.app.features.trakt.TraktContinueWatchingDaysOptions
+ import com.nuvio.app.features.trakt.normalizeTraktContinueWatchingDaysCap
+ import com.nuvio.app.features.watchprogress.WatchProgressSourceCoordinator
+ import com.nuvio.app.features.wetrakr.WeTrakrTracker
++import com.nuvio.app.features.publicmetadb.PublicMetaDbTracker
+ import kotlinx.coroutines.launch
+ import nuvio.composeapp.generated.resources.Res
+ import nuvio.composeapp.generated.resources.tracking_source_mdblist
+@@ -52,6 +53,9 @@ import nuvio.composeapp.generated.resources.tracking_source_anilist
+ import nuvio.composeapp.generated.resources.tracking_source_wetrakr
+ import nuvio.composeapp.generated.resources.settings_wetrakr_library_description
+ import nuvio.composeapp.generated.resources.settings_wetrakr_progress_description
++import nuvio.composeapp.generated.resources.tracking_source_publicmetadb
++import nuvio.composeapp.generated.resources.settings_publicmetadb_library_description
++import nuvio.composeapp.generated.resources.settings_publicmetadb_progress_description
+ import nuvio.composeapp.generated.resources.settings_anilist_library_description
+ import nuvio.composeapp.generated.resources.settings_anilist_progress_description
+ import nuvio.composeapp.generated.resources.settings_anilist_anime_section
+@@ -228,12 +232,14 @@ private fun TrackingDataSources(
+     val mdblistConnected by remember { MdbListTracker.ensureLoaded(); MdbListTracker.isAuthenticated }.collectAsStateWithLifecycle()
+     val anilistConnected by remember { AniListTracker.ensureLoaded(); AniListTracker.isAuthenticated }.collectAsStateWithLifecycle()
+     val wetrakrConnected by remember { WeTrakrTracker.ensureLoaded(); WeTrakrTracker.isAuthenticated }.collectAsStateWithLifecycle()
++    val publicMetaDbConnected by remember { PublicMetaDbTracker.ensureLoaded(); PublicMetaDbTracker.isAuthenticated }.collectAsStateWithLifecycle()
+     val connectedProviders = buildSet {
+         if (traktConnected) add(TrackingProviderId.TRAKT)
+         if (simklConnected) add(TrackingProviderId.SIMKL)
+         if (mdblistConnected) add(TrackingProviderId.MDBLIST)
+         if (anilistConnected) add(TrackingProviderId.ANILIST)
+         if (wetrakrConnected) add(TrackingProviderId.WETRAKR)
++        if (publicMetaDbConnected) add(TrackingProviderId.PUBLICMETADB)
+     }
+     val effectiveLibrarySource = effectiveLibrarySourceMode(settingsUiState.librarySourceMode) { provider ->
+         provider in connectedProviders
+@@ -323,7 +329,7 @@ private fun TrackingDataSources(
+             title = stringResource(Res.string.trakt_library_source_dialog_title),
+             subtitle = stringResource(Res.string.trakt_library_source_dialog_subtitle),
+             selectedValue = effectiveLibrarySource,
+-            options = librarySourceOptions(traktConnected, simklConnected, mdblistConnected, anilistConnected, wetrakrConnected),
++            options = librarySourceOptions(traktConnected, simklConnected, mdblistConnected, anilistConnected, wetrakrConnected, publicMetaDbConnected),
+             onSelected = TrackingSettingsRepository::setLibrarySourceMode,
+             onDismiss = { activePickerName = null },
+         )
+@@ -332,7 +338,7 @@ private fun TrackingDataSources(
+             title = stringResource(Res.string.trakt_watch_progress_dialog_title),
+             subtitle = stringResource(Res.string.tracking_watch_progress_dialog_subtitle),
+             selectedValue = effectiveProgressSource,
+-            options = watchProgressSourceOptions(traktConnected, simklConnected, mdblistConnected, anilistConnected, wetrakrConnected),
++            options = watchProgressSourceOptions(traktConnected, simklConnected, mdblistConnected, anilistConnected, wetrakrConnected, publicMetaDbConnected),
+             onSelected = { source ->
+                 scope.launch {
+                     WatchProgressSourceCoordinator.selectSource(
+@@ -499,6 +505,7 @@ private fun librarySourceOptions(
+     mdblistConnected: Boolean,
+     anilistConnected: Boolean,
+     wetrakrConnected: Boolean,
++    publicMetaDbConnected: Boolean,
+ ): List<TrackingPickerOption<LibrarySourceMode>> {
+     val traktAvailable = isTrackingBrandAvailable(TrackingBrand.TRAKT, traktConnected, simklConnected)
+     val simklAvailable = isTrackingBrandAvailable(TrackingBrand.SIMKL, traktConnected, simklConnected)
+@@ -543,6 +550,13 @@ private fun librarySourceOptions(
+             enabled = wetrakrConnected,
+             unavailableReason = trackingUnavailableReason(TrackingBrand.WETRAKR, wetrakrConnected),
+         ),
++        TrackingPickerOption(
++            value = WatchProgressSource.PUBLICMETADB,
++            title = stringResource(Res.string.tracking_source_publicmetadb),
++            description = stringResource(Res.string.settings_publicmetadb_progress_description),
++            enabled = publicMetaDbConnected,
++            unavailableReason = trackingUnavailableReason(TrackingBrand.PUBLICMETADB, publicMetaDbConnected),
++        ),
+     )
+ }
+ 
+@@ -553,6 +567,7 @@ private fun watchProgressSourceOptions(
+     mdblistConnected: Boolean,
+     anilistConnected: Boolean,
+     wetrakrConnected: Boolean,
++    publicMetaDbConnected: Boolean,
+ ): List<TrackingPickerOption<WatchProgressSource>> {
+     val traktAvailable = isTrackingBrandAvailable(TrackingBrand.TRAKT, traktConnected, simklConnected)
+     val simklAvailable = isTrackingBrandAvailable(TrackingBrand.SIMKL, traktConnected, simklConnected)
+@@ -597,6 +612,13 @@ private fun watchProgressSourceOptions(
+             enabled = wetrakrConnected,
+             unavailableReason = trackingUnavailableReason(TrackingBrand.WETRAKR, wetrakrConnected),
+         ),
++        TrackingPickerOption(
++            value = LibrarySourceMode.PUBLICMETADB,
++            title = stringResource(Res.string.tracking_source_publicmetadb),
++            description = stringResource(Res.string.settings_publicmetadb_library_description),
++            enabled = publicMetaDbConnected,
++            unavailableReason = trackingUnavailableReason(TrackingBrand.PUBLICMETADB, publicMetaDbConnected),
++        ),
+     )
+ }
+ 
+@@ -660,6 +682,7 @@ private fun librarySourceModeLabel(source: LibrarySourceMode): String = when (so
+     LibrarySourceMode.MDBLIST -> stringResource(Res.string.tracking_source_mdblist)
+     LibrarySourceMode.ANILIST -> stringResource(Res.string.tracking_source_anilist)
+     LibrarySourceMode.WETRAKR -> stringResource(Res.string.tracking_source_wetrakr)
++    LibrarySourceMode.PUBLICMETADB -> stringResource(Res.string.tracking_source_publicmetadb)
+ }
+ 
+ @Composable
+@@ -670,6 +693,7 @@ private fun watchProgressSourceLabel(source: WatchProgressSource): String = when
+     WatchProgressSource.MDBLIST -> stringResource(Res.string.tracking_source_mdblist)
+     WatchProgressSource.ANILIST -> stringResource(Res.string.tracking_source_anilist)
+     WatchProgressSource.WETRAKR -> stringResource(Res.string.tracking_source_wetrakr)
++    WatchProgressSource.PUBLICMETADB -> stringResource(Res.string.tracking_source_publicmetadb)
+ }
+ 
+ @Composable
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tracking/TrackingProvider.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tracking/TrackingProvider.kt
+index 8e1ab432..a0279ebd 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tracking/TrackingProvider.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tracking/TrackingProvider.kt
+@@ -21,7 +21,8 @@ enum class TrackingProviderId(
+     SIMKL("simkl", "Simkl"),
+     MDBLIST("mdblist", "MDBList"),
+     ANILIST("anilist", "AniList"),
+-    WETRAKR("wetrakr", "WeTrakr");
++    WETRAKR("wetrakr", "WeTrakr"),
++    PUBLICMETADB("publicmetadb", "PublicMetaDB");
+ 
+     companion object {
+         fun fromStorage(value: String?): TrackingProviderId? =
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tracking/TrackingSources.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tracking/TrackingSources.kt
+index 79d293b1..a9a692a3 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tracking/TrackingSources.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tracking/TrackingSources.kt
+@@ -10,7 +10,8 @@ enum class WatchProgressSource {
+     NUVIO_SYNC,
+     MDBLIST,
+     ANILIST,
+-    WETRAKR;
++    WETRAKR,
++    PUBLICMETADB;
+ 
+     val providerId: TrackingProviderId?
+         get() = when (this) {
+@@ -19,6 +20,7 @@ enum class WatchProgressSource {
+             MDBLIST -> TrackingProviderId.MDBLIST
+             ANILIST -> TrackingProviderId.ANILIST
+             WETRAKR -> TrackingProviderId.WETRAKR
++            PUBLICMETADB -> TrackingProviderId.PUBLICMETADB
+             NUVIO_SYNC -> null
+         }
+ 
+@@ -42,6 +44,7 @@ val LibrarySourceMode.providerId: TrackingProviderId?
+         LibrarySourceMode.MDBLIST -> TrackingProviderId.MDBLIST
+         LibrarySourceMode.ANILIST -> TrackingProviderId.ANILIST
+         LibrarySourceMode.WETRAKR -> TrackingProviderId.WETRAKR
++        LibrarySourceMode.PUBLICMETADB -> TrackingProviderId.PUBLICMETADB
+     }
+ 
+ fun effectiveWatchProgressSource(

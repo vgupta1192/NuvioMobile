@@ -1,0 +1,221 @@
+diff --git a/composeApp/src/commonMain/composeResources/values/strings.xml b/composeApp/src/commonMain/composeResources/values/strings.xml
+index 70901bbe..f35408a1 100644
+--- a/composeApp/src/commonMain/composeResources/values/strings.xml
++++ b/composeApp/src/commonMain/composeResources/values/strings.xml
+@@ -1259,7 +1259,7 @@
+     <string name="settings_playback_vod_cache_size_value">%1$d MB</string>
+     <string name="settings_playback_vod_cache_warning">Disk writes continue while a cached stream plays. A new size applies the next time the app starts.</string>
+     <string name="settings_playback_exo_chapters">Show Chapters</string>
+-    <string name="settings_playback_exo_chapters_description">Read the chapters of MKV files to mark them on the progress bar and list them in the player. Makes a few small extra requests once playback starts. libmpv always shows chapters</string>
++    <string name="settings_playback_exo_chapters_description">Mark chapters on the progress bar and list them in the player. With ExoPlayer this makes a few small extra requests once playback starts to read MKV chapters.</string>
+     <string name="settings_tmdb_api_key_label">API key</string>
+     <string name="settings_tmdb_api_key_override_description">Use your own TMDB API key, or leave blank to use the default.</string>
+     <string name="settings_tmdb_personal_api_key">Personal API key</string>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
+index 5514400a..eeb76d4c 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
+@@ -46,6 +46,7 @@ import androidx.compose.runtime.collectAsState
+ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.mutableStateOf
+ import androidx.compose.runtime.remember
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
+ import androidx.compose.runtime.setValue
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+@@ -124,13 +125,19 @@ internal fun PlayerToolbar(
+                 tint = if (partyActive) MaterialTheme.colorScheme.primary else Color.White,
+             )
+         }
+-        PlayerAction(
+-            description = stringResource(
+-                if (isLocked) Res.string.compose_player_unlock_controls else Res.string.compose_player_lock_controls,
+-            ),
+-            icon = if (isLocked) Icons.Rounded.LockOpen else Icons.Rounded.Lock,
+-            onClick = onLockToggle,
+-        )
++        val hideLock by remember {
++            com.nuvio.app.features.settings.ForkPrefs.hidePlayerLock.ensureLoaded()
++            com.nuvio.app.features.settings.ForkPrefs.hidePlayerLock.value
++        }.collectAsStateWithLifecycle()
++        if (!hideLock || isLocked) {
++            PlayerAction(
++                description = stringResource(
++                    if (isLocked) Res.string.compose_player_unlock_controls else Res.string.compose_player_lock_controls,
++                ),
++                icon = if (isLocked) Icons.Rounded.LockOpen else Icons.Rounded.Lock,
++                onClick = onLockToggle,
++            )
++        }
+         NuvioBackButton(
+             onClick = onBack,
+             containerColor = Color.Transparent,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+index 0d6a8b85..d23ca014 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+@@ -55,6 +55,7 @@ import androidx.compose.runtime.CompositionLocalProvider
+ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.mutableStateOf
+ import androidx.compose.runtime.remember
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
+ import androidx.compose.runtime.setValue
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+@@ -594,17 +595,23 @@ private fun PlayerHeader(
+                             tint = if (partyActive) MaterialTheme.colorScheme.primary else Color.White,
+                         )
+                     }
+-                    PlayerHeaderIconButton(
+-                        icon = if (isLocked) Icons.Rounded.LockOpen else Icons.Rounded.Lock,
+-                        contentDescription = if (isLocked) {
+-                            stringResource(Res.string.compose_player_unlock_controls)
+-                        } else {
+-                            stringResource(Res.string.compose_player_lock_controls)
+-                        },
+-                        buttonSize = metrics.headerIconSize + 16.dp,
+-                        iconSize = metrics.headerIconSize,
+-                        onClick = onLockToggle,
+-                    )
++                    val hideLock by remember {
++                        com.nuvio.app.features.settings.ForkPrefs.hidePlayerLock.ensureLoaded()
++                        com.nuvio.app.features.settings.ForkPrefs.hidePlayerLock.value
++                    }.collectAsStateWithLifecycle()
++                    if (!hideLock || isLocked) {
++                        PlayerHeaderIconButton(
++                            icon = if (isLocked) Icons.Rounded.LockOpen else Icons.Rounded.Lock,
++                            contentDescription = if (isLocked) {
++                                stringResource(Res.string.compose_player_unlock_controls)
++                            } else {
++                                stringResource(Res.string.compose_player_lock_controls)
++                            },
++                            buttonSize = metrics.headerIconSize + 16.dp,
++                            iconSize = metrics.headerIconSize,
++                            onClick = onLockToggle,
++                        )
++                    }
+                     if (onVideoSettingsClick != null) {
+                         PlayerHeaderIconButton(
+                             icon = Icons.Rounded.Build,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeChapters.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeChapters.kt
+index 7895cdb2..06cf52fa 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeChapters.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeChapters.kt
+@@ -5,6 +5,7 @@ package com.nuvio.app.features.player
+  * reads them from the file (when allowed), so a rebuffer must not read them again.
+  */
+ internal suspend fun PlayerScreenRuntime.loadChaptersIfNeeded() {
++    if (!playerSettingsUiState.androidExoChaptersEnabled) return
+     val controller = playerController ?: return
+     val sourceUrl = activeSourceUrl
+     if (playerControllerSourceUrl != sourceUrl || chaptersLoadedForSourceUrl == sourceUrl) return
+@@ -14,6 +15,13 @@ internal suspend fun PlayerScreenRuntime.loadChaptersIfNeeded() {
+     chapters = loaded
+ }
+ 
++internal fun PlayerScreenRuntime.clearChaptersIfDisabled() {
++    if (playerSettingsUiState.androidExoChaptersEnabled) return
++    chapters = emptyList()
++    chaptersLoadedForSourceUrl = null
++    showChaptersPanel = false
++}
++
+ internal fun PlayerScreenRuntime.openChaptersPanel() {
+     if (chapters.isEmpty()) return
+     showChaptersPanel = true
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
+index 9f8b16dd..b09a73c6 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
+@@ -290,7 +290,14 @@ internal fun PlayerScreenRuntime.BindPlayerRuntimeEffects() {
+         }
+     }
+ 
+-    LaunchedEffect(playbackSnapshot.isLoading, playerController, playerControllerSourceUrl, activeSourceUrl) {
++    LaunchedEffect(
++        playbackSnapshot.isLoading,
++        playerController,
++        playerControllerSourceUrl,
++        activeSourceUrl,
++        playerSettingsUiState.androidExoChaptersEnabled,
++    ) {
++        clearChaptersIfDisabled()
+         if (!playbackSnapshot.isLoading) loadChaptersIfNeeded()
+     }
+ 
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPlayerPrefsSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPlayerPrefsSettings.kt
+index b1662a8e..6bfcf77b 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPlayerPrefsSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPlayerPrefsSettings.kt
+@@ -11,9 +11,11 @@ internal fun ForkPlayerPrefsSettingsSection(isTablet: Boolean) {
+         ForkPrefs.swipeToSeek.ensureLoaded()
+         ForkPrefs.subtitlesStartOff.ensureLoaded()
+         ForkPrefs.subtitleShadow.ensureLoaded()
++        ForkPrefs.hidePlayerLock.ensureLoaded()
+     }
+     val swipe by ForkPrefs.swipeToSeek.value.collectAsStateWithLifecycle()
+     val subsOff by ForkPrefs.subtitlesStartOff.value.collectAsStateWithLifecycle()
++    val hideLock by ForkPrefs.hidePlayerLock.value.collectAsStateWithLifecycle()
+     val shadow by ForkPrefs.subtitleShadow.value.collectAsStateWithLifecycle()
+     SettingsSection(title = "Player gestures and subtitles", isTablet = isTablet) {
+         SettingsGroup(isTablet = isTablet) {
+@@ -40,6 +42,14 @@ internal fun ForkPlayerPrefsSettingsSection(isTablet: Boolean) {
+                 isTablet = isTablet,
+                 onCheckedChange = ForkPrefs.subtitlesStartOff::set,
+             )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Hide lock button",
++                description = "Remove the lock button from the player toolbar. A locked player still unlocks with a tap on the centre lock icon.",
++                checked = hideLock,
++                isTablet = isTablet,
++                onCheckedChange = ForkPrefs.hidePlayerLock::set,
++            )
+         }
+     }
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
+index a8adab8a..118a49ce 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
+@@ -42,4 +42,5 @@ object ForkPrefs {
+     val nuvioRead = ForkBoolPref("settings/nuvio_read", false)
+     val subtitleShadow = ForkBoolPref("settings/subtitle_shadow", false)
+     val subtitlesStartOff = ForkBoolPref("settings/subtitles_start_off", false)
++    val hidePlayerLock = ForkBoolPref("settings/hide_player_lock", false)
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+index 2ddf2f1f..4f3919b9 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+@@ -433,6 +433,14 @@ private fun PlaybackSettingsSection(
+                     onCheckedChange = PlayerSettingsRepository::setShowLoadingOverlay,
+                 )
+                 SettingsGroupDivider(isTablet = isTablet)
++                SettingsSwitchRow(
++                    title = stringResource(Res.string.settings_playback_exo_chapters),
++                    description = stringResource(Res.string.settings_playback_exo_chapters_description),
++                    checked = androidExoChaptersEnabled,
++                    isTablet = isTablet,
++                    onCheckedChange = PlayerSettingsRepository::setAndroidExoChaptersEnabled,
++                )
++                SettingsGroupDivider(isTablet = isTablet)
+                 SettingsSwitchRow(
+                     title = stringResource(Res.string.playback_show_loading_status),
+                     description = stringResource(Res.string.playback_show_loading_status_sub),
+@@ -1278,15 +1286,6 @@ private fun PlaybackSettingsSection(
+                             modifier = Modifier.padding(horizontal = if (isTablet) 20.dp else 16.dp, vertical = 8.dp),
+                         )
+                     }
+-                    SettingsGroupDivider(isTablet = isTablet)
+-                    SettingsSwitchRow(
+-                        title = stringResource(Res.string.settings_playback_exo_chapters),
+-                        description = stringResource(Res.string.settings_playback_exo_chapters_description),
+-                        checked = androidExoChaptersEnabled,
+-                        enabled = exoOptionsEnabled,
+-                        isTablet = isTablet,
+-                        onCheckedChange = PlayerSettingsRepository::setAndroidExoChaptersEnabled,
+-                    )
+                 }
+             }
+         }
