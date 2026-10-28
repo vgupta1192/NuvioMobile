@@ -1,0 +1,374 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt
+index 49923421a..ca4b55b3d 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt
+@@ -219,6 +219,9 @@ internal actual object DownloadsPlatformDownloader {
+     actual fun partialPlaybackUrl(downloadId: String): String? =
+         AndroidPartialPlaybackServer.url(downloadId)
+ 
++    actual fun retryCount(downloadId: String): Int =
++        managedTransfers().firstOrNull { it.item.id == downloadId }?.retryCount ?: 0
++
+     actual fun finishPartialPlayback(downloadId: String): String? {
+         val finished = finishAndroidPartialFile(downloadId) ?: return null
+         val tree = finished.exportTreeUri?.takeIf { it.isNotBlank() }
+diff --git a/composeApp/src/commonMain/composeResources/values/strings.xml b/composeApp/src/commonMain/composeResources/values/strings.xml
+index 6aa052564..7d1597296 100644
+--- a/composeApp/src/commonMain/composeResources/values/strings.xml
++++ b/composeApp/src/commonMain/composeResources/values/strings.xml
+@@ -2515,6 +2515,16 @@
+     <string name="downloads_status_queued">Waiting</string>
+     <string name="downloads_status_queued_with_size">Waiting • %1$s</string>
+     <string name="downloads_status_held_for_playback">Waiting while you watch • %1$s</string>
++    <string name="downloads_slow_paused_watching">Paused while you watch</string>
++    <string name="downloads_slow_buffering">Slowed while the stream buffers</string>
++    <string name="downloads_slow_wifi">Waiting for Wi-Fi</string>
++    <string name="downloads_slow_thermal">Device is too hot</string>
++    <string name="downloads_slow_retrying">Retrying</string>
++    <string name="downloads_storage_loading">Loading storage</string>
++    <plurals name="downloads_slow_queue">
++        <item quantity="one">Waiting behind %1$d download</item>
++        <item quantity="other">Waiting behind %1$d downloads</item>
++    </plurals>
+     <string name="downloads_plays_when_finished">Plays when the download finishes.</string>
+     <string name="live_tv_group_all_channels">All Channels</string>
+     <string name="live_tv_group_uncategorized">Uncategorized</string>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadRetryPolicy.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadRetryPolicy.kt
+index 837db0c21..6760974b2 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadRetryPolicy.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadRetryPolicy.kt
+@@ -48,4 +48,7 @@ internal class DownloadRetryTracker(
+     fun forget(downloadId: String) {
+         states.remove(downloadId)
+     }
++
++    /** Retries already counted for [downloadId], or 0 when it has not failed. */
++    fun attempts(downloadId: String): Int = states[downloadId]?.attempts ?: 0
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadSlowReason.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadSlowReason.kt
+new file mode 100644
+index 000000000..6b48ea277
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadSlowReason.kt
+@@ -0,0 +1,151 @@
++package com.nuvio.app.features.downloads
++
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.collectAsState
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableIntStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.staticCompositionLocalOf
++import androidx.compose.ui.text.style.TextOverflow
++import kotlinx.coroutines.delay
++import nuvio.composeapp.generated.resources.*
++import org.jetbrains.compose.resources.pluralStringResource
++import org.jetbrains.compose.resources.stringResource
++
++/**
++ * Why a download row is not moving, when the app can see the cause.
++ * [downloadSlowReason] is the only place that picks one.
++ */
++internal enum class DownloadSlowReason {
++    PausedWhileWatching,
++    ThrottledWhileBuffering,
++    WaitingInQueue,
++    WaitingForWifi,
++    DeviceTooHot,
++    Retrying,
++}
++
++/**
++ * Facts the row already has. Nothing here reads the device: callers pass what they observed.
++ * [pauseWhileWatching] is the setting. [playerActive] is a stream open past the idle level.
++ * [bufferingThrottle] is the existing buffer throttle (downloads held while the stream buffers).
++ * [activeAhead] is how many downloads are already running. [retryCount] is the manager's count.
++ */
++internal data class DownloadSlowSignals(
++    val status: DownloadStatus,
++    val pauseWhileWatching: Boolean,
++    val playerActive: Boolean,
++    val heldForPlayback: Boolean,
++    val bufferingThrottle: Boolean,
++    val activeAhead: Int,
++    val onlyOnWifi: Boolean,
++    val onWifi: Boolean,
++    val thermalBlocks: Boolean,
++    val retryCount: Int,
++)
++
++/**
++ * One reason, or null when the download is healthy or the app cannot see why it is waiting.
++ * Order: paused for a stream, buffer throttle, queue, Wi-Fi, heat, retry.
++ * A transfer that is still downloading is healthy unless it is on a retry that has not moved.
++ */
++internal fun downloadSlowReason(signals: DownloadSlowSignals): DownloadSlowReason? {
++    val waiting = signals.status == DownloadStatus.Queued
++    val downloading = signals.status == DownloadStatus.Downloading
++    if (!waiting && !downloading) return null
++    if (waiting && ((signals.pauseWhileWatching && signals.playerActive) || signals.heldForPlayback)) {
++        return DownloadSlowReason.PausedWhileWatching
++    }
++    if (waiting && signals.bufferingThrottle) return DownloadSlowReason.ThrottledWhileBuffering
++    if (waiting && signals.activeAhead > 0) return DownloadSlowReason.WaitingInQueue
++    if (waiting && signals.onlyOnWifi && !signals.onWifi) return DownloadSlowReason.WaitingForWifi
++    if (waiting && signals.thermalBlocks) return DownloadSlowReason.DeviceTooHot
++    if (signals.retryCount > 0) return DownloadSlowReason.Retrying
++    return null
++}
++
++/** Bumped about every 2 s while Downloads is showing active rows, so a reason tracks the device. */
++internal val LocalDownloadSlowTick = staticCompositionLocalOf { 0 }
++
++private const val SLOW_REASON_REFRESH_MS = 2_000L
++
++/** Refreshes [LocalDownloadSlowTick] while [active] is true. Returns the current tick. */
++@Composable
++internal fun rememberDownloadSlowTick(active: Boolean): Int {
++    val tick = remember { mutableIntStateOf(0) }
++    LaunchedEffect(active) {
++        if (!active) return@LaunchedEffect
++        while (true) {
++            delay(SLOW_REASON_REFRESH_MS)
++            tick.intValue++
++        }
++    }
++    return tick.intValue
++}
++
++/**
++ * One short line for [items], or nothing.
++ * A season header passes every episode in the group and only speaks when they share one reason.
++ */
++@Composable
++internal fun DownloadSlowReasonLine(items: List<DownloadItem>) {
++    val interesting = items.any { it.status == DownloadStatus.Queued || it.status == DownloadStatus.Downloading }
++    if (!interesting) return
++    val smart by SmartDownloadSettings.state.collectAsState()
++    val downloads by DownloadsRepository.uiState.collectAsState()
++    val tick = LocalDownloadSlowTick.current
++    val activeAhead = downloads.items.count { it.status == DownloadStatus.Downloading }
++    val held = downloads.heldForPlayback
++    val signature = remember(items, held) {
++        items.joinToString { "${it.id}:${it.status}:${it.id in held}" }
++    }
++    val reasons = remember(
++        signature,
++        smart.pauseDuringPlayback,
++        smart.onlyOnWifi,
++        activeAhead,
++        tick,
++    ) {
++        items.mapNotNull { item ->
++            downloadSlowReason(
++                DownloadSlowSignals(
++                    status = item.status,
++                    pauseWhileWatching = smart.pauseDuringPlayback,
++                    playerActive = PlaybackPriority.level != PlaybackPriority.Level.Normal,
++                    heldForPlayback = item.id in held,
++                    bufferingThrottle = PlaybackPriority.level == PlaybackPriority.Level.Strained,
++                    activeAhead = activeAhead,
++                    onlyOnWifi = smart.onlyOnWifi,
++                    onWifi = DownloadNetworkGuard.isOnWifi(),
++                    thermalBlocks = DownloadThermalGate.blocksNextFile(),
++                    retryCount = DownloadsPlatformDownloader.retryCount(item.id),
++                ),
++            )
++        }.toSet()
++    }
++    val reason = reasons.singleOrNull() ?: return
++    Text(
++        text = slowReasonText(reason, activeAhead),
++        style = MaterialTheme.typography.labelSmall,
++        color = MaterialTheme.colorScheme.onSurfaceVariant,
++        maxLines = 1,
++        overflow = TextOverflow.Ellipsis,
++    )
++}
++
++@Composable
++private fun slowReasonText(reason: DownloadSlowReason, activeAhead: Int): String = when (reason) {
++    DownloadSlowReason.PausedWhileWatching -> stringResource(Res.string.downloads_slow_paused_watching)
++    DownloadSlowReason.ThrottledWhileBuffering -> stringResource(Res.string.downloads_slow_buffering)
++    DownloadSlowReason.WaitingInQueue -> pluralStringResource(
++        Res.plurals.downloads_slow_queue,
++        activeAhead.coerceAtLeast(1),
++        activeAhead.coerceAtLeast(1),
++    )
++    DownloadSlowReason.WaitingForWifi -> stringResource(Res.string.downloads_slow_wifi)
++    DownloadSlowReason.DeviceTooHot -> stringResource(Res.string.downloads_slow_thermal)
++    DownloadSlowReason.Retrying -> stringResource(Res.string.downloads_slow_retrying)
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadStorageScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadStorageScreen.kt
+index fef784d9b..bec5b3b63 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadStorageScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadStorageScreen.kt
+@@ -25,6 +25,7 @@ import androidx.compose.material.icons.rounded.ExpandMore
+ import androidx.compose.material3.Icon
+ import androidx.compose.material3.IconButton
+ import androidx.compose.material.icons.rounded.Refresh
++import androidx.compose.material3.ButtonDefaults
+ import androidx.compose.material3.MaterialTheme
+ import androidx.compose.material3.Surface
+ import androidx.compose.material3.Text
+@@ -40,8 +41,12 @@ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.draw.clip
+ import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.semantics.contentDescription
++import androidx.compose.ui.semantics.semantics
++import androidx.compose.ui.text.TextStyle
+ import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.Dp
+ import androidx.compose.ui.unit.dp
+ import com.nuvio.app.core.ui.NuvioScreen
+ import com.nuvio.app.core.ui.NuvioScreenHeader
+@@ -258,6 +263,77 @@ internal fun DownloadStorageCard(
+     }
+ }
+ 
++/**
++ * Same sections as [DownloadStorageCard] (title, space, bar, legend, the three actions),
++ * drawn as bars so the list slot does not grow when the summary arrives.
++ * The low-space warning is not reserved: it only appears once storage is known to be low.
++ */
++@Composable
++internal fun DownloadStorageCardPlaceholder(modifier: Modifier = Modifier) {
++    val loading = stringResource(Res.string.downloads_storage_loading)
++    val skeleton = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
++    Surface(
++        modifier = modifier
++            .fillMaxWidth()
++            .padding(horizontal = 12.dp, vertical = 6.dp)
++            .semantics { contentDescription = loading },
++        shape = MaterialTheme.shapes.medium,
++        color = MaterialTheme.colorScheme.surfaceContainer,
++    ) {
++        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
++            SkeletonLine(MaterialTheme.typography.titleSmall, 0.62f)
++            SkeletonLine(MaterialTheme.typography.bodySmall, 0.78f)
++            SkeletonLine(MaterialTheme.typography.bodySmall, 0.9f)
++            Box(
++                modifier = Modifier
++                    .padding(top = 10.dp)
++                    .fillMaxWidth()
++                    .height(10.dp)
++                    .clip(RoundedCornerShape(5.dp))
++                    .background(skeleton),
++            )
++            SkeletonLine(MaterialTheme.typography.labelSmall, 0.72f, top = 6.dp)
++            Box(
++                modifier = Modifier
++                    .padding(top = 10.dp)
++                    .fillMaxWidth()
++                    .height(ButtonDefaults.MinHeight)
++                    .clip(RoundedCornerShape(20.dp))
++                    .background(skeleton),
++            )
++            Box(
++                modifier = Modifier
++                    .padding(top = 6.dp)
++                    .fillMaxWidth()
++                    .height(ButtonDefaults.MinHeight)
++                    .clip(RoundedCornerShape(20.dp))
++                    .background(skeleton),
++            )
++            Box(
++                modifier = Modifier
++                    .fillMaxWidth()
++                    .height(ButtonDefaults.MinHeight)
++                    .clip(RoundedCornerShape(20.dp))
++                    .background(skeleton),
++            )
++        }
++    }
++}
++
++@Composable
++private fun SkeletonLine(style: TextStyle, widthFraction: Float, top: Dp = 0.dp) {
++    Text(
++        text = " ",
++        modifier = Modifier
++            .padding(top = top)
++            .fillMaxWidth(widthFraction)
++            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), RoundedCornerShape(4.dp)),
++        style = style,
++        color = Color.Transparent,
++        maxLines = 1,
++    )
++}
++
+ /** "Downloads 16.2 GB · Subtitles & extras 20 MB · Cache 150 MB · Leftovers 1.0 GB · App data 80 MB". */
+ internal fun storageBreakdownText(summary: DownloadStorageSummary): String = buildList {
+     add("Downloads ${formatDownloadBytes(summary.downloadBytes)}")
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.kt
+index 035ef5b4e..d85e38ea5 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.kt
+@@ -86,4 +86,7 @@ internal expect object DownloadsPlatformDownloader {
+     fun finishPartialPlayback(downloadId: String): String?
+ 
+     fun pauseRunningTransfer(item: DownloadItem)
++
++    /** Retries the manager has already counted for [downloadId], or 0. Does not start or change one. */
++    fun retryCount(downloadId: String): Int
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt
+index 01b060f91..9c0dd3fb2 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsScreen.kt
+@@ -138,6 +138,8 @@ fun DownloadsScreen(
+     val problems by androidx.compose.runtime.produceState(emptyMap<String, DownloadProblem>(), uiState.completedItems, storageRefresh) {
+         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { downloadProblems(uiState.items) }
+     }
++    remember { SmartDownloadSettings.ensureLoaded() }
++    val slowReasonTick = rememberDownloadSlowTick(uiState.activeItems.isNotEmpty())
+     val tokens = MaterialTheme.nuvio
+ 
+     // Under the native iOS navigation bar the header collapses to its actions. The list starts
+@@ -147,7 +149,10 @@ fun DownloadsScreen(
+         !com.nuvio.app.navigation.LocalNativeNavigationBarHidden.current
+     val statusBarTop = androidx.compose.foundation.layout.WindowInsets.statusBars
+         .asPaddingValues().calculateTopPadding()
+-    androidx.compose.runtime.CompositionLocalProvider(LocalDownloadProblems provides problems) {
++    androidx.compose.runtime.CompositionLocalProvider(
++        LocalDownloadProblems provides problems,
++        LocalDownloadSlowTick provides slowReasonTick,
++    ) {
+     NuvioScreen(
+         modifier = Modifier.dismissKeyboardOnScrollOrTap().then(
+             if (underNativeNavigationBar) {
+@@ -204,8 +209,11 @@ fun DownloadsScreen(
+         if (underNativeNavigationBar) item(key = "header") { header() } else stickyHeader { header() }
+ 
+         if (selectedShowId == null) {
+-            storageSummary?.let { summary ->
+-                item(key = "storage-card") {
++            item(key = "storage-card") {
++                val summary = storageSummary
++                if (summary == null) {
++                    DownloadStorageCardPlaceholder()
++                } else {
+                     DownloadStorageCard(
+                         summary = summary,
+                         onClick = { onOpenStorage?.invoke() ?: run { showStorage = true } },
+@@ -726,6 +734,7 @@ private fun DownloadRow(
+                         maxLines = 1,
+                         overflow = TextOverflow.Ellipsis,
+                     )
++                    DownloadSlowReasonLine(items = listOf(item))
+                     LocalDownloadProblems.current[item.id]?.let { problem ->
+                         Row(verticalAlignment = Alignment.CenterVertically) {
+                             Text(
+@@ -934,6 +943,7 @@ private fun ActiveSeasonGroupHeader(
+                         style = MaterialTheme.typography.bodySmall,
+                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                     )
++                    if (!expanded) DownloadSlowReasonLine(items = group.items)
+                 }
+                 Icon(
+                     imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
