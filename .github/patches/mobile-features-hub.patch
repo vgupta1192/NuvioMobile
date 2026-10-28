@@ -1,0 +1,529 @@
+diff --git a/composeApp/src/commonMain/composeResources/values/strings.xml b/composeApp/src/commonMain/composeResources/values/strings.xml
+index b41872501..6aa052564 100644
+--- a/composeApp/src/commonMain/composeResources/values/strings.xml
++++ b/composeApp/src/commonMain/composeResources/values/strings.xml
+@@ -511,6 +511,10 @@
+     <string name="compose_settings_page_debrid">Connected Services</string>
+     <string name="compose_settings_page_homescreen">Home Layout</string>
+     <string name="compose_settings_page_integrations">Integrations</string>
++    <string name="compose_settings_page_features">Features</string>
++    <string name="compose_settings_page_features_player">Player features</string>
++    <string name="compose_settings_page_features_home">Home and library</string>
++    <string name="compose_settings_page_features_tools">Tools and data</string>
+     <string name="compose_settings_page_licenses_attributions">Licenses &amp; Attribution</string>
+     <string name="compose_settings_page_mdblist_ratings">MDBList Ratings</string>
+     <string name="compose_settings_page_meta_screen">Detail Page</string>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AdvancedSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AdvancedSettingsPage.kt
+index 02f2d8a5b..8b986d90a 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AdvancedSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AdvancedSettingsPage.kt
+@@ -116,16 +116,6 @@ internal fun LazyListScope.advancedSettingsContent(
+             }
+         }
+     }
+-    item {
+-        SettingsConfigBackupSection(isTablet = isTablet)
+-    }
+-    item {
+-        SettingsSection(title = "Network", isTablet = isTablet) {
+-            SettingsGroup(isTablet = isTablet) {
+-                DohSettingsRow(isTablet = isTablet) // DNS over HTTPS hook
+-            }
+-        }
+-    }
+     item {
+         SettingsSection(
+             title = stringResource(Res.string.settings_advanced_section_cache),
+@@ -157,30 +147,6 @@ internal fun LazyListScope.advancedSettingsContent(
+             }
+         }
+     }
+-    item {
+-        SettingsSection(
+-            title = stringResource(Res.string.settings_advanced_section_debugging),
+-            isTablet = isTablet,
+-        ) {
+-            SettingsGroup(isTablet = isTablet) {
+-                SettingsNavigationRow(
+-                    title = stringResource(Res.string.settings_advanced_debug_logs),
+-                    description = stringResource(Res.string.settings_advanced_debug_logs_description),
+-                    isTablet = isTablet,
+-                    onClick = onDebugLogsClick,
+-                )
+-                if (onPerformanceClick != null) {
+-                    SettingsGroupDivider(isTablet = isTablet)
+-                    SettingsNavigationRow(
+-                        title = stringResource(Res.string.compose_settings_page_performance),
+-                        description = stringResource(Res.string.performance_root_description),
+-                        isTablet = isTablet,
+-                        onClick = onPerformanceClick,
+-                    )
+-                }
+-            }
+-        }
+-    }
+ }
+ 
+ @Composable
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AppearanceSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AppearanceSettingsPage.kt
+index c6b137704..ac78f4bd5 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AppearanceSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/AppearanceSettingsPage.kt
+@@ -132,25 +132,6 @@ internal fun LazyListScope.appearanceSettingsContent(
+                     isTablet = isTablet,
+                     onCheckedChange = onAmoledToggle,
+                 )
+-                SettingsGroupDivider(isTablet = isTablet)
+-                val dynamicArtworkBackground by com.nuvio.app.core.ui.DynamicArtworkBackgroundSetting.enabled.collectAsStateWithLifecycle()
+-                LaunchedEffect(Unit) { com.nuvio.app.core.ui.DynamicArtworkBackgroundSetting.ensureLoaded() }
+-                LaunchedEffect(Unit) { com.nuvio.app.core.ui.glass.LiquidGlassSettings.ensureLoaded() }
+-                SettingsSwitchRow(
+-                    title = stringResource(Res.string.settings_appearance_glass_effects),
+-                    description = stringResource(Res.string.settings_appearance_glass_effects_description),
+-                    checked = com.nuvio.app.core.ui.glass.LiquidGlassSettings.enabled,
+-                    isTablet = isTablet,
+-                    onCheckedChange = com.nuvio.app.core.ui.glass.LiquidGlassSettings::set,
+-                )
+-                SettingsGroupDivider(isTablet = isTablet)
+-                SettingsSwitchRow(
+-                    title = stringResource(Res.string.settings_appearance_dynamic_artwork_background),
+-                    description = stringResource(Res.string.settings_appearance_dynamic_artwork_background_description),
+-                    checked = dynamicArtworkBackground,
+-                    isTablet = isTablet,
+-                    onCheckedChange = com.nuvio.app.core.ui.DynamicArtworkBackgroundSetting::set,
+-                )
+                 if (liquidGlassNativeTabBarSupported) {
+                     SettingsGroupDivider(isTablet = isTablet)
+                     SettingsSwitchRow(
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContentDiscoverySettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContentDiscoverySettingsPage.kt
+index 16d52db9e..20497c394 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContentDiscoverySettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContentDiscoverySettingsPage.kt
+@@ -38,9 +38,6 @@ internal fun LazyListScope.contentDiscoveryContent(
+     onCloudStreamClick: () -> Unit = {},
+     onDiscordClick: () -> Unit = {},
+ ) {
+-    item {
+-        DxWatchedTitlesSettingsSection(isTablet = isTablet) // dx.bi watched titles hook
+-    }
+     item {
+         val recentSearchesEnabled by remember {
+             SearchHistoryRepository.ensureLoaded()
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContinueWatchingSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContinueWatchingSettingsPage.kt
+index 1fa1bdd23..a5079f0eb 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContinueWatchingSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContinueWatchingSettingsPage.kt
+@@ -83,9 +83,6 @@ internal fun LazyListScope.continueWatchingSettingsContent(
+     showResumePromptOnLaunch: Boolean,
+     sortMode: ContinueWatchingSortMode,
+ ) {
+-    item {
+-        NetflixStyleSection(isTablet = isTablet)
+-    }
+     item {
+         SettingsSection(
+             title = stringResource(Res.string.settings_continue_watching_section_visibility),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/FeaturesSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/FeaturesSettingsPage.kt
+new file mode 100644
+index 000000000..29760af50
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/FeaturesSettingsPage.kt
+@@ -0,0 +1,163 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.foundation.lazy.LazyListScope
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.rounded.Home
++import androidx.compose.material.icons.rounded.PlayArrow
++import androidx.compose.material.icons.rounded.Speed
++import androidx.compose.material.icons.rounded.Build
++import androidx.compose.material.icons.rounded.BugReport
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.remember
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.features.streams.StreamBadgeSettingsRepository
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.settings_appearance_dynamic_artwork_background
++import nuvio.composeapp.generated.resources.settings_appearance_dynamic_artwork_background_description
++import nuvio.composeapp.generated.resources.settings_appearance_glass_effects
++import nuvio.composeapp.generated.resources.settings_appearance_glass_effects_description
++import nuvio.composeapp.generated.resources.settings_stream_search_description
++import nuvio.composeapp.generated.resources.settings_stream_search_title
++import org.jetbrains.compose.resources.stringResource
++
++/**
++ * Fork page: every setting this fork adds on top of upstream Nuvio lives under Features,
++ * grouped into Player, Home and library, and Tools sub-pages.
++ */
++internal fun LazyListScope.featuresSettingsContent(
++    isTablet: Boolean,
++    onPlayerClick: () -> Unit,
++    onHomeClick: () -> Unit,
++    onToolsClick: () -> Unit,
++    onPerformanceClick: () -> Unit,
++    onDebugLogsClick: () -> Unit,
++) {
++    item {
++        SettingsSection(title = "Fork features", isTablet = isTablet) {
++            SettingsGroup(isTablet = isTablet) {
++                SettingsNavigationRow(
++                    title = "Player",
++                    description = "Seek previews, volume boost, picture and sound, second subtitle, stream stats, subtitle font.",
++                    icon = Icons.Rounded.PlayArrow,
++                    isTablet = isTablet,
++                    onClick = onPlayerClick,
++                )
++                SettingsGroupDivider(isTablet = isTablet)
++                SettingsNavigationRow(
++                    title = "Home and library",
++                    description = "Hero, home rows, Netflix style, watched titles, look and feel, streams.",
++                    icon = Icons.Rounded.Home,
++                    isTablet = isTablet,
++                    onClick = onHomeClick,
++                )
++                SettingsGroupDivider(isTablet = isTablet)
++                SettingsNavigationRow(
++                    title = "Tools and data",
++                    description = "Backup and restore, DNS over HTTPS, app sounds, cache and updates.",
++                    icon = Icons.Rounded.Build,
++                    isTablet = isTablet,
++                    onClick = onToolsClick,
++                )
++                SettingsGroupDivider(isTablet = isTablet)
++                SettingsNavigationRow(
++                    title = "Performance",
++                    description = "Memory, image cache and playback tuning.",
++                    icon = Icons.Rounded.Speed,
++                    isTablet = isTablet,
++                    onClick = onPerformanceClick,
++                )
++                SettingsGroupDivider(isTablet = isTablet)
++                SettingsNavigationRow(
++                    title = "Debug logs",
++                    description = "Share logs for support.",
++                    icon = Icons.Rounded.BugReport,
++                    isTablet = isTablet,
++                    onClick = onDebugLogsClick,
++                )
++            }
++        }
++    }
++}
++
++internal fun LazyListScope.featuresPlayerSettingsContent(isTablet: Boolean) {
++    item { SeekPreviewSettingsSection(isTablet = isTablet) }
++    item { VolumeBoostSettingsSection(isTablet = isTablet) }
++    item { PictureSoundSettingsSection(isTablet = isTablet) }
++    item { DxSoundSettingsSection(isTablet = isTablet) }
++    item { DxEnhanceSettingsSection(isTablet = isTablet) }
++    item { DxRememberSettingsSection(isTablet = isTablet) }
++    item { DxSecondSubtitleSettingsSection(isTablet = isTablet) }
++    item { DxStatsSettingsSection(isTablet = isTablet) }
++    item { ForkPlayerPrefsSettingsSection(isTablet = isTablet) }
++    item { ConnectionFitSettingsSection(isTablet = isTablet) }
++    item { SubtitleFontSettingsSection(isTablet = isTablet) }
++}
++
++internal fun LazyListScope.featuresHomeSettingsContent(isTablet: Boolean) {
++    item {
++        SettingsSection(title = "Hero", isTablet = isTablet) {
++            SettingsGroup(isTablet = isTablet) {
++                HeroRotationSpeedRow(isTablet = isTablet)
++                HeroTrailerOptionRows(isTablet = isTablet)
++            }
++        }
++    }
++    item { ForkHomeRowsSettingsSection(isTablet = isTablet) }
++    item { NetflixStyleSection(isTablet = isTablet) }
++    item { DxWatchedTitlesSettingsSection(isTablet = isTablet) }
++    item { ForkLookSettingsSection(isTablet = isTablet) }
++}
++
++internal fun LazyListScope.featuresToolsSettingsContent(isTablet: Boolean) {
++    item { SettingsConfigBackupSection(isTablet = isTablet) }
++    item {
++        SettingsSection(title = "Network", isTablet = isTablet) {
++            SettingsGroup(isTablet = isTablet) {
++                DohSettingsRow(isTablet = isTablet)
++            }
++        }
++    }
++    item { DxSoundsSettingsSection(isTablet = isTablet) }
++    item { ForkAboutSettingsSection(isTablet = isTablet) }
++}
++
++/** Fork look and feel switches that used to sit on the Appearance and Streams pages. */
++@Composable
++private fun ForkLookSettingsSection(isTablet: Boolean) {
++    val dynamicArtworkBackground by com.nuvio.app.core.ui.DynamicArtworkBackgroundSetting.enabled.collectAsStateWithLifecycle()
++    LaunchedEffect(Unit) { com.nuvio.app.core.ui.DynamicArtworkBackgroundSetting.ensureLoaded() }
++    LaunchedEffect(Unit) { com.nuvio.app.core.ui.glass.LiquidGlassSettings.ensureLoaded() }
++    val streamSettings by remember {
++        StreamBadgeSettingsRepository.ensureLoaded()
++        StreamBadgeSettingsRepository.uiState
++    }.collectAsStateWithLifecycle()
++    SettingsSection(title = "Look and streams", isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            SettingsSwitchRow(
++                title = stringResource(Res.string.settings_appearance_glass_effects),
++                description = stringResource(Res.string.settings_appearance_glass_effects_description),
++                checked = com.nuvio.app.core.ui.glass.LiquidGlassSettings.enabled,
++                isTablet = isTablet,
++                onCheckedChange = com.nuvio.app.core.ui.glass.LiquidGlassSettings::set,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = stringResource(Res.string.settings_appearance_dynamic_artwork_background),
++                description = stringResource(Res.string.settings_appearance_dynamic_artwork_background_description),
++                checked = dynamicArtworkBackground,
++                isTablet = isTablet,
++                onCheckedChange = com.nuvio.app.core.ui.DynamicArtworkBackgroundSetting::set,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = stringResource(Res.string.settings_stream_search_title),
++                description = stringResource(Res.string.settings_stream_search_description),
++                checked = streamSettings.showStreamSearch,
++                isTablet = isTablet,
++                onCheckedChange = StreamBadgeSettingsRepository::setShowStreamSearch,
++            )
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/HomescreenSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/HomescreenSettingsPage.kt
+index deddf8d66..45549f1ec 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/HomescreenSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/HomescreenSettingsPage.kt
+@@ -118,13 +118,9 @@ internal fun LazyListScope.homescreenSettingsContent(
+                     isTablet = isTablet,
+                     onCheckedChange = HomeCatalogSettingsRepository::setHideUnreleasedContent,
+                 )
+-                SettingsGroupDivider(isTablet = isTablet)
+-                HeroRotationSpeedRow(isTablet = isTablet) // hero rotation speed hook
+             }
+         }
+     }
+-    item { ForkHomeRowsSettingsSection(isTablet = isTablet) } // fork home rows hook
+-    item { ForkAboutSettingsSection(isTablet = isTablet) } // fork about hook
+     item {
+         val catalogOnlyItems = items.filter { !it.isCollection }
+         if (heroEnabled && catalogOnlyItems.isNotEmpty()) {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/MetaScreenSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/MetaScreenSettingsPage.kt
+index 781f126d6..6d07ed7b9 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/MetaScreenSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/MetaScreenSettingsPage.kt
+@@ -167,7 +167,6 @@ internal fun LazyListScope.metaScreenSettingsContent(
+                         isTablet = isTablet,
+                         onCheckedChange = { MetaScreenSettingsRepository.setHeroTrailerPlayback(it) },
+                     )
+-                    HeroTrailerOptionRows(isTablet = isTablet)
+                 }
+                 SettingsGroupDivider(isTablet = isTablet)
+                 SettingsSwitchRow(
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+index 4f3919b9b..e711ff4ea 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+@@ -647,23 +647,6 @@ private fun PlaybackSettingsSection(
+             )
+         }
+ 
+-        SeekPreviewSettingsSection(isTablet = isTablet) // Seek previews hook
+-
+-        VolumeBoostSettingsSection(isTablet = isTablet) // Volume boost hook
+-
+-        PictureSoundSettingsSection(isTablet = isTablet) // Picture and sound hook
+-
+-        DxSoundSettingsSection(isTablet = isTablet) // dx.bi sound modes hook
+-        DxEnhanceSettingsSection(isTablet = isTablet) // dx.bi picture enhance hook
+-        DxRememberSettingsSection(isTablet = isTablet) // dx.bi remember hook
+-        DxSecondSubtitleSettingsSection(isTablet = isTablet) // dx.bi second subtitle hook
+-        DxStatsSettingsSection(isTablet = isTablet) // dx.bi stream stats hook
+-        ForkPlayerPrefsSettingsSection(isTablet = isTablet) // fork player prefs hook
+-
+-        ConnectionFitSettingsSection(isTablet = isTablet) // Nuvio fork: connection-speed fit
+-
+-        SubtitleFontSettingsSection(isTablet = isTablet) // Nuvio fork: custom subtitle font
+-
+         SettingsSection(
+             title = stringResource(Res.string.settings_playback_section_subtitle_rendering),
+             isTablet = isTablet,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
+index 74ce5ac56..f20a83e00 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
+@@ -24,6 +24,10 @@ import nuvio.composeapp.generated.resources.compose_settings_page_continue_watch
+ import nuvio.composeapp.generated.resources.extra_settings_title
+ import nuvio.composeapp.generated.resources.compose_settings_page_homescreen
+ import nuvio.composeapp.generated.resources.compose_settings_page_integrations
++import nuvio.composeapp.generated.resources.compose_settings_page_features
++import nuvio.composeapp.generated.resources.compose_settings_page_features_home
++import nuvio.composeapp.generated.resources.compose_settings_page_features_player
++import nuvio.composeapp.generated.resources.compose_settings_page_features_tools
+ import nuvio.composeapp.generated.resources.compose_settings_page_licenses_attributions
+ import nuvio.composeapp.generated.resources.compose_settings_page_mdblist_ratings
+ import nuvio.composeapp.generated.resources.compose_settings_page_omdb_ratings
+@@ -65,6 +69,26 @@ internal enum class SettingsPage(
+         category = SettingsCategory.General,
+         parentPage = null,
+     ),
++    Features(
++        titleRes = Res.string.compose_settings_page_features,
++        category = SettingsCategory.General,
++        parentPage = Root,
++    ),
++    FeaturesPlayer(
++        titleRes = Res.string.compose_settings_page_features_player,
++        category = SettingsCategory.General,
++        parentPage = Features,
++    ),
++    FeaturesHome(
++        titleRes = Res.string.compose_settings_page_features_home,
++        category = SettingsCategory.General,
++        parentPage = Features,
++    ),
++    FeaturesTools(
++        titleRes = Res.string.compose_settings_page_features_tools,
++        category = SettingsCategory.General,
++        parentPage = Features,
++    ),
+     Account(
+         titleRes = Res.string.compose_settings_page_account,
+         category = SettingsCategory.Account,
+@@ -108,12 +132,12 @@ internal enum class SettingsPage(
+     DebugLogs(
+         titleRes = Res.string.compose_settings_page_debug_logs,
+         category = SettingsCategory.Advanced,
+-        parentPage = Advanced,
++        parentPage = Features,
+     ),
+     Performance(
+         titleRes = Res.string.compose_settings_page_performance,
+         category = SettingsCategory.Advanced,
+-        parentPage = Advanced,
++        parentPage = Features,
+     ),
+     Notifications(
+         titleRes = Res.string.compose_settings_page_notifications,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt
+index ad7217a7b..0872c996e 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt
+@@ -37,6 +37,8 @@ import nuvio.composeapp.generated.resources.compose_settings_page_account
+ import nuvio.composeapp.generated.resources.compose_settings_page_advanced
+ import nuvio.composeapp.generated.resources.compose_settings_page_appearance
+ import nuvio.composeapp.generated.resources.compose_settings_page_integrations
++import nuvio.composeapp.generated.resources.compose_settings_page_features
++import androidx.compose.material.icons.rounded.AutoAwesome
+ import nuvio.composeapp.generated.resources.compose_settings_page_licenses_attributions
+ import nuvio.composeapp.generated.resources.compose_settings_page_whats_new
+ import nuvio.composeapp.generated.resources.whats_new_root_description
+@@ -81,6 +83,7 @@ internal fun LazyListScope.settingsRootContent(
+     onNotificationsClick: () -> Unit,
+     onContentDiscoveryClick: () -> Unit,
+     onIntegrationsClick: () -> Unit,
++    onFeaturesClick: () -> Unit = {},
+     onExtraClick: (() -> Unit)? = null,
+     onTrackingClick: () -> Unit,
+     onSupportersContributorsClick: () -> Unit,
+@@ -100,9 +103,6 @@ internal fun LazyListScope.settingsRootContent(
+     item {
+         ProfileInsightsRootCard(isTablet = isTablet, onSwitchProfile = onSwitchProfileClick) // profile insights hook
+     }
+-    item {
+-        DxSoundsSettingsSection(isTablet = isTablet) // dx.bi sounds hook
+-    }
+     if (showAccountSection) {
+         item {
+             SettingsSection(
+@@ -162,6 +162,14 @@ internal fun LazyListScope.settingsRootContent(
+                         onClick = onPlaybackClick,
+                     )
+                     SettingsGroupDivider(isTablet = isTablet)
++                    SettingsNavigationRow(
++                        title = stringResource(Res.string.compose_settings_page_features),
++                        description = "Everything this fork adds: player, home, tools.",
++                        icon = Icons.Rounded.AutoAwesome,
++                        isTablet = isTablet,
++                        onClick = onFeaturesClick,
++                    )
++                    SettingsGroupDivider(isTablet = isTablet)
+                     SettingsNavigationRow(
+                         title = stringResource(Res.string.compose_settings_page_integrations),
+                         description = stringResource(Res.string.compose_settings_root_integrations_description),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
+index 961bc9e93..25af5c560 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
+@@ -737,6 +737,7 @@ private fun MobileSettingsScreen(
+                             onNotificationsClick = { onPageChange(SettingsPage.Notifications) },
+                             onContentDiscoveryClick = { onPageChange(SettingsPage.ContentDiscovery) },
+                             onIntegrationsClick = { onPageChange(SettingsPage.Integrations) },
++                            onFeaturesClick = { onPageChange(SettingsPage.Features) },
+                             onExtraClick = { onPageChange(SettingsPage.Extra) },
+                             onTrackingClick = { onPageChange(SettingsPage.TraktAuthentication) },
+                             onSupportersContributorsClick = onSupportersContributorsClick,
+@@ -818,6 +819,17 @@ private fun MobileSettingsScreen(
+                     onDebugLogsClick = { onPageChange(SettingsPage.DebugLogs) },
+                     onPerformanceClick = { onPageChange(SettingsPage.Performance) },
+                 )
++                SettingsPage.Features -> featuresSettingsContent(
++                    isTablet = false,
++                    onPlayerClick = { onPageChange(SettingsPage.FeaturesPlayer) },
++                    onHomeClick = { onPageChange(SettingsPage.FeaturesHome) },
++                    onToolsClick = { onPageChange(SettingsPage.FeaturesTools) },
++                    onPerformanceClick = { onPageChange(SettingsPage.Performance) },
++                    onDebugLogsClick = { onPageChange(SettingsPage.DebugLogs) },
++                )
++                SettingsPage.FeaturesPlayer -> featuresPlayerSettingsContent(isTablet = false)
++                SettingsPage.FeaturesHome -> featuresHomeSettingsContent(isTablet = false)
++                SettingsPage.FeaturesTools -> featuresToolsSettingsContent(isTablet = false)
+                 SettingsPage.DebugLogs -> debugLogsSettingsContent(isTablet = false)
+                 SettingsPage.Performance -> performanceSettingsContent(isTablet = false)
+                 SettingsPage.WhatsNew -> Unit
+@@ -1204,6 +1216,7 @@ private fun TabletSettingsScreen(
+                                 onNotificationsClick = { openInlinePage(SettingsPage.Notifications) },
+                                 onContentDiscoveryClick = { openInlinePage(SettingsPage.ContentDiscovery) },
+                                 onIntegrationsClick = { openInlinePage(SettingsPage.Integrations) },
++                                onFeaturesClick = { openInlinePage(SettingsPage.Features) },
+                                 onExtraClick = { openInlinePage(SettingsPage.Extra) },
+                                 onTrackingClick = { openInlinePage(SettingsPage.TraktAuthentication) },
+                                 onSupportersContributorsClick = { openInlinePage(SettingsPage.SupportersContributors) },
+@@ -1289,6 +1302,17 @@ private fun TabletSettingsScreen(
+                         onDebugLogsClick = { openInlinePage(SettingsPage.DebugLogs) },
+                         onPerformanceClick = { openInlinePage(SettingsPage.Performance) },
+                     )
++                    SettingsPage.Features -> featuresSettingsContent(
++                        isTablet = true,
++                        onPlayerClick = { openInlinePage(SettingsPage.FeaturesPlayer) },
++                        onHomeClick = { openInlinePage(SettingsPage.FeaturesHome) },
++                        onToolsClick = { openInlinePage(SettingsPage.FeaturesTools) },
++                        onPerformanceClick = { openInlinePage(SettingsPage.Performance) },
++                        onDebugLogsClick = { openInlinePage(SettingsPage.DebugLogs) },
++                    )
++                    SettingsPage.FeaturesPlayer -> featuresPlayerSettingsContent(isTablet = true)
++                    SettingsPage.FeaturesHome -> featuresHomeSettingsContent(isTablet = true)
++                    SettingsPage.FeaturesTools -> featuresToolsSettingsContent(isTablet = true)
+                     SettingsPage.DebugLogs -> debugLogsSettingsContent(isTablet = true)
+                     SettingsPage.Performance -> performanceSettingsContent(isTablet = true)
+                     SettingsPage.WhatsNew -> Unit
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/StreamsSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/StreamsSettingsPage.kt
+index 7fafe23ca..af2644ec9 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/StreamsSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/StreamsSettingsPage.kt
+@@ -188,13 +188,6 @@ internal fun LazyListScope.streamsSettingsContent(isTablet: Boolean) {
+                     isTablet = isTablet,
+                     onCheckedChange = StreamBadgeSettingsRepository::setShowAddonLogo,
+                 )
+-                SettingsSwitchRow(
+-                    title = stringResource(Res.string.settings_stream_search_title),
+-                    description = stringResource(Res.string.settings_stream_search_description),
+-                    checked = currentSettings.showStreamSearch,
+-                    isTablet = isTablet,
+-                    onCheckedChange = StreamBadgeSettingsRepository::setShowStreamSearch,
+-                )
+             }
+         }
+ 

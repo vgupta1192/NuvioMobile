@@ -1,0 +1,57 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsRepository.kt
+index 618fcf35c..4de42cba5 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsRepository.kt
+@@ -311,6 +311,11 @@ object DownloadsRepository {
+         }
+     }
+ 
++    private fun isDownloadNetworkAllowed(): Boolean {
++        DownloadsSettingsRepository.ensureLoaded()
++        return DownloadsSettingsRepository.allowMobileDataDownloads.value || DownloadNetworkGuard.isOnWifi()
++    }
++
+     fun pauseDownload(downloadId: String) {
+         ensureLoaded()
+         val item = _uiState.value.items.firstOrNull { it.id == downloadId } ?: return
+@@ -856,6 +861,18 @@ object DownloadsRepository {
+     }
+ 
+     private fun startDownload(item: DownloadItem) {
++        // Mobile-data gate: OFF = Wi-Fi only. Starts and resumes stay paused until Wi-Fi or opt-in.
++        if (!isDownloadNetworkAllowed()) {
++            mutateItem(item.id) { current ->
++                current.copy(
++                    status = DownloadStatus.Paused,
++                    updatedAtEpochMs = DownloadsClock.nowEpochMs(),
++                    errorMessage = null,
++                )
++            }
++            com.nuvio.app.core.ui.NuvioToastController.show("Wi-Fi only: connect to Wi-Fi or allow mobile data in Downloads settings")
++            return
++        }
+         if (item.needsLinkRefresh) {
+             refreshLinkAndRestart(item)
+             return
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/plugins/PluginModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/plugins/PluginModels.kt
+index 2dfe5fdab..d52f46576 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/plugins/PluginModels.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/plugins/PluginModels.kt
+@@ -98,7 +98,7 @@ data class PluginSubtitleResult(
+ )
+ 
+ data class PluginsUiState(
+-    val pluginsEnabled: Boolean = true,
++    val pluginsEnabled: Boolean = false,
+     val groupStreamsByRepository: Boolean = false,
+     val repositories: List<PluginRepositoryItem> = emptyList(),
+     val scrapers: List<PluginScraper> = emptyList(),
+@@ -111,7 +111,7 @@ sealed interface AddPluginRepositoryResult {
+ 
+ @Serializable
+ internal data class StoredPluginsState(
+-    val pluginsEnabled: Boolean = true,
++    val pluginsEnabled: Boolean = false,
+     val groupStreamsByRepository: Boolean = false,
+     val repositories: List<StoredPluginRepository> = emptyList(),
+     val scrapers: List<StoredPluginScraper> = emptyList(),
