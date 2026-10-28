@@ -1,0 +1,290 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/Chip.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/Chip.kt
+index b8424a8d8..05f07afcd 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/Chip.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/Chip.kt
+@@ -10,6 +10,9 @@ import androidx.compose.runtime.Composable
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.dp
++import com.nuvio.app.core.ui.glass.ambientLiquidGlass
++import com.nuvio.app.core.ui.glass.isAmbientLiquidGlassActive
+ 
+ @Composable
+ fun Chip(
+@@ -20,10 +23,22 @@ fun Chip(
+     enabled: Boolean = true,
+ ) {
+     val tokens = MaterialTheme.nuvio
++    val chipShape = RoundedCornerShape(NuvioTokens.Radius.md)
++    val glassModifier = if (isAmbientLiquidGlassActive()) {
++        Modifier.ambientLiquidGlass(
++            shape = chipShape,
++            tint = Color.White.copy(alpha = if (selected) 0.16f else 0.06f),
++            fallback = Color.Transparent,
++            blurRadius = 12.dp,
++            refractionHeight = 6.dp,
++        )
++    } else {
++        Modifier
++    }
+     Surface(
+         selected = selected,
+         onClick = onClick,
+-        modifier = modifier,
++        modifier = modifier.then(glassModifier),
+         enabled = enabled,
+         shape = RoundedCornerShape(NuvioTokens.Radius.md),
+         color = if (selected) tokens.colors.overlaySelected else Color.Transparent,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkSpeedPopup.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkSpeedPopup.kt
+new file mode 100644
+index 000000000..95673c30b
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkSpeedPopup.kt
+@@ -0,0 +1,112 @@
++package com.nuvio.app.features.player
++
++import androidx.compose.foundation.background
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.heightIn
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.widthIn
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.foundation.verticalScroll
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.unit.IntOffset
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import androidx.compose.ui.window.Popup
++import androidx.compose.ui.window.PopupProperties
++import androidx.compose.runtime.getValue
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.core.ui.glass.ambientLiquidGlass
++import com.nuvio.app.features.settings.ForkPrefs
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlin.math.abs
++
++/** Fork feature: speed button opens one popup with the speeds and the sleep timer choices. */
++internal object ForkSpeedPopup {
++    val open = MutableStateFlow(false)
++    val speeds: List<Float> = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f, 2.5f, 3f)
++}
++
++@Composable
++internal fun ForkSpeedPopupHost(currentSpeed: Float, onSpeedSelected: (Float) -> Unit) {
++    val visible by ForkSpeedPopup.open.collectAsStateWithLifecycle()
++    if (!visible) return
++    val minutes by SleepTimer.minutes.collectAsStateWithLifecycle()
++    val accent = MaterialTheme.colorScheme.primary
++    val shape = RoundedCornerShape(18.dp)
++    Popup(
++        alignment = Alignment.BottomCenter,
++        offset = IntOffset(0, -260),
++        onDismissRequest = { ForkSpeedPopup.open.value = false },
++        properties = PopupProperties(focusable = true),
++    ) {
++        Column(
++            modifier = Modifier
++                .widthIn(max = 340.dp)
++                .heightIn(max = 320.dp)
++                .clip(shape)
++                .ambientLiquidGlass(
++                    shape = shape,
++                    tint = Color.Black.copy(alpha = 0.45f),
++                    fallback = Color.Black.copy(alpha = 0.78f),
++                    blurRadius = 16.dp,
++                    refractionHeight = 10.dp,
++                )
++                .verticalScroll(rememberScrollState())
++                .padding(14.dp),
++            verticalArrangement = Arrangement.spacedBy(8.dp),
++        ) {
++            Text("Speed", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp)
++            ChoiceRow(
++                labels = ForkSpeedPopup.speeds.map { formatPlaybackSpeedLabel(it) },
++                selected = ForkSpeedPopup.speeds.indexOfFirst { abs(currentSpeed - it) < 0.01f },
++                accent = accent,
++                onPick = { index ->
++                    onSpeedSelected(ForkSpeedPopup.speeds[index])
++                    ForkSpeedPopup.open.value = false
++                },
++            )
++            Text("Sleep timer", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp)
++            ChoiceRow(
++                labels = SleepTimer.choices.map { SleepTimer.label(it) },
++                selected = SleepTimer.choices.indexOf(minutes),
++                accent = accent,
++                onPick = { index -> SleepTimer.set(SleepTimer.choices[index]) },
++            )
++        }
++    }
++}
++
++@Composable
++private fun ChoiceRow(labels: List<String>, selected: Int, accent: Color, onPick: (Int) -> Unit) {
++    labels.chunked(5).forEachIndexed { rowIndex, rowLabels ->
++        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
++            rowLabels.forEachIndexed { i, label ->
++                val index = rowIndex * 5 + i
++                val isSelected = index == selected
++                Text(
++                    text = label,
++                    color = if (isSelected) accent else Color.White,
++                    fontSize = 13.sp,
++                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
++                    modifier = Modifier
++                        .clip(RoundedCornerShape(10.dp))
++                        .background(if (isSelected) Color.White.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.06f))
++                        .clickable { onPick(index) }
++                        .padding(horizontal = 10.dp, vertical = 7.dp),
++                )
++            }
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
+index 30c0ed1f7..c512635e2 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeGestureActions.kt
+@@ -272,6 +272,25 @@ internal fun PlayerScreenRuntime.cycleResizeMode() {
+     controlsVisible = true
+ }
+ 
++internal fun PlayerScreenRuntime.onSpeedButton() {
++    if (com.nuvio.app.features.settings.ForkPrefs.speedPopup.current()) {
++        ForkSpeedPopup.open.value = true
++        controlsVisible = true
++    } else {
++        cyclePlaybackSpeed()
++    }
++}
++
++internal fun PlayerScreenRuntime.chooseSpeed(next: Float) {
++    if (partyBlocksControl()) return
++    partyRateNudge = null
++    playerController?.setPlaybackSpeed(next)
++    DxRemember.noteSpeed(next)
++    publishPartyPlayback(rate = next)
++    showGestureMessage(formatPlaybackSpeedLabel(next))
++    controlsVisible = true
++}
++
+ internal fun PlayerScreenRuntime.cyclePlaybackSpeed() {
+     if (partyBlocksControl()) return
+     val speeds = listOf(1f, 1.25f, 1.5f, 2f)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+index 644b4642d..629e20c6c 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+@@ -466,6 +466,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
+         controller?.applyPicture(pictureState.copy(smartEnhance = smartEnhanceOn))
+     }
+     SleepTimerEffect(playerController) // sleep timer hook
++    ForkSpeedPopupHost(playbackSnapshot.playbackSpeed) { chooseSpeed(it) }
+     val dxSoundMode by DxSound.mode.collectAsStateWithLifecycle() // dx.bi sound modes hook
+     val dxSoundRow by DxSound.rowEnabled.collectAsStateWithLifecycle()
+     LaunchedEffect(playerController, audioState, dxSoundMode, dxSoundRow) {
+@@ -537,7 +538,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
+             onSeekBack = { seekBy(-10_000L) },
+             onSeekForward = { seekBy(10_000L) },
+             onResizeModeClick = { cycleResizeMode() },
+-            onSpeedClick = { cyclePlaybackSpeed() },
++            onSpeedClick = { onSpeedButton() },
+             onSubtitleClick = {
+                 refreshTracks()
+                 showSubtitleModal = true
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTimeline.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTimeline.kt
+index 1dbf80995..1712791f2 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTimeline.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerTimeline.kt
+@@ -58,16 +58,20 @@ internal fun PlayerTimelineDetails(
+     badges: List<StreamBadge> = emptyList(),
+ ) {
+     val typeScale = MaterialTheme.nuvioTypeScale
+-    Column(Modifier.padding(horizontal = PlayerTimelineContentInset)) {
++    // Screenshot-style title block: large bold title (two lines), then badges, episode and release info.
++    Column(
++        Modifier.padding(horizontal = PlayerTimelineContentInset),
++        verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
++    ) {
+         Text(
+             text = title,
+             style = typeScale.titleLg.copy(
+-                fontSize = metrics.titleSize,
+-                lineHeight = metrics.titleSize * 1.16f,
+-                fontWeight = FontWeight.SemiBold,
++                fontSize = metrics.titleSize * 1.3f,
++                lineHeight = metrics.titleSize * 1.3f * 1.12f,
++                fontWeight = FontWeight.ExtraBold,
+             ),
+             color = Color.White,
+-            maxLines = 1,
++            maxLines = 2,
+             overflow = TextOverflow.Ellipsis,
+         )
+         if (seasonNumber != null && episodeNumber != null) {
+@@ -87,8 +91,8 @@ internal fun PlayerTimelineDetails(
+         if (!releaseInfo.isNullOrBlank()) {
+             Text(
+                 text = releaseInfo,
+-                style = typeScale.labelSm.copy(fontSize = metrics.metadataSize),
+-                color = Color.White.copy(alpha = 0.68f),
++                style = typeScale.bodyMd.copy(fontSize = metrics.metadataSize),
++                color = Color.White.copy(alpha = 0.85f),
+                 maxLines = 1,
+                 overflow = TextOverflow.Ellipsis,
+             )
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPlayerPrefsSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPlayerPrefsSettings.kt
+index 6bfcf77b8..f14dd5a15 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPlayerPrefsSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPlayerPrefsSettings.kt
+@@ -12,10 +12,12 @@ internal fun ForkPlayerPrefsSettingsSection(isTablet: Boolean) {
+         ForkPrefs.subtitlesStartOff.ensureLoaded()
+         ForkPrefs.subtitleShadow.ensureLoaded()
+         ForkPrefs.hidePlayerLock.ensureLoaded()
++        ForkPrefs.speedPopup.ensureLoaded()
+     }
+     val swipe by ForkPrefs.swipeToSeek.value.collectAsStateWithLifecycle()
+     val subsOff by ForkPrefs.subtitlesStartOff.value.collectAsStateWithLifecycle()
+     val hideLock by ForkPrefs.hidePlayerLock.value.collectAsStateWithLifecycle()
++    val speedPopup by ForkPrefs.speedPopup.value.collectAsStateWithLifecycle()
+     val shadow by ForkPrefs.subtitleShadow.value.collectAsStateWithLifecycle()
+     SettingsSection(title = "Player gestures and subtitles", isTablet = isTablet) {
+         SettingsGroup(isTablet = isTablet) {
+@@ -50,6 +52,14 @@ internal fun ForkPlayerPrefsSettingsSection(isTablet: Boolean) {
+                 isTablet = isTablet,
+                 onCheckedChange = ForkPrefs.hidePlayerLock::set,
+             )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Speed and sleep popup",
++                description = "The speed button opens a popup with speeds and sleep timer choices. Turn off to cycle speeds with each tap.",
++                checked = speedPopup,
++                isTablet = isTablet,
++                onCheckedChange = ForkPrefs.speedPopup::set,
++            )
+         }
+     }
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
+index 118a49ce2..820a9fb1e 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
+@@ -43,4 +43,5 @@ object ForkPrefs {
+     val subtitleShadow = ForkBoolPref("settings/subtitle_shadow", false)
+     val subtitlesStartOff = ForkBoolPref("settings/subtitles_start_off", false)
+     val hidePlayerLock = ForkBoolPref("settings/hide_player_lock", false)
++    val speedPopup = ForkBoolPref("settings/speed_popup", true)
+ }
