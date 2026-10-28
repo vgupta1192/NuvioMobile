@@ -1,0 +1,346 @@
+diff --git a/composeApp/src/commonMain/composeResources/values/strings.xml b/composeApp/src/commonMain/composeResources/values/strings.xml
+index f35408a1c..b41872501 100644
+--- a/composeApp/src/commonMain/composeResources/values/strings.xml
++++ b/composeApp/src/commonMain/composeResources/values/strings.xml
+@@ -525,6 +525,7 @@
+     <string name="settings_appearance_section_streams">STREAMS</string>
+     <string name="compose_settings_page_supporters_contributors">Supporters &amp; Contributors</string>
+     <string name="compose_settings_page_tmdb_enrichment">TMDB Enrichment</string>
++    <string name="compose_settings_page_omdb_ratings">OMDb Ratings</string>
+     <string name="compose_settings_page_trakt">Trakt</string>
+     <string name="compose_settings_page_tracking">Tracking</string>
+     <string name="compose_settings_root_about_section">ABOUT</string>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContentDiscoverySettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContentDiscoverySettingsPage.kt
+index 200ccccfb..16d52db9e 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContentDiscoverySettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ContentDiscoverySettingsPage.kt
+@@ -81,26 +81,6 @@ internal fun LazyListScope.contentDiscoveryContent(
+                     isTablet = isTablet,
+                     onClick = onAddonsClick,
+                 )
+-                SettingsNavigationRow(
+-                    title = stringResource(Res.string.compose_settings_page_media_servers),
+-                    description = stringResource(Res.string.settings_content_discovery_media_servers_description),
+-                    isTablet = isTablet,
+-                    onClick = onMediaServersClick,
+-                )
+-                SettingsNavigationRow(
+-                    title = stringResource(Res.string.compose_settings_page_live_tv),
+-                    description = stringResource(Res.string.settings_content_discovery_live_tv_description),
+-                    isTablet = isTablet,
+-                    onClick = onLiveTvClick,
+-                )
+-                if (DiscordRpcPlatform.isSupported) {
+-                    SettingsNavigationRow(
+-                        title = stringResource(Res.string.compose_settings_page_discord_rpc),
+-                        description = stringResource(Res.string.settings_integrations_discord_description),
+-                        isTablet = isTablet,
+-                        onClick = onDiscordClick,
+-                    )
+-                }
+                 if (showPluginsEntry) {
+                     SettingsNavigationRow(
+                         title = stringResource(Res.string.compose_settings_page_plugins),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHomeRowsSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHomeRowsSettings.kt
+index 716e8727e..9753bacf9 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHomeRowsSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHomeRowsSettings.kt
+@@ -61,21 +61,6 @@ internal fun ForkHomeRowsSettingsSection(isTablet: Boolean) {
+                 onCheckedChange = ForkPrefs.ratingMap::set,
+             )
+             SettingsGroupDivider(isTablet = isTablet)
+-            var omdbKey by androidx.compose.runtime.remember {
+-                androidx.compose.runtime.mutableStateOf(com.nuvio.app.features.details.OmdbEpisodeRatings.savedKey())
+-            }
+-            androidx.compose.material3.OutlinedTextField(
+-                value = omdbKey,
+-                onValueChange = {
+-                    omdbKey = it
+-                    com.nuvio.app.features.details.OmdbEpisodeRatings.saveKey(it)
+-                },
+-                label = { androidx.compose.material3.Text("OMDb API key (optional)") },
+-                supportingText = { androidx.compose.material3.Text("Fills in episode ratings the default source lacks. Get a free key at omdbapi.com.") },
+-                singleLine = true,
+-                modifier = androidx.compose.ui.Modifier.fillMaxWidth().padding(16.dp),
+-            )
+-            SettingsGroupDivider(isTablet = isTablet)
+             SettingsSwitchRow(
+                 title = "Only movie, series and anime rows",
+                 description = "Hide Home rows from addons that list other things, like debrid downloads or YouTube channels. They stay in Discover.",
+@@ -140,3 +125,26 @@ internal fun ForkHomeRowsSettingsSection(isTablet: Boolean) {
+         }
+     }
+ }
++
++internal fun androidx.compose.foundation.lazy.LazyListScope.omdbSettingsContent(isTablet: Boolean) {
++    item {
++        SettingsSection(title = "OMDb Ratings", isTablet = isTablet) {
++            SettingsGroup(isTablet = isTablet) {
++                var omdbKey by androidx.compose.runtime.remember {
++                    androidx.compose.runtime.mutableStateOf(com.nuvio.app.features.details.OmdbEpisodeRatings.savedKey())
++                }
++                androidx.compose.material3.OutlinedTextField(
++                    value = omdbKey,
++                    onValueChange = {
++                        omdbKey = it
++                        com.nuvio.app.features.details.OmdbEpisodeRatings.saveKey(it)
++                    },
++                    label = { androidx.compose.material3.Text("OMDb API key (optional)") },
++                    supportingText = { androidx.compose.material3.Text("Fills in episode ratings the default source lacks. Get a free key at omdbapi.com.") },
++                    singleLine = true,
++                    modifier = androidx.compose.ui.Modifier.fillMaxWidth().padding(16.dp),
++                )
++            }
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/IntegrationsSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/IntegrationsSettingsPage.kt
+index 2925674f2..83347cb73 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/IntegrationsSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/IntegrationsSettingsPage.kt
+@@ -1,12 +1,29 @@
+ package com.nuvio.app.features.settings
+ 
+ import androidx.compose.foundation.lazy.LazyListScope
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.rounded.Apps
++import androidx.compose.material.icons.rounded.Cloud
++import androidx.compose.material.icons.rounded.Forum
++import androidx.compose.material.icons.rounded.LiveTv
++import androidx.compose.material.icons.rounded.Movie
++import androidx.compose.material.icons.rounded.Storage
++import com.nuvio.app.features.discord.DiscordRpcPlatform
+ import nuvio.composeapp.generated.resources.compose_settings_page_debrid
+ import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.compose_settings_page_discord_rpc
++import nuvio.composeapp.generated.resources.compose_settings_page_live_tv
+ import nuvio.composeapp.generated.resources.compose_settings_page_mdblist_ratings
++import nuvio.composeapp.generated.resources.compose_settings_page_media_servers
++import nuvio.composeapp.generated.resources.compose_settings_page_omdb_ratings
+ import nuvio.composeapp.generated.resources.compose_settings_page_tmdb_enrichment
++import nuvio.composeapp.generated.resources.compose_settings_page_tracking
++import nuvio.composeapp.generated.resources.compose_settings_root_tracking_description
++import nuvio.composeapp.generated.resources.settings_content_discovery_live_tv_description
++import nuvio.composeapp.generated.resources.settings_content_discovery_media_servers_description
+ import nuvio.composeapp.generated.resources.settings_integrations_mdblist_description
+ import nuvio.composeapp.generated.resources.settings_integrations_debrid_description
++import nuvio.composeapp.generated.resources.settings_integrations_discord_description
+ import nuvio.composeapp.generated.resources.settings_integrations_section_title
+ import nuvio.composeapp.generated.resources.settings_integrations_tmdb_description
+ import org.jetbrains.compose.resources.stringResource
+@@ -16,6 +33,12 @@ internal fun LazyListScope.integrationsContent(
+     onTmdbClick: () -> Unit,
+     onMdbListClick: () -> Unit,
+     onDebridClick: () -> Unit,
++    onTrackingClick: () -> Unit = {},
++    onOmdbClick: () -> Unit = {},
++    onMediaServersClick: () -> Unit = {},
++    onLiveTvClick: () -> Unit = {},
++    onDiscordClick: () -> Unit = {},
++    onExtraClick: () -> Unit = {},
+ ) {
+     item {
+         SettingsSection(
+@@ -23,6 +46,14 @@ internal fun LazyListScope.integrationsContent(
+             isTablet = isTablet,
+         ) {
+             SettingsGroup(isTablet = isTablet) {
++                SettingsNavigationRow(
++                    title = stringResource(Res.string.compose_settings_page_tracking),
++                    description = stringResource(Res.string.compose_settings_root_tracking_description),
++                    icon = Icons.Rounded.Cloud,
++                    isTablet = isTablet,
++                    onClick = onTrackingClick,
++                )
++                SettingsGroupDivider(isTablet = isTablet)
+                 SettingsNavigationRow(
+                     title = stringResource(Res.string.compose_settings_page_tmdb_enrichment),
+                     description = stringResource(Res.string.settings_integrations_tmdb_description),
+@@ -39,12 +70,55 @@ internal fun LazyListScope.integrationsContent(
+                     onClick = onMdbListClick,
+                 )
+                 SettingsGroupDivider(isTablet = isTablet)
++                SettingsNavigationRow(
++                    title = stringResource(Res.string.compose_settings_page_omdb_ratings),
++                    description = "Personal API key for accurate IMDb episode ratings",
++                    icon = Icons.Rounded.Movie,
++                    isTablet = isTablet,
++                    onClick = onOmdbClick,
++                )
++                SettingsGroupDivider(isTablet = isTablet)
+                 SettingsNavigationRow(
+                     title = stringResource(Res.string.compose_settings_page_debrid),
+                     description = stringResource(Res.string.settings_integrations_debrid_description),
+                     isTablet = isTablet,
+                     onClick = onDebridClick,
+                 )
++                SettingsGroupDivider(isTablet = isTablet)
++                SettingsNavigationRow(
++                    title = stringResource(Res.string.compose_settings_page_media_servers),
++                    description = stringResource(Res.string.settings_content_discovery_media_servers_description),
++                    icon = Icons.Rounded.Storage,
++                    isTablet = isTablet,
++                    onClick = onMediaServersClick,
++                )
++                SettingsGroupDivider(isTablet = isTablet)
++                SettingsNavigationRow(
++                    title = stringResource(Res.string.compose_settings_page_live_tv),
++                    description = stringResource(Res.string.settings_content_discovery_live_tv_description),
++                    icon = Icons.Rounded.LiveTv,
++                    isTablet = isTablet,
++                    onClick = onLiveTvClick,
++                )
++                if (DiscordRpcPlatform.isSupported) {
++                    SettingsGroupDivider(isTablet = isTablet)
++                    SettingsNavigationRow(
++                        title = stringResource(Res.string.compose_settings_page_discord_rpc),
++                        description = stringResource(Res.string.settings_integrations_discord_description),
++                        icon = Icons.Rounded.Forum,
++                        isTablet = isTablet,
++                        onClick = onDiscordClick,
++                    )
++                }
++                // Fork: Live TV + Jellyfin settings page.
++                SettingsGroupDivider(isTablet = isTablet)
++                SettingsNavigationRow(
++                    title = "Extra",
++                    description = "Live TV and Jellyfin",
++                    icon = Icons.Rounded.Apps,
++                    isTablet = isTablet,
++                    onClick = onExtraClick,
++                )
+             }
+         }
+     }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
+index 41a744837..d953b4ba8 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
+@@ -26,6 +26,7 @@ import nuvio.composeapp.generated.resources.compose_settings_page_homescreen
+ import nuvio.composeapp.generated.resources.compose_settings_page_integrations
+ import nuvio.composeapp.generated.resources.compose_settings_page_licenses_attributions
+ import nuvio.composeapp.generated.resources.compose_settings_page_mdblist_ratings
++import nuvio.composeapp.generated.resources.compose_settings_page_omdb_ratings
+ import nuvio.composeapp.generated.resources.compose_settings_page_media_server
+ import nuvio.composeapp.generated.resources.compose_settings_page_media_servers
+ import nuvio.composeapp.generated.resources.compose_settings_page_live_tv
+@@ -152,17 +153,17 @@ internal enum class SettingsPage(
+     MediaServers(
+         titleRes = Res.string.compose_settings_page_media_servers,
+         category = SettingsCategory.General,
+-        parentPage = ContentDiscovery,
++        parentPage = Integrations,
+     ),
+     DiscordRpc(
+         titleRes = Res.string.compose_settings_page_discord_rpc,
+         category = SettingsCategory.General,
+-        parentPage = ContentDiscovery,
++        parentPage = Integrations,
+     ),
+     LiveTv(
+         titleRes = Res.string.compose_settings_page_live_tv,
+         category = SettingsCategory.General,
+-        parentPage = ContentDiscovery,
++        parentPage = Integrations,
+     ),
+     MediaServer(
+         titleRes = Res.string.compose_settings_page_media_server,
+@@ -194,6 +195,11 @@ internal enum class SettingsPage(
+         category = SettingsCategory.General,
+         parentPage = Integrations,
+     ),
++    OmdbRatings(
++        titleRes = Res.string.compose_settings_page_omdb_ratings,
++        category = SettingsCategory.General,
++        parentPage = Integrations,
++    ),
+     Debrid(
+         titleRes = Res.string.compose_settings_page_debrid,
+         category = SettingsCategory.General,
+@@ -203,13 +209,13 @@ internal enum class SettingsPage(
+         // Keep the enum name for saved navigation-state compatibility.
+         titleRes = Res.string.compose_settings_page_tracking,
+         category = SettingsCategory.Account,
+-        parentPage = Root,
++        parentPage = Integrations,
+     ),
+     Extra(
+         // Fork page: Live TV + Jellyfin settings under one entry.
+         titleRes = Res.string.extra_settings_title,
+         category = SettingsCategory.General,
+-        parentPage = Root,
++        parentPage = Integrations,
+     ),
+ }
+ 
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt
+index a3a9e253f..ad7217a7b 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsRootPage.kt
+@@ -127,14 +127,6 @@ internal fun LazyListScope.settingsRootContent(
+                             onClick = onWatchPartyClick,
+                         )
+                     }
+-                    SettingsGroupDivider(isTablet = isTablet)
+-                    SettingsNavigationRow(
+-                        title = stringResource(Res.string.compose_settings_page_tracking),
+-                        description = stringResource(Res.string.compose_settings_root_tracking_description),
+-                        icon = Icons.Default.Sync,
+-                        isTablet = isTablet,
+-                        onClick = onTrackingClick,
+-                    )
+                 }
+             }
+         }
+@@ -177,17 +169,6 @@ internal fun LazyListScope.settingsRootContent(
+                         isTablet = isTablet,
+                         onClick = onIntegrationsClick,
+                     )
+-                    // Fork: Live TV + Jellyfin settings under one "Extra" entry.
+-                    if (onExtraClick != null) {
+-                        SettingsGroupDivider(isTablet = isTablet)
+-                        SettingsNavigationRow(
+-                            title = "Extra",
+-                            description = "Live TV and Jellyfin",
+-                            icon = Icons.Rounded.Apps,
+-                            isTablet = isTablet,
+-                            onClick = onExtraClick,
+-                        )
+-                    }
+                     SettingsGroupDivider(isTablet = isTablet)
+                     SettingsNavigationRow(
+                         title = stringResource(Res.string.compose_settings_page_notifications),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
+index de0bc1d6a..961bc9e93 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
+@@ -881,7 +881,14 @@ private fun MobileSettingsScreen(
+                     onTmdbClick = { onPageChange(SettingsPage.TmdbEnrichment) },
+                     onMdbListClick = { onPageChange(SettingsPage.MdbListRatings) },
+                     onDebridClick = { onPageChange(SettingsPage.Debrid) },
++                    onTrackingClick = { onPageChange(SettingsPage.TraktAuthentication) },
++                    onOmdbClick = { onPageChange(SettingsPage.OmdbRatings) },
++                    onMediaServersClick = { onPageChange(SettingsPage.MediaServers) },
++                    onLiveTvClick = { onPageChange(SettingsPage.LiveTv) },
++                    onDiscordClick = { onPageChange(SettingsPage.DiscordRpc) },
++                    onExtraClick = { onPageChange(SettingsPage.Extra) },
+                 )
++                SettingsPage.OmdbRatings -> omdbSettingsContent(isTablet = false)
+                 SettingsPage.TmdbEnrichment -> tmdbSettingsContent(
+                     isTablet = false,
+                     settings = tmdbSettings,
+@@ -1345,7 +1352,14 @@ private fun TabletSettingsScreen(
+                         onTmdbClick = { onPageChange(SettingsPage.TmdbEnrichment) },
+                         onMdbListClick = { onPageChange(SettingsPage.MdbListRatings) },
+                         onDebridClick = { onPageChange(SettingsPage.Debrid) },
++                        onTrackingClick = { onPageChange(SettingsPage.TraktAuthentication) },
++                        onOmdbClick = { onPageChange(SettingsPage.OmdbRatings) },
++                        onMediaServersClick = { onPageChange(SettingsPage.MediaServers) },
++                        onLiveTvClick = { onPageChange(SettingsPage.LiveTv) },
++                        onDiscordClick = { onPageChange(SettingsPage.DiscordRpc) },
++                        onExtraClick = { onPageChange(SettingsPage.Extra) },
+                     )
++                    SettingsPage.OmdbRatings -> omdbSettingsContent(isTablet = true)
+                     SettingsPage.TmdbEnrichment -> tmdbSettingsContent(
+                         isTablet = true,
+                         settings = tmdbSettings,
