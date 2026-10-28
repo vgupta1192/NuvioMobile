@@ -53,7 +53,7 @@ index 499aa9b1..9c58d507 100644
      private const val PATH = "settings/player_toolbar"
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerChaptersSheet.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerChaptersSheet.kt
 new file mode 100644
-index 00000000..a54e106a
+index 00000000..faa4e213
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerChaptersSheet.kt
 @@ -0,0 +1,78 @@
@@ -65,7 +65,7 @@ index 00000000..a54e106a
 +import androidx.compose.foundation.rememberScrollState
 +import androidx.compose.foundation.verticalScroll
 +import androidx.compose.material.icons.Icons
-+import androidx.compose.material.icons.rounded.Bookmarks
++import androidx.compose.material.icons.rounded.Menu
 +import androidx.compose.material3.ExperimentalMaterial3Api
 +import androidx.compose.material3.MaterialTheme
 +import androidx.compose.material3.Text
@@ -122,7 +122,7 @@ index 00000000..a54e106a
 +            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
 +                chapters.forEachIndexed { index, chapter ->
 +                    NuvioBottomSheetActionRow(
-+                        icon = Icons.Rounded.Bookmarks,
++                        icon = Icons.Rounded.Menu,
 +                        title = "${formatChapterTime(chapter.startMs)}  ${chapter.title}",
 +                        selected = index == currentIndex,
 +                        onClick = {
@@ -136,10 +136,18 @@ index 00000000..a54e106a
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
-index ceed8f41..355dd5d7 100644
+index ceed8f41..a7c132e1 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
-@@ -164,6 +164,8 @@ internal fun PlayerControlActions(
+@@ -30,6 +30,7 @@ import androidx.compose.material.icons.rounded.Flag
+ import androidx.compose.material.icons.rounded.Groups
+ import androidx.compose.material.icons.rounded.Info
+ import androidx.compose.material.icons.rounded.Lock
++import androidx.compose.material.icons.rounded.Menu
+ import androidx.compose.material.icons.rounded.LockOpen
+ import androidx.compose.material.icons.rounded.SkipNext
+ import androidx.compose.material.icons.rounded.Speed
+@@ -164,6 +165,8 @@ internal fun PlayerControlActions(
      onQualityClick: (() -> Unit)? = null,
      onRateClick: (() -> Unit)? = null,
      userRating: Int? = null,
@@ -148,12 +156,12 @@ index ceed8f41..355dd5d7 100644
  ) {
      androidx.compose.runtime.LaunchedEffect(Unit) { ForkPlayerToolbar.ensureLoaded() }
      val toolbarEntries by ForkPlayerToolbar.entries.collectAsState()
-@@ -238,6 +240,15 @@ internal fun PlayerControlActions(
+@@ -238,6 +241,15 @@ internal fun PlayerControlActions(
                  icon = Icons.Rounded.Flag,
              )
          },
 +        onChaptersClick?.let {
-+            PlayerControlAction("Chapters", it, icon = androidx.compose.material.icons.Icons.Rounded.Bookmarks)
++            PlayerControlAction("Chapters", it, icon = Icons.Rounded.Menu)
 +        },
 +        onSwitchEngineClick?.let {
 +            PlayerControlAction(
