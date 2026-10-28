@@ -1,0 +1,95 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
+index f5b80ca5..a8adab8a 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
+@@ -38,6 +38,7 @@ object ForkPrefs {
+     val ratingMap = ForkBoolPref("settings/rating_map", true)
+     val fillerGuide = ForkBoolPref("settings/filler_guide", true)
+     val homeVideoRowsOnly = ForkBoolPref("settings/home_video_rows_only", true)
++    val cloudStreamGroupTab = ForkBoolPref("settings/cs3_group_tab", true)
+     val nuvioRead = ForkBoolPref("settings/nuvio_read", false)
+     val subtitleShadow = ForkBoolPref("settings/subtitle_shadow", false)
+     val subtitlesStartOff = ForkBoolPref("settings/subtitles_start_off", false)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/CloudStreamGroupMerge.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/CloudStreamGroupMerge.kt
+new file mode 100644
+index 00000000..2b0cad6c
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/CloudStreamGroupMerge.kt
+@@ -0,0 +1,32 @@
++package com.nuvio.app.features.streams
++
++internal const val CLOUDSTREAM_MERGED_ID = "cloudstream-merged"
++internal const val CLOUDSTREAM_MERGED_NAME = "CS3"
++
++/**
++ * Nuvio fork: folds every CloudStream provider group into one "CS3" tab. Each stream keeps its
++ * provider name as sourceName, so the list shows one sub-header per provider inside the tab.
++ */
++internal fun List<AddonStreamGroup>.withMergedCloudStreamGroups(): List<AddonStreamGroup> {
++    val cloud = filter { it.addonId.startsWith("cloudstream:") }
++    if (cloud.size < 2) return this
++    val merged = AddonStreamGroup(
++        addonName = CLOUDSTREAM_MERGED_NAME,
++        addonId = CLOUDSTREAM_MERGED_ID,
++        streams = cloud.flatMap { group ->
++            group.streams.map { stream -> stream.copy(sourceName = group.addonName) }
++        },
++        isLoading = cloud.any { it.isLoading },
++        error = if (cloud.all { it.error != null }) cloud.first().error else null,
++    )
++    val firstIndex = indexOfFirst { it.addonId.startsWith("cloudstream:") }
++    val result = ArrayList<AddonStreamGroup>(size)
++    forEachIndexed { index, group ->
++        if (index == firstIndex) result += merged
++        if (!group.addonId.startsWith("cloudstream:")) result += group
++    }
++    return result
++}
++
++internal fun StreamsUiState.withMergedCloudStreamGroups(): StreamsUiState =
++    copy(groups = groups.withMergedCloudStreamGroups())
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt
+index b239a15a..f90b5baf 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt
+@@ -129,7 +129,14 @@ fun StreamsScreen(
+     modifier: Modifier = Modifier,
+ ) {
+     val useNativeNavigation = LocalUseNativeNavigation.current
+-    val uiState by StreamsRepository.uiState.collectAsStateWithLifecycle()
++    val rawUiState by StreamsRepository.uiState.collectAsStateWithLifecycle()
++    val cs3GroupTab by remember {
++        com.nuvio.app.features.settings.ForkPrefs.cloudStreamGroupTab.ensureLoaded()
++        com.nuvio.app.features.settings.ForkPrefs.cloudStreamGroupTab.value
++    }.collectAsStateWithLifecycle()
++    val uiState = remember(rawUiState, cs3GroupTab) {
++        if (cs3GroupTab) rawUiState.withMergedCloudStreamGroups() else rawUiState
++    }
+     val streamDisplaySettings by remember {
+         StreamBadgeSettingsRepository.ensureLoaded()
+         StreamBadgeSettingsRepository.uiState
+diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/plugins/CloudStreamSettingsSection.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/plugins/CloudStreamSettingsSection.kt
+index cfc1f9d1..4c116dde 100644
+--- a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/plugins/CloudStreamSettingsSection.kt
++++ b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/plugins/CloudStreamSettingsSection.kt
+@@ -388,6 +388,20 @@ internal fun CloudStreamSettingsSection() {
+                 )
+             }
+             val enabledPlugins = state.plugins.filter { it.isInstalled && it.enabled }
++            val groupCs3Tab by com.nuvio.app.features.settings.ForkPrefs.cloudStreamGroupTab.value.collectAsStateWithLifecycle()
++            androidx.compose.runtime.LaunchedEffect(Unit) { com.nuvio.app.features.settings.ForkPrefs.cloudStreamGroupTab.ensureLoaded() }
++            Spacer(Modifier.height(10.dp))
++            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
++                Column(modifier = Modifier.weight(1f)) {
++                    Text("Group providers in one tab", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
++                    Text(
++                        "Streams shows a single CS3 tab with one section per provider.",
++                        style = MaterialTheme.typography.bodyMedium,
++                        color = MaterialTheme.colorScheme.onSurfaceVariant,
++                    )
++                }
++                Switch(checked = groupCs3Tab, onCheckedChange = com.nuvio.app.features.settings.ForkPrefs.cloudStreamGroupTab::set)
++            }
+             Spacer(Modifier.height(10.dp))
+             Button(
+                 modifier = Modifier
