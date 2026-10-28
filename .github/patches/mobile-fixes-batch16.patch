@@ -1,0 +1,536 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt
+index 956483589..85f056ad7 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt
+@@ -9,34 +9,23 @@ data class ForkToolbarButton(val id: String, val label: String)
+ 
+ data class ForkToolbarEntry(val id: String, val visible: Boolean)
+ 
+-object ForkPlayerToolbar {
+-    val buttons: List<ForkToolbarButton> = listOf(
+-        ForkToolbarButton("next_episode", "Next episode"),
+-        ForkToolbarButton("subtitles", "Subtitles"),
+-        ForkToolbarButton("audio", "Audio"),
+-        ForkToolbarButton("chapters", "Chapters"),
+-        ForkToolbarButton("sources", "Sources"),
+-        ForkToolbarButton("episodes", "Episodes"),
+-        ForkToolbarButton("quality", "Quality"),
+-        ForkToolbarButton("rate", "Rate"),
+-        ForkToolbarButton("speed", "Speed"),
+-        ForkToolbarButton("resize", "Resize"),
+-        ForkToolbarButton("external_player", "Open in external player"),
+-        ForkToolbarButton("playback_info", "Stream info"),
+-        ForkToolbarButton("video_settings", "Video settings"),
+-        ForkToolbarButton("submit_intro", "Submit intro"),
+-    )
+-
+-    private const val PATH = "settings/player_toolbar"
++open class ForkButtonLayout(private val path: String, val buttons: List<ForkToolbarButton>) {
+     private val default = buttons.map { ForkToolbarEntry(it.id, true) }
+     private val _entries = MutableStateFlow(default)
+     val entries: StateFlow<List<ForkToolbarEntry>> = _entries.asStateFlow()
+     private var loaded = false
+ 
++    /** Orders [items] by the saved layout and drops hidden ones; ids the layout does not know stay at the end. */
++    fun <T> arrange(items: List<T>, order: List<ForkToolbarEntry> = _entries.value, id: (T) -> String): List<T> {
++        val byId = items.associateBy(id)
++        val known = order.map { it.id }.toSet()
++        return order.filter { it.visible }.mapNotNull { byId[it.id] } + items.filter { id(it) !in known }
++    }
++
+     fun ensureLoaded() {
+         if (loaded) return
+         loaded = true
+-        val stored = runCatching { AppFileCache.read(PATH)?.trim() }.getOrNull()
++        val stored = runCatching { AppFileCache.read(path)?.trim() }.getOrNull()
+         if (!stored.isNullOrBlank()) _entries.value = decode(stored)
+     }
+ 
+@@ -54,7 +43,7 @@ object ForkPlayerToolbar {
+     private fun save(list: List<ForkToolbarEntry>) {
+         _entries.value = list
+         runCatching {
+-            AppFileCache.write(PATH, list.joinToString(",") { "${it.id}:${if (it.visible) "v" else "h"}" })
++            AppFileCache.write(path, list.joinToString(",") { "${it.id}:${if (it.visible) "v" else "h"}" })
+         }
+     }
+ 
+@@ -78,3 +67,57 @@ object ForkPlayerToolbar {
+         save(default)
+     }
+ }
++
++object ForkPlayerToolbar : ForkButtonLayout(
++    "settings/player_toolbar",
++    listOf(
++        ForkToolbarButton("next_episode", "Next episode"),
++        ForkToolbarButton("subtitles", "Subtitles"),
++        ForkToolbarButton("audio", "Audio"),
++        ForkToolbarButton("chapters", "Chapters"),
++        ForkToolbarButton("sources", "Sources"),
++        ForkToolbarButton("episodes", "Episodes"),
++        ForkToolbarButton("quality", "Quality"),
++        ForkToolbarButton("rate", "Rate"),
++        ForkToolbarButton("speed", "Speed"),
++        ForkToolbarButton("resize", "Resize"),
++        ForkToolbarButton("external_player", "Open in external player"),
++        ForkToolbarButton("playback_info", "Stream info"),
++        ForkToolbarButton("video_settings", "Video settings"),
++        ForkToolbarButton("submit_intro", "Submit intro"),
++    ),
++)
++
++/** Top-right icons of the legacy player layout. The close button always stays. */
++object ForkLegacyTopButtons : ForkButtonLayout(
++    "settings/player_legacy_top",
++    listOf(
++        ForkToolbarButton("enhance", "Smart enhance"),
++        ForkToolbarButton("dx_enhance", "Picture enhance"),
++        ForkToolbarButton("dx_stats", "Stream stats"),
++        ForkToolbarButton("cast", "Cast"),
++        ForkToolbarButton("orientation", "Rotate screen"),
++        ForkToolbarButton("pip", "Picture in picture"),
++        ForkToolbarButton("submit_intro", "Submit intro"),
++        ForkToolbarButton("external_player", "Open in external player"),
++        ForkToolbarButton("party", "Watch party"),
++        ForkToolbarButton("lock", "Lock controls"),
++        ForkToolbarButton("video_settings", "Video settings"),
++    ),
++)
++
++/** Pill row under the seek bar of the legacy player layout. */
++object ForkLegacyBottomButtons : ForkButtonLayout(
++    "settings/player_legacy_bottom",
++    listOf(
++        ForkToolbarButton("resize", "Resize"),
++        ForkToolbarButton("speed", "Speed"),
++        ForkToolbarButton("subtitles", "Subtitles"),
++        ForkToolbarButton("audio", "Audio"),
++        ForkToolbarButton("chapters", "Chapters"),
++        ForkToolbarButton("sources", "Sources"),
++        ForkToolbarButton("episodes", "Episodes"),
++        ForkToolbarButton("quality", "Quality"),
++        ForkToolbarButton("rate", "Rate"),
++    ),
++)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+index 712053c2f..6d75f38ab 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+@@ -549,11 +549,16 @@ private fun PlayerHeader(
+                     verticalAlignment = Alignment.CenterVertically,
+                 ) {
+                     var headerExpanded by remember { mutableStateOf(false) }
+-                    val headerItems = buildList<@Composable () -> Unit> {
+-                        add { SmartEnhanceHeaderButton(metrics) }
+-                        add { DxEnhanceHeaderButton(metrics) }
+-                        add { DxStatsHeaderButton(metrics) }
+-                        if (onCastClick != null) add {
++                    val topLayout by ForkLegacyTopButtons.entries.collectAsStateWithLifecycle()
++                    androidx.compose.runtime.LaunchedEffect(Unit) { ForkLegacyTopButtons.ensureLoaded() }
++                    fun MutableList<Pair<String, @Composable () -> Unit>>.add(id: String, content: @Composable () -> Unit) {
++                        add(id to content)
++                    }
++                    val rawHeaderItems = buildList<Pair<String, @Composable () -> Unit>> {
++                        add("enhance") { SmartEnhanceHeaderButton(metrics) }
++                        add("dx_enhance") { DxEnhanceHeaderButton(metrics) }
++                        add("dx_stats") { DxStatsHeaderButton(metrics) }
++                        if (onCastClick != null) add("cast") {
+                             PlayerHeaderIconButton(
+                                 icon = if (castActive) Icons.Rounded.CastConnected else Icons.Rounded.Cast,
+                                 contentDescription = stringResource(Res.string.player_cast),
+@@ -563,7 +568,7 @@ private fun PlayerHeader(
+                                 tint = if (castActive) MaterialTheme.colorScheme.primary else Color.White,
+                             )
+                         }
+-                        if (onOrientationToggleClick != null) add {
++                        if (onOrientationToggleClick != null) add("orientation") {
+                             PlayerHeaderIconButton(
+                                 icon = if (isPortraitPlayback) Icons.Rounded.StayCurrentLandscape else Icons.Rounded.StayCurrentPortrait,
+                                 contentDescription = stringResource(
+@@ -574,7 +579,7 @@ private fun PlayerHeader(
+                                 onClick = onOrientationToggleClick,
+                             )
+                         }
+-                        if (onMiniPlayerClick != null) add {
++                        if (onMiniPlayerClick != null) add("pip") {
+                             PlayerHeaderIconButton(
+                                 icon = Icons.Rounded.PictureInPicture,
+                                 contentDescription = stringResource(Res.string.player_action_mini_player),
+@@ -583,7 +588,7 @@ private fun PlayerHeader(
+                                 onClick = onMiniPlayerClick,
+                             )
+                         }
+-                        if (onSubmitIntroClick != null) add {
++                        if (onSubmitIntroClick != null) add("submit_intro") {
+                             PlayerHeaderIconButton(
+                                 icon = Icons.Rounded.Flag,
+                                 contentDescription = stringResource(Res.string.submit_intro_action),
+@@ -592,7 +597,7 @@ private fun PlayerHeader(
+                                 onClick = onSubmitIntroClick,
+                             )
+                         }
+-                        if (onOpenInExternalPlayer != null) add {
++                        if (onOpenInExternalPlayer != null) add("external_player") {
+                             PlayerHeaderIconButton(
+                                 icon = Icons.Filled.SwapHoriz,
+                                 contentDescription = stringResource(Res.string.streams_open_external_player),
+@@ -601,7 +606,7 @@ private fun PlayerHeader(
+                                 onClick = onOpenInExternalPlayer,
+                             )
+                         }
+-                        if (onPartyClick != null) add {
++                        if (onPartyClick != null) add("party") {
+                             PlayerHeaderIconButton(
+                                 icon = Icons.Rounded.Groups,
+                                 contentDescription = stringResource(Res.string.party_title),
+@@ -611,7 +616,7 @@ private fun PlayerHeader(
+                                 tint = if (partyActive) MaterialTheme.colorScheme.primary else Color.White,
+                             )
+                         }
+-                        add {
++                        add("lock") {
+                         val hideLock by remember {
+                             com.nuvio.app.features.settings.ForkPrefs.hidePlayerLock.ensureLoaded()
+                             com.nuvio.app.features.settings.ForkPrefs.hidePlayerLock.value
+@@ -630,7 +635,7 @@ private fun PlayerHeader(
+                             )
+                         }
+                         }
+-                        if (onVideoSettingsClick != null) add {
++                        if (onVideoSettingsClick != null) add("video_settings") {
+                             PlayerHeaderIconButton(
+                                 icon = Icons.Rounded.Build,
+                                 contentDescription = stringResource(Res.string.player_action_video_settings),
+@@ -640,6 +645,7 @@ private fun PlayerHeader(
+                             )
+                         }
+                     }
++                    val headerItems = ForkLegacyTopButtons.arrange(rawHeaderItems, topLayout) { it.first }.map { it.second }
+                     val headerLimit = 4
+                     val headerOverflow = headerItems.size > headerLimit
+                     headerItems.take(if (headerExpanded) headerItems.size else headerLimit).forEach { it() }
+@@ -816,6 +822,11 @@ private fun ProgressControls(
+     val audioPainter = appIconPainter(AppIconResource.PlayerAudioFilled)
+     val sourcePainter = appIconPainter(AppIconResource.PlayerSource)
+     val episodesPainter = appIconPainter(AppIconResource.PlayerEpisodes)
++    val bottomLayout by ForkLegacyBottomButtons.entries.collectAsStateWithLifecycle()
++    androidx.compose.runtime.LaunchedEffect(Unit) { ForkLegacyBottomButtons.ensureLoaded() }
++    fun MutableList<Pair<String, @Composable () -> Unit>>.add(id: String, content: @Composable () -> Unit) {
++        add(id to content)
++    }
+ 
+     Column(modifier = modifier) {
+         PlayerChapterTitle(
+@@ -849,62 +860,76 @@ private fun ProgressControls(
+                     horizontalArrangement = Arrangement.Center,
+                     verticalAlignment = Alignment.CenterVertically,
+                 ) {
+-                    PlayerActionPillButton(
+-                        label = stringResource(resizeMode.labelRes),
+-                        painter = aspectRatioPainter,
+-                        onClick = onResizeModeClick,
+-                    )
+-                    PlayerActionPillButton(
+-                        label = formatPlaybackSpeedLabel(playbackSnapshot.playbackSpeed),
+-                        icon = Icons.Filled.Speed,
+-                        onClick = onSpeedClick,
+-                    )
+-                    PlayerActionPillButton(
+-                        label = stringResource(Res.string.compose_player_subs),
+-                        painter = subtitlesPainter,
+-                        onClick = onSubtitleClick,
+-                    )
+-                    PlayerActionPillButton(
+-                        label = stringResource(Res.string.compose_player_audio),
+-                        painter = audioPainter,
+-                        onClick = onAudioClick,
+-                    )
+-                    if (onChaptersClick != null) {
++                    val pills = ForkLegacyBottomButtons.arrange(
++                        buildList<Pair<String, @Composable () -> Unit>> {
++                            add("resize") {
+                         PlayerActionPillButton(
+-                            label = stringResource(Res.string.compose_player_chapters),
+-                            icon = Icons.AutoMirrored.Rounded.Toc,
+-                            onClick = onChaptersClick,
++                            label = stringResource(resizeMode.labelRes),
++                            painter = aspectRatioPainter,
++                            onClick = onResizeModeClick,
+                         )
+-                    }
+-                    if (onSourcesClick != null) {
++                            }
++                            add("speed") {
+                         PlayerActionPillButton(
+-                            label = stringResource(Res.string.compose_player_sources),
+-                            painter = sourcePainter,
+-                            onClick = onSourcesClick,
++                            label = formatPlaybackSpeedLabel(playbackSnapshot.playbackSpeed),
++                            icon = Icons.Filled.Speed,
++                            onClick = onSpeedClick,
+                         )
+-                    }
+-                    if (onEpisodesClick != null) {
++                            }
++                            add("subtitles") {
+                         PlayerActionPillButton(
+-                            label = stringResource(Res.string.compose_player_episodes),
+-                            painter = episodesPainter,
+-                            onClick = onEpisodesClick,
++                            label = stringResource(Res.string.compose_player_subs),
++                            painter = subtitlesPainter,
++                            onClick = onSubtitleClick,
+                         )
+-                    }
+-                    if (onQualityClick != null) {
++                            }
++                            add("audio") {
+                         PlayerActionPillButton(
+-                            label = stringResource(Res.string.player_action_quality),
+-                            icon = Icons.Rounded.HighQuality,
+-                            onClick = onQualityClick,
++                            label = stringResource(Res.string.compose_player_audio),
++                            painter = audioPainter,
++                            onClick = onAudioClick,
+                         )
+-                    }
+-                    if (onRateClick != null) {
+-                        PlayerActionPillButton(
+-                            label = userRating?.let { stringResource(Res.string.player_action_rated, it) }
+-                                ?: stringResource(Res.string.player_action_rate),
+-                            icon = if (userRating != null) Icons.Rounded.Star else Icons.Rounded.StarBorder,
+-                            onClick = onRateClick,
+-                        )
+-                    }
++                            }
++                            if (onChaptersClick != null) add("chapters") {
++                            PlayerActionPillButton(
++                                label = stringResource(Res.string.compose_player_chapters),
++                                icon = Icons.AutoMirrored.Rounded.Toc,
++                                onClick = onChaptersClick,
++                            )
++                            }
++                            if (onSourcesClick != null) add("sources") {
++                            PlayerActionPillButton(
++                                label = stringResource(Res.string.compose_player_sources),
++                                painter = sourcePainter,
++                                onClick = onSourcesClick,
++                            )
++                            }
++                            if (onEpisodesClick != null) add("episodes") {
++                            PlayerActionPillButton(
++                                label = stringResource(Res.string.compose_player_episodes),
++                                painter = episodesPainter,
++                                onClick = onEpisodesClick,
++                            )
++                            }
++                            if (onQualityClick != null) add("quality") {
++                            PlayerActionPillButton(
++                                label = stringResource(Res.string.player_action_quality),
++                                icon = Icons.Rounded.HighQuality,
++                                onClick = onQualityClick,
++                            )
++                            }
++                            if (onRateClick != null) add("rate") {
++                            PlayerActionPillButton(
++                                label = userRating?.let { stringResource(Res.string.player_action_rated, it) }
++                                    ?: stringResource(Res.string.player_action_rate),
++                                icon = if (userRating != null) Icons.Rounded.Star else Icons.Rounded.StarBorder,
++                                onClick = onRateClick,
++                            )
++                            }
++                        },
++                        bottomLayout,
++                    ) { it.first }
++                    pills.forEach { it.second() }
+                     seekPreviewSyncAction()?.let { // Seek previews hook
+                         PlayerActionPillButton(stringResource(Res.string.player_seek_preview_sync), it, SeekPreviewSyncIcon)
+                     }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerStreamsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerStreamsRepository.kt
+index 8f552cff1..4ad682f66 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerStreamsRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerStreamsRepository.kt
+@@ -560,7 +560,8 @@ object PlayerStreamsRepository {
+                                         val mergedStreams = if (completion.streams.isEmpty()) {
+                                             group.streams
+                                         } else {
+-                                            (group.streams + completion.streams).sortedForGroupedDisplay()
++                                            (group.streams + StreamBadgePresentation.applyToStreams(completion.streams, streamBadgeRules))
++                                                .sortedForGroupedDisplay()
+                                                 .let { streams -> connectionFit?.apply(streams) ?: streams } // Nuvio fork: connection-speed fit
+                                         }
+                                         val stillLoading = remaining > 0
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/FeaturesSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/FeaturesSettingsPage.kt
+index 0e2abf51d..2634cc65c 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/FeaturesSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/FeaturesSettingsPage.kt
+@@ -91,6 +91,7 @@ internal fun LazyListScope.featuresPlayerSettingsContent(isTablet: Boolean) {
+     item { DxSecondSubtitleSettingsSection(isTablet = isTablet) }
+     item { DxStatsSettingsSection(isTablet = isTablet) }
+     item { ForkPlayerPrefsSettingsSection(isTablet = isTablet) }
++    item { ForkPlayerButtonsSettingsSection(isTablet = isTablet) }
+     item { ConnectionFitSettingsSection(isTablet = isTablet) }
+     item { SubtitleFontSettingsSection(isTablet = isTablet) }
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHomeRowsSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHomeRowsSettings.kt
+index 9753bacf9..b377a8b5f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHomeRowsSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHomeRowsSettings.kt
+@@ -86,44 +86,6 @@ internal fun ForkHomeRowsSettingsSection(isTablet: Boolean) {
+             )
+         }
+     }
+-
+-    val toolbar by com.nuvio.app.features.player.ForkPlayerToolbar.entries.collectAsStateWithLifecycle()
+-    LaunchedEffect(Unit) { com.nuvio.app.features.player.ForkPlayerToolbar.ensureLoaded() }
+-    SettingsSection(title = "Player toolbar", isTablet = isTablet) {
+-        SettingsGroup(isTablet = isTablet) {
+-            toolbar.forEachIndexed { index, entry ->
+-                val label = com.nuvio.app.features.player.ForkPlayerToolbar.buttons
+-                    .firstOrNull { it.id == entry.id }?.label ?: entry.id
+-                androidx.compose.foundation.layout.Row(
+-                    modifier = androidx.compose.ui.Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+-                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+-                ) {
+-                    androidx.compose.material3.Text(
+-                        text = label,
+-                        modifier = androidx.compose.ui.Modifier.weight(1f),
+-                    )
+-                    androidx.compose.material3.TextButton(
+-                        onClick = { com.nuvio.app.features.player.ForkPlayerToolbar.move(entry.id, -1) },
+-                        enabled = index > 0,
+-                    ) { androidx.compose.material3.Text("Up") }
+-                    androidx.compose.material3.TextButton(
+-                        onClick = { com.nuvio.app.features.player.ForkPlayerToolbar.move(entry.id, 1) },
+-                        enabled = index < toolbar.lastIndex,
+-                    ) { androidx.compose.material3.Text("Down") }
+-                    androidx.compose.material3.Switch(
+-                        checked = entry.visible,
+-                        onCheckedChange = { com.nuvio.app.features.player.ForkPlayerToolbar.setVisible(entry.id, it) },
+-                    )
+-                }
+-                if (index < toolbar.lastIndex) SettingsGroupDivider(isTablet = isTablet)
+-            }
+-            SettingsGroupDivider(isTablet = isTablet)
+-            androidx.compose.material3.TextButton(
+-                onClick = { com.nuvio.app.features.player.ForkPlayerToolbar.reset() },
+-                modifier = androidx.compose.ui.Modifier.padding(horizontal = 8.dp),
+-            ) { androidx.compose.material3.Text("Reset toolbar") }
+-        }
+-    }
+ }
+ 
+ internal fun androidx.compose.foundation.lazy.LazyListScope.omdbSettingsContent(isTablet: Boolean) {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPlayerButtonsSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPlayerButtonsSettings.kt
+new file mode 100644
+index 000000000..6feb30a33
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPlayerButtonsSettings.kt
+@@ -0,0 +1,71 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
++import androidx.compose.material3.Switch
++import androidx.compose.material3.Text
++import androidx.compose.material3.TextButton
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.unit.dp
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.features.player.ForkButtonLayout
++import com.nuvio.app.features.player.ForkLegacyBottomButtons
++import com.nuvio.app.features.player.ForkLegacyTopButtons
++import com.nuvio.app.features.player.ForkPlayerToolbar
++
++@Composable
++internal fun ForkPlayerButtonsSettingsSection(isTablet: Boolean) {
++    ForkButtonLayoutSection(
++        title = "Player toolbar (standard layout)",
++        layout = ForkPlayerToolbar,
++        resetLabel = "Reset toolbar",
++        isTablet = isTablet,
++    )
++    ForkButtonLayoutSection(
++        title = "Legacy player: top buttons",
++        layout = ForkLegacyTopButtons,
++        resetLabel = "Reset top buttons",
++        isTablet = isTablet,
++    )
++    ForkButtonLayoutSection(
++        title = "Legacy player: bottom buttons",
++        layout = ForkLegacyBottomButtons,
++        resetLabel = "Reset bottom buttons",
++        isTablet = isTablet,
++    )
++}
++
++@Composable
++private fun ForkButtonLayoutSection(
++    title: String,
++    layout: ForkButtonLayout,
++    resetLabel: String,
++    isTablet: Boolean,
++) {
++    val entries by layout.entries.collectAsStateWithLifecycle()
++    LaunchedEffect(layout) { layout.ensureLoaded() }
++    SettingsSection(title = title, isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            entries.forEachIndexed { index, entry ->
++                val label = layout.buttons.firstOrNull { it.id == entry.id }?.label ?: entry.id
++                Row(
++                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
++                    verticalAlignment = Alignment.CenterVertically,
++                ) {
++                    Text(text = label, modifier = Modifier.weight(1f))
++                    TextButton(onClick = { layout.move(entry.id, -1) }, enabled = index > 0) { Text("Up") }
++                    TextButton(onClick = { layout.move(entry.id, 1) }, enabled = index < entries.lastIndex) { Text("Down") }
++                    Switch(checked = entry.visible, onCheckedChange = { layout.setVisible(entry.id, it) })
++                }
++                if (index < entries.lastIndex) SettingsGroupDivider(isTablet = isTablet)
++            }
++            SettingsGroupDivider(isTablet = isTablet)
++            TextButton(onClick = { layout.reset() }, modifier = Modifier.padding(horizontal = 8.dp)) { Text(resetLabel) }
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamBadgePresentation.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamBadgePresentation.kt
+index b9594172b..2a828a207 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamBadgePresentation.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamBadgePresentation.kt
+@@ -25,6 +25,16 @@ object StreamBadgePresentation {
+         }
+     }
+ 
++    fun applyToStreams(streams: List<StreamItem>, rules: StreamBadgeRules): List<StreamItem> {
++        if (streams.isEmpty()) return streams
++        val filters = compiledFilters(rules)
++        if (filters.isEmpty()) return streams
++        return streams.map { stream ->
++            val matchedBadges = StreamBadgeMatcher.matchedBadges(stream, filters)
++            if (matchedBadges.isEmpty()) stream else stream.copy(badges = mergeBadges(stream.badges, matchedBadges))
++        }
++    }
++
+     // Each addon group is presented on its own with the same rules, so their regexes are
+     // compiled once and reused until the rules change.
+     private fun compiledFilters(rules: StreamBadgeRules): List<CompiledStreamBadgeFilter> =
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
+index 005c8d69a..6b9ae4605 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
+@@ -690,7 +690,8 @@ object StreamsRepository {
+                                         val mergedStreams = if (completion.streams.isEmpty()) {
+                                             group.streams
+                                         } else {
+-                                            (group.streams + completion.streams).sortedForGroupedDisplay()
++                                            (group.streams + StreamBadgePresentation.applyToStreams(completion.streams, streamBadgeRules))
++                                                .sortedForGroupedDisplay()
+                                                 .let { streams -> connectionFit?.apply(streams) ?: streams } // Nuvio fork: connection-speed fit
+                                         }
+                                         val stillLoading = remaining > 0
