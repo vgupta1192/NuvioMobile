@@ -213,7 +213,7 @@ index 2925674f2..83347cb73 100644
          }
      }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
-index 41a744837..d953b4ba8 100644
+index 41a744837..74ce5ac56 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
 @@ -26,6 +26,7 @@ import nuvio.composeapp.generated.resources.compose_settings_page_homescreen
@@ -224,7 +224,15 @@ index 41a744837..d953b4ba8 100644
  import nuvio.composeapp.generated.resources.compose_settings_page_media_server
  import nuvio.composeapp.generated.resources.compose_settings_page_media_servers
  import nuvio.composeapp.generated.resources.compose_settings_page_live_tv
-@@ -152,17 +153,17 @@ internal enum class SettingsPage(
+@@ -149,20 +150,25 @@ internal enum class SettingsPage(
+         category = SettingsCategory.General,
+         parentPage = ContentDiscovery,
+     ),
++    Integrations(
++        titleRes = Res.string.compose_settings_page_integrations,
++        category = SettingsCategory.General,
++        parentPage = Root,
++    ),
      MediaServers(
          titleRes = Res.string.compose_settings_page_media_servers,
          category = SettingsCategory.General,
@@ -245,6 +253,18 @@ index 41a744837..d953b4ba8 100644
      ),
      MediaServer(
          titleRes = Res.string.compose_settings_page_media_server,
+@@ -179,11 +185,6 @@ internal enum class SettingsPage(
+         category = SettingsCategory.General,
+         parentPage = Appearance,
+     ),
+-    Integrations(
+-        titleRes = Res.string.compose_settings_page_integrations,
+-        category = SettingsCategory.General,
+-        parentPage = Root,
+-    ),
+     TmdbEnrichment(
+         titleRes = Res.string.compose_settings_page_tmdb_enrichment,
+         category = SettingsCategory.General,
 @@ -194,6 +195,11 @@ internal enum class SettingsPage(
          category = SettingsCategory.General,
          parentPage = Integrations,
