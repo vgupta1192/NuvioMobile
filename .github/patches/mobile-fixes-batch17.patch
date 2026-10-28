@@ -1,0 +1,176 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/sync/ProfileSettingsSync.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/sync/ProfileSettingsSync.kt
+index 649da064f..fe8b51d2f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/sync/ProfileSettingsSync.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/sync/ProfileSettingsSync.kt
+@@ -270,6 +270,7 @@ object ProfileSettingsSync {
+                 notificationsSettings = NotificationsSettingsPayload(
+                     episodeReleaseAlertsEnabled = EpisodeReleaseNotificationsRepository.uiState.value.isEnabled,
+                 ),
++                forkSettingsPayload = com.nuvio.app.features.settings.ForkSettingsBackup.export(),
+             ),
+         )
+     }
+@@ -352,6 +353,11 @@ object ProfileSettingsSync {
+         TraktCommentsSettings.onProfileChanged()
+ 
+         EpisodeReleaseNotificationsRepository.applyFromSyncEnabled(blob.features.notificationsSettings.episodeReleaseAlertsEnabled)
++
++        // Blank means an older backup without fork settings: keep the local ones.
++        blob.features.forkSettingsPayload
++            .takeIf { it.isNotBlank() }
++            ?.let(com.nuvio.app.features.settings.ForkSettingsBackup::replace)
+     }
+ 
+     private fun ensureRepositoriesLoaded() {
+@@ -403,6 +409,7 @@ private data class MobileProfileSettingsFeatures(
+     @SerialName("trakt_settings_payload") val traktSettingsPayload: String = "",
+     @SerialName("trakt_comments_settings") val traktCommentsSettings: JsonObject = JsonObject(emptyMap()),
+     @SerialName("notifications_settings") val notificationsSettings: NotificationsSettingsPayload = NotificationsSettingsPayload(),
++    @SerialName("fork_settings_payload") val forkSettingsPayload: String = "",
+ )
+ 
+ @Serializable
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt
+index 85f056ad7..e6286a628 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt
+@@ -40,6 +40,16 @@ open class ForkButtonLayout(private val path: String, val buttons: List<ForkTool
+         return parsed + missing
+     }
+ 
++    fun exportRaw(): String {
++        ensureLoaded()
++        return _entries.value.joinToString(",") { "${it.id}:${if (it.visible) "v" else "h"}" }
++    }
++
++    fun importRaw(value: String) {
++        loaded = true
++        save(decode(value))
++    }
++
+     private fun save(list: List<ForkToolbarEntry>) {
+         _entries.value = list
+         runCatching {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/FeaturesSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/FeaturesSettingsPage.kt
+index 2634cc65c..f853c5908 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/FeaturesSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/FeaturesSettingsPage.kt
+@@ -132,6 +132,8 @@ private fun ForkLookSettingsSection(isTablet: Boolean) {
+     LaunchedEffect(Unit) { com.nuvio.app.core.ui.glass.LiquidGlassSettings.ensureLoaded() }
+     LaunchedEffect(Unit) { com.nuvio.app.features.home.CloudStreamHomeSetting.ensureLoaded() }
+     val cloudStreamHome by com.nuvio.app.features.home.CloudStreamHomeSetting.enabled.collectAsStateWithLifecycle()
++    LaunchedEffect(Unit) { ForkPrefs.cloudStreamDiagnostics.ensureLoaded() }
++    val cloudStreamDiagnostics by ForkPrefs.cloudStreamDiagnostics.value.collectAsStateWithLifecycle()
+     val streamSettings by remember {
+         StreamBadgeSettingsRepository.ensureLoaded()
+         StreamBadgeSettingsRepository.uiState
+@@ -162,6 +164,14 @@ private fun ForkLookSettingsSection(isTablet: Boolean) {
+                 onCheckedChange = com.nuvio.app.features.home.CloudStreamHomeSetting::set,
+             )
+             SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "CS3 diagnostics in streams",
++                description = "Show the CS3 diagnostics tab on the streams screen with which CloudStream providers were queried or skipped.",
++                checked = cloudStreamDiagnostics,
++                isTablet = isTablet,
++                onCheckedChange = ForkPrefs.cloudStreamDiagnostics::set,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
+             SettingsSwitchRow(
+                 title = stringResource(Res.string.settings_stream_search_title),
+                 description = stringResource(Res.string.settings_stream_search_description),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
+index 820a9fb1e..3bf270ffd 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
+@@ -6,7 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
+ import kotlinx.coroutines.flow.asStateFlow
+ 
+ /** Small on/off setting kept in the app file cache, shared by several fork features. */
+-class ForkBoolPref(private val path: String, private val default: Boolean) {
++class ForkBoolPref(val path: String, private val default: Boolean) {
+     private val _value = MutableStateFlow(default)
+     val value: StateFlow<Boolean> = _value.asStateFlow()
+     private var loaded = false
+@@ -44,4 +44,42 @@ object ForkPrefs {
+     val subtitlesStartOff = ForkBoolPref("settings/subtitles_start_off", false)
+     val hidePlayerLock = ForkBoolPref("settings/hide_player_lock", false)
+     val speedPopup = ForkBoolPref("settings/speed_popup", true)
++    val cloudStreamDiagnostics = ForkBoolPref("settings/cs3_diagnostics", true)
++
++    val all: List<ForkBoolPref> = listOf(
++        swipeToSeek, homeUpNextTonight, homeAiringWeek, homeFinishSeries, ratingMap, fillerGuide,
++        homeVideoRowsOnly, cloudStreamGroupTab, nuvioRead, subtitleShadow, subtitlesStartOff,
++        hidePlayerLock, speedPopup, cloudStreamDiagnostics,
++    )
++}
++
++/** Fork settings (toggles and player button layouts) as one string, so backups and profile sync carry them. */
++object ForkSettingsBackup {
++    private val layouts: List<Pair<String, com.nuvio.app.features.player.ForkButtonLayout>> = listOf(
++        "toolbar" to com.nuvio.app.features.player.ForkPlayerToolbar,
++        "legacy_top" to com.nuvio.app.features.player.ForkLegacyTopButtons,
++        "legacy_bottom" to com.nuvio.app.features.player.ForkLegacyBottomButtons,
++    )
++
++    fun export(): String = kotlinx.serialization.json.buildJsonObject {
++        ForkPrefs.all.forEach { put(it.path, kotlinx.serialization.json.JsonPrimitive(it.current())) }
++        layouts.forEach { (key, layout) ->
++            put("layout/$key", kotlinx.serialization.json.JsonPrimitive(layout.exportRaw()))
++        }
++    }.toString()
++
++    fun replace(payload: String) {
++        val root = runCatching {
++            kotlinx.serialization.json.Json.parseToJsonElement(payload) as? kotlinx.serialization.json.JsonObject
++        }.getOrNull() ?: return
++        ForkPrefs.all.forEach { pref ->
++            (root[pref.path] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toBooleanStrictOrNull()
++                ?.let(pref::set)
++        }
++        layouts.forEach { (key, layout) ->
++            (root["layout/$key"] as? kotlinx.serialization.json.JsonPrimitive)?.content
++                ?.takeIf { it.isNotBlank() }
++                ?.let(layout::importRaw)
++        }
++    }
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamBadgeRules.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamBadgeRules.kt
+index 24ba489d6..a89ee8500 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamBadgeRules.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamBadgeRules.kt
+@@ -262,6 +262,10 @@ object StreamBadgeMatcher {
+             parsed?.group,
+             stream.sourceName,
+             stream.addonName,
++            // Nuvio fork: CloudStream names are often just a server label, so match the file name
++            // in the link and the stream type too (e.g. .m3u8, 1080p in the path).
++            stream.takeIf { it.addonId.startsWith("cloudstream:") }?.let { cloudStreamUrlCandidate(it) },
++            stream.takeIf { it.addonId.startsWith("cloudstream:") }?.streamType,
+         )
+             .map { it.trim() }
+             .filter { it.isNotBlank() }
+@@ -275,6 +279,10 @@ object StreamBadgeMatcher {
+     }
+ }
+ 
++private fun cloudStreamUrlCandidate(stream: StreamItem): String? =
++    stream.url?.substringBefore('#')?.substringBefore('?')?.trimEnd('/')?.substringAfterLast('/')
++        ?.takeIf { it.isNotBlank() }
++
+ data class CompiledStreamBadgeFilter(
+     val name: String,
+     val badge: StreamBadge,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
+index 6b9ae4605..e919579bf 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
+@@ -299,7 +299,7 @@ object StreamsRepository {
+             )
+         } + serverSources.map { it.loadingGroup() }, installedAddonOrder, preferredGroupIds) +
+             listOfNotNull(
+-                if (AppFeaturePolicy.pluginsEnabled) {
++                if (AppFeaturePolicy.pluginsEnabled && com.nuvio.app.features.settings.ForkPrefs.cloudStreamDiagnostics.current()) {
+                     cloudStreamDiagnosticsGroup(
+                         type = type,
+                         request = cloudStreamSearchRequest,
