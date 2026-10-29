@@ -1,0 +1,16 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/EpisodeExtraRatings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/EpisodeExtraRatings.kt
+index fdf21ee78..10c9a5963 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/EpisodeExtraRatings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/EpisodeExtraRatings.kt
+@@ -42,9 +42,11 @@ object EpisodeExtraRatings {
+         val tmdb = tmdbId?.let { runCatching { TmdbMetadataService.fetchEpisodeVoteAverages(it, seasonList) }.getOrNull() }
+             .orEmpty()
+         val trakt = (imdbId ?: tmdbId?.toString())?.let { fetchTrakt(it) }.orEmpty()
++        val simkl = fetchSimkl(imdbId)
+         val merged = mutableMapOf<Pair<Int, Int>, MutableList<Pair<String, Double>>>()
+         tmdb.forEach { (k, v) -> merged.getOrPut(k) { mutableListOf() }.add("TMDB" to v) }
+         trakt.forEach { (k, v) -> merged.getOrPut(k) { mutableListOf() }.add("Trakt" to v) }
++        simkl.forEach { (k, v) -> merged.getOrPut(k) { mutableListOf() }.add("Simkl" to v) }
+         if (merged.isNotEmpty()) cache[key] = merged
+         current = merged
+     }
