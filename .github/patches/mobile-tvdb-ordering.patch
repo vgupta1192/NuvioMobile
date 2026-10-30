@@ -1,0 +1,2214 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
+index 510ce81..c7a671b 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
+@@ -128,6 +128,7 @@ open class MainActivity : AppCompatActivity() {
+         DebridSettingsStorage.initialize(applicationContext)
+         TmdbSettingsStorage.initialize(applicationContext)
+         MdbListSettingsStorage.initialize(applicationContext)
++        com.nuvio.app.features.tvdb.TvdbSettingsStorage.initialize(applicationContext) // TVDB episode ordering hook
+         TraktAuthStorage.initialize(applicationContext)
+         TraktCommentsStorage.initialize(applicationContext)
+         TraktLibraryStorage.initialize(applicationContext)
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/tvdb/TvdbSettingsStorage.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/tvdb/TvdbSettingsStorage.android.kt
+new file mode 100644
+index 0000000..ad9a28e
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/tvdb/TvdbSettingsStorage.android.kt
+@@ -0,0 +1,62 @@
++package com.nuvio.app.features.tvdb
++
++import android.content.Context
++import android.content.SharedPreferences
++import com.nuvio.app.core.storage.ProfileScopedKey
++
++internal actual object TvdbSettingsStorage {
++    private const val preferencesName = "nuvio_tvdb_settings"
++    private const val apiKeyKey = "tvdb_api_key"
++    private const val aliasKeyPrefix = "tvdb_series_"
++    private const val orderKeyPrefix = "tvdb_order_"
++
++    private var preferences: SharedPreferences? = null
++
++    fun initialize(context: Context) {
++        preferences = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
++    }
++
++    actual fun loadApiKey(): String? =
++        preferences?.getString(ProfileScopedKey.of(apiKeyKey), null)?.takeIf(String::isNotBlank)
++
++    actual fun saveApiKey(value: String?) {
++        preferences
++            ?.edit()
++            ?.apply {
++                val scopedKey = ProfileScopedKey.of(apiKeyKey)
++                if (value.isNullOrBlank()) remove(scopedKey) else putString(scopedKey, value.trim())
++            }
++            ?.apply()
++    }
++
++    actual fun loadAliasSeriesId(alias: String): Long? {
++        if (alias.isBlank()) return null
++        val key = ProfileScopedKey.of(aliasKeyPrefix + alias)
++        return preferences?.takeIf { it.contains(key) }?.getLong(key, 0L)?.takeIf { it > 0 }
++    }
++
++    actual fun saveAliasSeriesId(alias: String, seriesId: Long) {
++        if (alias.isBlank() || seriesId <= 0) return
++        preferences
++            ?.edit()
++            ?.putLong(ProfileScopedKey.of(aliasKeyPrefix + alias), seriesId)
++            ?.apply()
++    }
++
++    actual fun loadOrder(seriesId: Long): String? {
++        if (seriesId <= 0) return null
++        val key = ProfileScopedKey.of(orderKeyPrefix + seriesId)
++        return preferences?.getString(key, null)?.takeIf(String::isNotBlank)
++    }
++
++    actual fun saveOrder(seriesId: Long, order: String?) {
++        if (seriesId <= 0) return
++        preferences
++            ?.edit()
++            ?.apply {
++                val key = ProfileScopedKey.of(orderKeyPrefix + seriesId)
++                if (order.isNullOrBlank()) remove(key) else putString(key, order.trim())
++            }
++            ?.apply()
++    }
++}
+diff --git a/composeApp/src/commonMain/composeResources/values/strings.xml b/composeApp/src/commonMain/composeResources/values/strings.xml
+index bc9f268..16e5e7d 100644
+--- a/composeApp/src/commonMain/composeResources/values/strings.xml
++++ b/composeApp/src/commonMain/composeResources/values/strings.xml
+@@ -526,6 +526,7 @@
+     <string name="compose_settings_page_supporters_contributors">Supporters &amp; Contributors</string>
+     <string name="compose_settings_page_tmdb_enrichment">TMDB Enrichment</string>
+     <string name="compose_settings_page_omdb_ratings">OMDb Ratings</string>
++    <string name="compose_settings_page_tvdb_ordering">TheTVDB Episode Ordering</string>
+     <string name="compose_settings_page_trakt">Trakt</string>
+     <string name="compose_settings_page_tracking">Tracking</string>
+     <string name="compose_settings_root_about_section">ABOUT</string>
+@@ -853,6 +854,7 @@
+     <string name="settings_integrations_section_title">INTEGRATIONS</string>
+     <string name="settings_integrations_tmdb_description">Metadata enrichment controls</string>
+     <string name="settings_integrations_mdblist_description">External ratings providers</string>
++    <string name="settings_integrations_tvdb_description">Alternative episode orders (DVD, absolute) for series</string>
+     <string name="settings_integrations_debrid_description">Connect accounts for links and library access</string>
+     <string name="settings_debrid_section_title">CONNECTED SERVICES</string>
+     <string name="settings_debrid_experimental_notice">These integrations are experimental and may be kept, changed, or removed later.</string>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsModels.kt
+index f32df20..3088ee5 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsModels.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsModels.kt
+@@ -100,6 +100,24 @@ data class MetaVideo(
+     val runtime: Int? = null,
+     val rating: Double? = null,
+     val streams: List<StreamItem> = emptyList(),
++    /** Set only when the row comes from a TVDB alternative-order projection. */
++    val tvdbOrder: TvdbEpisodeRef? = null,
++)
++
++/**
++ * Identity of a projected TVDB episode row (alternative episode ordering).
++ * `season`/`episode` of the row carry the selected order's numbers; the source
++ * fields point at the matched metadata-provider episode so watched badges and
++ * stream requests resolve against the provider's actual season/episode.
++ */
++data class TvdbEpisodeRef(
++    val seriesId: Long,
++    val episodeId: Long,
++    val orderType: String,
++    val matched: Boolean,
++    val sourceVideoId: String? = null,
++    val sourceSeason: Int? = null,
++    val sourceEpisode: Int? = null,
+ )
+ 
+ data class MetaDetailsUiState(
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
+index f1a4825..2dfd331 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
+@@ -158,6 +158,12 @@ import com.nuvio.app.features.tracking.TrackingSettingsRepository
+ import com.nuvio.app.features.tracking.TrackingProviderId
+ import com.nuvio.app.features.trailer.TrailerPlaybackResolver
+ import com.nuvio.app.features.trailer.TrailerPlaybackSource
++import com.nuvio.app.features.tvdb.LocalTvdbOrderControl
++import com.nuvio.app.features.tvdb.TvdbEpisodeOrderController
++import com.nuvio.app.features.tvdb.TvdbOrderControlActions
++import com.nuvio.app.features.tvdb.TvdbOrderPickerDialog
++import com.nuvio.app.features.tvdb.TvdbOrderControlRow
++import com.nuvio.app.features.tvdb.isTvdbSeriesLike
+ import com.nuvio.app.features.watched.WatchedRepository
+ import com.nuvio.app.features.watched.previousReleasedEpisodesBefore
+ import com.nuvio.app.features.watched.releasedPlayableEpisodes
+@@ -215,6 +221,27 @@ fun MetaDetailsScreen(
+     val uiState by MetaDetailsRepository.uiState.collectAsStateWithLifecycle()
+     val displayedMeta = uiState.meta?.takeIf { it.type == type && it.id == id }
+         ?: MetaDetailsRepository.peek(type, id)
++    // TVDB alternative episode ordering (per-profile key). Inert unless a key is
++    // configured and an order is selected for this series.
++    val tvdbScope = rememberCoroutineScope()
++    val tvdbController = remember(type, id) { TvdbEpisodeOrderController(tvdbScope) }
++    val tvdbState by tvdbController.state.collectAsStateWithLifecycle()
++    val tvdbProfileId = ProfileRepository.activeProfileId
++    val tvdbAliases = remember(displayedMeta?.id, displayedMeta?.imdbId, id, tvdbProfileId) {
++        tvdbController.aliases(displayedMeta, id)
++    }
++    LaunchedEffect(tvdbAliases, tvdbProfileId) {
++        tvdbController.observeSelection(tvdbAliases)
++    }
++    LaunchedEffect(tvdbAliases, tvdbState.selection, displayedMeta?.videos) {
++        tvdbController.loadProjection(tvdbAliases, displayedMeta)
++    }
++    val tvdbOrderControlActions = TvdbOrderControlActions(
++        visible = tvdbState.hasCredential && displayedMeta?.type?.let(::isTvdbSeriesLike) == true,
++        label = tvdbState.selection?.orderType?.let { "TVDB: $it" } ?: "TVDB episode order",
++        statusMessage = tvdbState.statusMessage,
++        onClick = { tvdbController.openPicker(displayedMeta) },
++    )
+     val metaScreenSettingsUiState by remember {
+         MetaScreenSettingsRepository.ensureLoaded()
+         MetaScreenSettingsRepository.uiState
+@@ -239,7 +266,7 @@ fun MetaDetailsScreen(
+         LibraryRepository.ensureLoaded()
+         LibraryRepository.uiState
+     }.collectAsStateWithLifecycle()
+-    val watchedUiState by remember {
++    val providerWatchedUiState by remember {
+         WatchedRepository.ensureLoaded()
+         WatchedRepository.uiState
+     }.collectAsStateWithLifecycle()
+@@ -248,9 +275,26 @@ fun MetaDetailsScreen(
+         WatchProgressRepository.ensureLoaded()
+         WatchProgressRepository.uiState
+     }.collectAsStateWithLifecycle()
+-    val progressByVideoId = remember(watchProgressUiState.entries, id) {
++    val providerProgressByVideoId = remember(watchProgressUiState.entries, id) {
+         watchProgressUiState.byVideoIdForContent(id)
+     }
++    // TVDB order projection re-keys episode progress/watched sets to the selected
++    // order's numbering; provider keys are preserved so nothing else shifts.
++    val progressByVideoId = remember(providerProgressByVideoId, tvdbState.projection, id) {
++        tvdbState.projection?.displayProgress(
++            metaId = displayedMeta?.id ?: id,
++            providerProgress = providerProgressByVideoId,
++        ) ?: providerProgressByVideoId
++    }
++    val watchedUiState = remember(providerWatchedUiState, tvdbState.projection, progressByVideoId) {
++        tvdbState.projection?.displayWatchedKeys(
++            metaType = displayedMeta?.type ?: type,
++            metaId = displayedMeta?.id ?: id,
++            providerWatched = providerWatchedUiState.watchedKeys,
++            providerProgress = progressByVideoId,
++        )?.let { keys -> providerWatchedUiState.copy(watchedKeys = keys) }
++            ?: providerWatchedUiState
++    }
+     val playerSettingsUiState by remember {
+         PlayerSettingsRepository.ensureLoaded()
+         PlayerSettingsRepository.uiState
+@@ -275,7 +319,13 @@ fun MetaDetailsScreen(
+     var selectedComment by remember(type, id) { mutableStateOf<TraktCommentReview?>(null) }
+     val detailsScope = rememberCoroutineScope()
+     val extraActions = remember(type, id) { DetailExtraActionsHolder() }
+-    CompositionLocalProvider(LocalDetailExtraActions provides extraActions) {
++    CompositionLocalProvider(LocalDetailExtraActions provides extraActions, LocalTvdbOrderControl provides tvdbOrderControlActions) {
++        TvdbOrderPickerDialog(
++            state = tvdbState,
++            selectedType = tvdbState.selection?.orderType,
++            onDismiss = { tvdbController.closePicker() },
++            onSelect = { type -> tvdbController.select(type) },
++        )
+     var showLibraryListPicker by remember(type, id) { mutableStateOf(false) }
+     var pickerTabs by remember(type, id) { mutableStateOf<List<TrackingLibraryTab>>(emptyList()) }
+     var pickerMembership by remember(type, id) { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
+@@ -382,8 +432,11 @@ fun MetaDetailsScreen(
+         displayedMeta?.videos,
+         deferredMetaWorkAllowed,
+         metaScreenSettingsUiState.episodeRatingsVisibility,
++        tvdbState.projection,
+     ) {
+-        if (!metaScreenSettingsUiState.episodeRatingsVisibility.showRatings) {
++        if (!metaScreenSettingsUiState.episodeRatingsVisibility.showRatings || tvdbState.active) {
++            // Per-episode ratings are keyed by provider numbering; suppress them
++            // while an alternative TVDB order is displayed.
+             episodeImdbRatings = emptyMap()
+             return@LaunchedEffect
+         }
+@@ -525,7 +578,8 @@ fun MetaDetailsScreen(
+             }
+ 
+             displayedMeta != null -> {
+-                val meta = displayedMeta
++                val providerMeta = displayedMeta
++                val meta = tvdbState.projection?.provider ?: providerMeta
+                 val metaPreview = remember(meta) { meta.toMetaPreview() }
+                 val todayIsoDate = CurrentDateProvider.todayIsoDate()
+                 val isSaved = remember(
+@@ -632,7 +686,7 @@ fun MetaDetailsScreen(
+                 ) {
+                     if (watchedUiState.isLoaded && watchProgressUiState.hasLoadedRemoteProgress) {
+                         WatchingActions.reconcileSeriesWatchedState(
+-                            meta = meta,
++                            meta = providerMeta,
+                             todayIsoDate = todayIsoDate,
+                         )
+                     }
+@@ -641,8 +695,8 @@ fun MetaDetailsScreen(
+                     ?.takeUnless { it.isCompleted }
+                 val cwPrefs by ContinueWatchingPreferencesRepository.uiState.collectAsStateWithLifecycle()
+                 val shuffleSettings = shuffleProfile.settings(meta.id, meta.type)
+-                val hasShuffleEpisodes = remember(meta.videos) {
+-                    meta.videos.any { (it.season ?: 0) > 0 && (it.episode ?: 0) > 0 }
++                val hasShuffleEpisodes = remember(providerMeta.videos) {
++                    providerMeta.videos.any { (it.season ?: 0) > 0 && (it.episode ?: 0) > 0 }
+                 }
+                 val showShuffleButton = shuffleProfile.available &&
+                     meta.type.lowercase() in setOf("series", "tv", "show", "tvshow") &&
+@@ -655,16 +709,16 @@ fun MetaDetailsScreen(
+                 } else {
+                     null
+                 }
+-                val seriesAction = remember(watchProgressUiState.entries, watchedUiState.items, meta, todayIsoDate, cwPrefs.upNextFromFurthestEpisode, watchedUiState.watchedKeys, shuffleSettings, shuffleVisit, shuffleProfileId) {
+-                    if (shuffleSettings.enabled) meta.shufflePrimaryAction(
++                val seriesAction = remember(watchProgressUiState.entries, watchedUiState.items, providerMeta, todayIsoDate, cwPrefs.upNextFromFurthestEpisode, watchedUiState.watchedKeys, shuffleSettings, shuffleVisit, shuffleProfileId) {
++                    if (shuffleSettings.enabled) providerMeta.shufflePrimaryAction(
+                         profileId = shuffleProfileId,
+                         settings = shuffleSettings,
+                         entries = watchProgressUiState.entries,
+                         watchedKeys = watchedUiState.watchedKeys,
+                         visit = shuffleVisit,
+                     ) else {
+-                        EpisodeShuffleRepository.shuffle.clearSelection(shuffleProfileId, meta.id, ShuffleSurface.DETAIL)
+-                        meta.seriesPrimaryAction(
++                        EpisodeShuffleRepository.shuffle.clearSelection(shuffleProfileId, providerMeta.id, ShuffleSurface.DETAIL)
++                        providerMeta.seriesPrimaryAction(
+                             entries = watchProgressUiState.entries,
+                             watchedItems = watchedUiState.items,
+                             todayIsoDate = todayIsoDate,
+@@ -674,9 +728,9 @@ fun MetaDetailsScreen(
+                         )
+                     }
+                 }
+-                val seriesActionVideo = remember(seriesAction, meta.id, meta.videos) {
++                val seriesActionVideo = remember(seriesAction, providerMeta.id, providerMeta.videos) {
+                     val action = seriesAction ?: return@remember null
+-                    meta.videos.firstOrNull { video ->
++                    providerMeta.videos.firstOrNull { video ->
+                         if (action.seasonNumber != null && action.episodeNumber != null) {
+                             video.season == action.seasonNumber &&
+                                 video.episode == action.episodeNumber
+@@ -997,15 +1051,18 @@ fun MetaDetailsScreen(
+                     extraActions.onPlayExternally = onPlayExternallyClick
+                 }
+                 val onEpisodePlayClick: (MetaVideo) -> Unit = { video ->
+-                    val season = video.season
+-                    val episode = video.episode
++                    // Selected-order rows resolve to the provider's actual S/E so
++                    // stream search stays physically correct.
++                    val source = tvdbController.resolvePlayback(video)
++                    val season = source.season
++                    val episode = source.episode
+                     val playbackVideoId = buildPlaybackVideoId(
+                         parentMetaId = meta.id,
+                         seasonNumber = season,
+                         episodeNumber = episode,
+-                        fallbackVideoId = video.id,
++                        fallbackVideoId = source.id,
+                     )
+-                    val streamVideoId = video.id.takeIf { it.isNotBlank() } ?: playbackVideoId
++                    val streamVideoId = source.id.takeIf { it.isNotBlank() } ?: playbackVideoId
+                     val savedProgress = watchProgressUiState.progressForVideo(
+                         videoId = streamVideoId,
+                         parentMetaId = meta.id,
+@@ -1031,15 +1088,16 @@ fun MetaDetailsScreen(
+                     )
+                 }
+                 val onEpisodeManualPlayClick: (MetaVideo) -> Unit = { video ->
+-                    val season = video.season
+-                    val episode = video.episode
++                    val source = tvdbController.resolvePlayback(video)
++                    val season = source.season
++                    val episode = source.episode
+                     val playbackVideoId = buildPlaybackVideoId(
+                         parentMetaId = meta.id,
+                         seasonNumber = season,
+                         episodeNumber = episode,
+-                        fallbackVideoId = video.id,
++                        fallbackVideoId = source.id,
+                     )
+-                    val streamVideoId = video.id.takeIf { it.isNotBlank() } ?: playbackVideoId
++                    val streamVideoId = source.id.takeIf { it.isNotBlank() } ?: playbackVideoId
+                     val savedProgress = watchProgressUiState.progressForVideo(
+                         videoId = streamVideoId,
+                         parentMetaId = meta.id,
+@@ -1066,7 +1124,7 @@ fun MetaDetailsScreen(
+                 }
+                 if (showShuffle && showShuffleButton) {
+                     EpisodeShuffleSheet(
+-                        meta = meta,
++                        meta = providerMeta,
+                         settings = shuffleSettings,
+                         onSave = saveShuffle,
+                         watchedKeys = watchedUiState.watchedKeys,
+@@ -1533,7 +1591,8 @@ fun MetaDetailsScreen(
+ 
+                         selectedEpisodeForActions
+                             ?.takeIf { selectedEpisodeZoomAnchor == null }
+-                            ?.let { selectedEpisode ->
++                            ?.let { projectedEpisode ->
++                            val selectedEpisode = tvdbController.toProviderEpisode(projectedEpisode)
+                             val isSelectedEpisodeWatched = remember(meta, selectedEpisode, watchedUiState.watchedKeys, progressByVideoId) {
+                                 isEpisodeWatchedForActions(
+                                     meta = meta,
+@@ -1542,14 +1601,14 @@ fun MetaDetailsScreen(
+                                     progressByVideoId = progressByVideoId,
+                                 )
+                             }
+-                            val previousEpisodes = remember(meta, selectedEpisode, todayIsoDate) {
+-                                meta.previousReleasedEpisodesBefore(
++                            val previousEpisodes = remember(providerMeta, selectedEpisode, todayIsoDate) {
++                                providerMeta.previousReleasedEpisodesBefore(
+                                     target = selectedEpisode,
+                                     todayIsoDate = todayIsoDate,
+                                 )
+                             }
+-                            val seasonEpisodes = remember(meta, selectedEpisode, todayIsoDate) {
+-                                meta.releasedEpisodesForSeason(
++                            val seasonEpisodes = remember(providerMeta, selectedEpisode, todayIsoDate) {
++                                providerMeta.releasedEpisodesForSeason(
+                                     seasonNumber = selectedEpisode.season,
+                                     todayIsoDate = todayIsoDate,
+                                 )
+@@ -1582,21 +1641,21 @@ fun MetaDetailsScreen(
+                                 onDismiss = { selectedEpisodeForActions = null },
+                                 onToggleWatched = {
+                                     WatchingActions.toggleEpisodeWatched(
+-                                        meta = meta,
++                                        meta = providerMeta,
+                                         episode = selectedEpisode,
+                                         isCurrentlyWatched = isSelectedEpisodeWatched,
+                                     )
+                                 },
+                                 onTogglePreviousWatched = {
+                                     WatchingActions.togglePreviousEpisodesWatched(
+-                                        meta = meta,
++                                        meta = providerMeta,
+                                         episodes = previousEpisodes,
+                                         areCurrentlyWatched = arePreviousEpisodesWatched,
+                                     )
+                                 },
+                                 onToggleSeasonWatched = {
+                                     WatchingActions.toggleSeasonWatched(
+-                                        meta = meta,
++                                        meta = providerMeta,
+                                         episodes = seasonEpisodes,
+                                         areCurrentlyWatched = isSeasonWatched,
+                                     )
+@@ -1609,16 +1668,17 @@ fun MetaDetailsScreen(
+                         }
+ 
+                         selectedSeasonForActions?.let { selectedSeason ->
+-                            val seasonLabel = selectedSeasonLabel(selectedSeason)
+-                            val seasonEpisodes = remember(meta, selectedSeason, todayIsoDate) {
+-                                meta.releasedEpisodesForSeason(
+-                                    seasonNumber = selectedSeason,
++                            val providerSeason = tvdbController.providerSeasonOf(selectedSeason) ?: selectedSeason
++                            val seasonLabel = selectedSeasonLabel(providerSeason)
++                            val seasonEpisodes = remember(providerMeta, selectedSeason, todayIsoDate) {
++                                providerMeta.releasedEpisodesForSeason(
++                                    seasonNumber = providerSeason,
+                                     todayIsoDate = todayIsoDate,
+                                 )
+                             }
+-                            val previousSeasonEpisodes = remember(meta, selectedSeason, todayIsoDate) {
+-                                val normalizedSelectedSeason = selectedSeason.coerceAtLeast(0)
+-                                meta.releasedPlayableEpisodes(todayIsoDate)
++                            val previousSeasonEpisodes = remember(providerMeta, selectedSeason, todayIsoDate) {
++                                val normalizedSelectedSeason = providerSeason.coerceAtLeast(0)
++                                providerMeta.releasedPlayableEpisodes(todayIsoDate)
+                                     .filter { episode ->
+                                         val season = episode.season?.coerceAtLeast(0) ?: 0
+                                         season > 0 && season < normalizedSelectedSeason
+@@ -1649,7 +1709,7 @@ fun MetaDetailsScreen(
+                                 onDismiss = { selectedSeasonForActions = null },
+                                 onToggleSeasonWatched = {
+                                     WatchingActions.toggleSeasonWatched(
+-                                        meta = meta,
++                                        meta = providerMeta,
+                                         episodes = seasonEpisodes,
+                                         areCurrentlyWatched = isSeasonWatched,
+                                     )
+@@ -1811,7 +1871,7 @@ fun MetaDetailsScreen(
+         }
+ 
+         val meta = displayedMeta
+-        val selectedEpisode = selectedEpisodeForActions
++        val selectedEpisode = selectedEpisodeForActions?.let { tvdbController.toProviderEpisode(it) }
+         val zoomAnchor = selectedEpisodeZoomAnchor
+         if (meta != null && selectedEpisode != null && zoomAnchor != null) {
+             val todayIsoDate = CurrentDateProvider.todayIsoDate()
+@@ -2250,6 +2310,9 @@ private fun LazyListScope.configuredMetaSectionItems(
+                 contentMaxWidth = contentMaxWidth,
+                 bottomPadding = 12.dp,
+             ) {
++                // TVDB alternative episode order control; renders nothing unless the
++                // detail screen provides active order actions.
++                LocalTvdbOrderControl.current?.let { actions -> TvdbOrderControlRow(actions) }
+                 DetailSeriesListHeader(
+                     meta = meta,
+                     groupedEpisodes = episodeListGroupedEpisodes,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailSeriesContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailSeriesContent.kt
+index 65ab524..b160165 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailSeriesContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailSeriesContent.kt
+@@ -87,6 +87,8 @@ import com.nuvio.app.features.details.seasonSortKey
+ import com.nuvio.app.features.watchprogress.WatchProgressEntry
+ import com.nuvio.app.features.watchprogress.buildPlaybackVideoId
+ import com.nuvio.app.features.watching.application.WatchingState
++import com.nuvio.app.features.tvdb.LocalTvdbOrderControl
++import com.nuvio.app.features.tvdb.TvdbOrderControlRow
+ import kotlinx.coroutines.runBlocking
+ import nuvio.composeapp.generated.resources.*
+ import org.jetbrains.compose.resources.getString
+@@ -181,6 +183,9 @@ fun DetailSeriesContent(
+         Column(
+             verticalArrangement = Arrangement.spacedBy(16.dp),
+         ) {
++            // TVDB alternative episode order control; renders nothing unless the
++            // detail screen provides active order actions.
++            LocalTvdbOrderControl.current?.let { actions -> TvdbOrderControlRow(actions) }
+             SeriesSeasonSelector(
+                 meta = meta,
+                 seasons = seasons,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/IntegrationsSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/IntegrationsSettingsPage.kt
+index 83347cb..32abc13 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/IntegrationsSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/IntegrationsSettingsPage.kt
+@@ -8,6 +8,7 @@ import androidx.compose.material.icons.rounded.Forum
+ import androidx.compose.material.icons.rounded.LiveTv
+ import androidx.compose.material.icons.rounded.Movie
+ import androidx.compose.material.icons.rounded.Storage
++import androidx.compose.material.icons.rounded.Tv
+ import com.nuvio.app.features.discord.DiscordRpcPlatform
+ import nuvio.composeapp.generated.resources.compose_settings_page_debrid
+ import nuvio.composeapp.generated.resources.Res
+@@ -35,6 +36,7 @@ internal fun LazyListScope.integrationsContent(
+     onDebridClick: () -> Unit,
+     onTrackingClick: () -> Unit = {},
+     onOmdbClick: () -> Unit = {},
++    onTvdbClick: () -> Unit = {},
+     onMediaServersClick: () -> Unit = {},
+     onLiveTvClick: () -> Unit = {},
+     onDiscordClick: () -> Unit = {},
+@@ -78,6 +80,14 @@ internal fun LazyListScope.integrationsContent(
+                     onClick = onOmdbClick,
+                 )
+                 SettingsGroupDivider(isTablet = isTablet)
++                SettingsNavigationRow(
++                    title = stringResource(Res.string.compose_settings_page_tvdb_ordering),
++                    description = stringResource(Res.string.settings_integrations_tvdb_description),
++                    icon = Icons.Rounded.Tv,
++                    isTablet = isTablet,
++                    onClick = onTvdbClick,
++                )
++                SettingsGroupDivider(isTablet = isTablet)
+                 SettingsNavigationRow(
+                     title = stringResource(Res.string.compose_settings_page_debrid),
+                     description = stringResource(Res.string.settings_integrations_debrid_description),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
+index 9b4938b..cf62b94 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
+@@ -182,6 +182,11 @@ internal enum class SettingsPage(
+         category = SettingsCategory.General,
+         parentPage = Integrations,
+     ),
++    TvdbOrdering(
++        titleRes = Res.string.compose_settings_page_tvdb_ordering,
++        category = SettingsCategory.General,
++        parentPage = Integrations,
++    ),
+     Debrid(
+         titleRes = Res.string.compose_settings_page_debrid,
+         category = SettingsCategory.General,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
+index 93688bf..4c41f6e 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsScreen.kt
+@@ -81,6 +81,7 @@ import com.nuvio.app.features.player.AndroidPlaybackEngine
+ import com.nuvio.app.features.profiles.ProfileRepository
+ import com.nuvio.app.features.simkl.SimklAuthRepository
+ import com.nuvio.app.features.simkl.SimklAuthUiState
++import com.nuvio.app.features.tvdb.tvdbSettingsContent
+ import com.nuvio.app.features.trakt.TraktAuthUiState
+ import com.nuvio.app.features.trakt.TraktAuthRepository
+ import com.nuvio.app.features.trakt.TraktCommentsSettings
+@@ -863,12 +864,14 @@ private fun MobileSettingsScreen(
+                     onDebridClick = { onPageChange(SettingsPage.Debrid) },
+                     onTrackingClick = { onPageChange(SettingsPage.TraktAuthentication) },
+                     onOmdbClick = { onPageChange(SettingsPage.OmdbRatings) },
++                    onTvdbClick = { onPageChange(SettingsPage.TvdbOrdering) },
+                     onMediaServersClick = { onPageChange(SettingsPage.MediaServers) },
+                     onLiveTvClick = { onPageChange(SettingsPage.LiveTv) },
+                     onDiscordClick = { onPageChange(SettingsPage.DiscordRpc) },
+                     onExtraClick = { onPageChange(SettingsPage.Extra) },
+                 )
+                 SettingsPage.OmdbRatings -> omdbSettingsContent(isTablet = false)
++                SettingsPage.TvdbOrdering -> tvdbSettingsContent(isTablet = false)
+                 SettingsPage.TmdbEnrichment -> tmdbSettingsContent(
+                     isTablet = false,
+                     settings = tmdbSettings,
+@@ -1323,12 +1326,14 @@ private fun TabletSettingsScreen(
+                         onDebridClick = { onPageChange(SettingsPage.Debrid) },
+                         onTrackingClick = { onPageChange(SettingsPage.TraktAuthentication) },
+                         onOmdbClick = { onPageChange(SettingsPage.OmdbRatings) },
++                        onTvdbClick = { onPageChange(SettingsPage.TvdbOrdering) },
+                         onMediaServersClick = { onPageChange(SettingsPage.MediaServers) },
+                         onLiveTvClick = { onPageChange(SettingsPage.LiveTv) },
+                         onDiscordClick = { onPageChange(SettingsPage.DiscordRpc) },
+                         onExtraClick = { onPageChange(SettingsPage.Extra) },
+                     )
+                     SettingsPage.OmdbRatings -> omdbSettingsContent(isTablet = true)
++                    SettingsPage.TvdbOrdering -> tvdbSettingsContent(isTablet = true)
+                     SettingsPage.TmdbEnrichment -> tmdbSettingsContent(
+                         isTablet = true,
+                         settings = tmdbSettings,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbClient.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbClient.kt
+new file mode 100644
+index 0000000..f070c94
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbClient.kt
+@@ -0,0 +1,274 @@
++package com.nuvio.app.features.tvdb
++
++import com.nuvio.app.core.network.createApiHttpClient
++import com.nuvio.app.core.network.readBoundedResponseBody
++import io.ktor.client.HttpClient
++import io.ktor.client.request.get
++import io.ktor.client.request.header
++import io.ktor.client.request.post
++import io.ktor.client.request.setBody
++import io.ktor.client.statement.HttpResponse
++import io.ktor.client.statement.bodyAsChannel
++import io.ktor.http.ContentType
++import io.ktor.http.contentLength
++import io.ktor.http.contentType
++import io.ktor.utils.io.errors.IOException
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.sync.Mutex
++import kotlinx.coroutines.sync.withLock
++import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.JsonArray
++import kotlinx.serialization.json.JsonElement
++import kotlinx.serialization.json.JsonObject
++import kotlinx.serialization.json.JsonPrimitive
++import kotlinx.serialization.json.buildJsonObject
++import kotlinx.serialization.json.contentOrNull
++import kotlinx.serialization.json.longOrNull
++import kotlinx.serialization.json.put
++
++/**
++ * TVDB v4 API client (ktor). Login exchanges the profile API key for a bearer token;
++ * the token is cached in memory only and never persisted or logged. Episode pages
++ * are validated in full: a failed page aborts the whole load instead of returning a
++ * truncated order.
++ */
++class TvdbClient(
++    private val credentials: TvdbCredentialStore,
++    private val nowEpochMs: () -> Long = { kotlin.time.Clock.System.now().toEpochMilliseconds() },
++) {
++    private class Token(val revision: Long, val value: String, val expiresAt: Long)
++
++    private val http: HttpClient by lazy { createApiHttpClient() }
++    private val mutex = Mutex()
++    private val tokens = mutableMapOf<Int, Token>()
++    private val json = Json { ignoreUnknownKeys = true }
++
++    /** Login only: never persists or exposes the bearer token. */
++    suspend fun testConnection(profileId: Int) {
++        mutex.withLock {
++            tokens.remove(profileId)
++            token(profileId)
++        }
++    }
++
++    suspend fun orders(profileId: Int, seriesId: Long): List<TvdbOrder> {
++        require(seriesId > 0)
++        val series = get(profileId, "series/$seriesId/extended").objectData()
++        val seasons = series["seasons"] as? JsonArray ?: return emptyList()
++        return seasons.mapNotNull { value ->
++            val type = (value as? JsonObject)?.get("type") as? JsonObject ?: return@mapNotNull null
++            val id = type["type"]?.string() ?: return@mapNotNull null
++            TvdbOrder(id, type["name"]?.string() ?: id)
++        }.distinctBy { it.type }
++    }
++
++    suspend fun seriesByRemoteId(profileId: Int, remoteId: String): Long? {
++        require(remoteId.matches(Regex("[A-Za-z0-9:_-]+")))
++        val data = get(profileId, "search/remoteid/$remoteId")["data"] as? JsonArray ?: return null
++        return data.mapNotNull { element ->
++            ((element as? JsonObject)?.get("series") as? JsonObject)?.get("id")?.long()
++        }.distinct().singleOrNull()
++    }
++
++    /** All pages must succeed; never return a truncated order after a page error. */
++    suspend fun episodes(
++        profileId: Int,
++        seriesId: Long,
++        order: String,
++        language: String = "eng",
++    ): List<TvdbEpisode> {
++        require(seriesId > 0)
++        require(order.matches(Regex("[a-zA-Z0-9_-]+")))
++        require(language.matches(Regex("[a-z]{3}")))
++        val revision = credentials.revision(profileId)
++        val result = mutableListOf<TvdbEpisode>()
++        val seenIds = mutableSetOf<Long>()
++        var page = 0
++        do {
++            val response = get(profileId, "series/$seriesId/episodes/$order/$language?page=$page")
++            val rows = response.objectData()["episodes"] as? JsonArray
++                ?: throw TvdbException(TvdbException.Reason.INVALID_RESPONSE)
++            val pageEpisodes = rows.map { parseTvdbEpisode(it as? JsonObject) }
++            if (pageEpisodes.isNotEmpty() && pageEpisodes.all { it.id in seenIds }) {
++                throw TvdbException(TvdbException.Reason.INVALID_RESPONSE)
++            }
++            pageEpisodes.forEach { seenIds += it.id }
++            result += pageEpisodes
++            val next = (response["links"] as? JsonObject)?.get("next")?.string()
++            if (next == null) break
++            if (rows.isEmpty() || ++page > MAX_PAGES) throw TvdbException(TvdbException.Reason.INVALID_RESPONSE)
++        } while (true)
++        if (result.groupBy { it.id }.any { it.value.distinct().size != 1 }) {
++            throw TvdbException(TvdbException.Reason.INVALID_RESPONSE)
++        }
++        checkRevision(profileId, revision)
++        val unique = result.distinctBy { it.id }
++        if (unique.groupBy { it.season to it.number }.any { it.value.size > 1 }) {
++            throw TvdbException(TvdbException.Reason.INVALID_RESPONSE)
++        }
++        return unique
++    }
++
++    /**
++     * Season fallback for orders the flat episodes endpoint does not serve: reads the
++     * series' seasons of the requested type and concatenates their episodes.
++     */
++    suspend fun episodesFromSeasons(profileId: Int, seriesId: Long, order: String): List<TvdbEpisode> {
++        require(seriesId > 0)
++        require(order.matches(Regex("[a-zA-Z0-9_-]+")))
++        val series = get(profileId, "series/$seriesId/extended").objectData()
++        val seasons = series["seasons"] as? JsonArray
++            ?: throw TvdbException(TvdbException.Reason.INVALID_RESPONSE)
++        val result = mutableListOf<TvdbEpisode>()
++        for (element in seasons) {
++            val season = element as? JsonObject ?: continue
++            val type = season["type"] as? JsonObject ?: continue
++            if (type["type"]?.string() != order) continue
++            val id = season["id"]?.long()?.takeIf { it > 0 } ?: continue
++            val number = season["number"]?.long()
++                ?: throw TvdbException(TvdbException.Reason.INVALID_RESPONSE)
++            val details = get(profileId, "seasons/$id/extended").objectData()
++            val episodes = details["episodes"] as? JsonArray ?: continue
++            for (episode in episodes) {
++                val row = episode as? JsonObject ?: continue
++                val withSeason = JsonObject(HashMap(row) + ("seasonNumber" to JsonPrimitive(number)))
++                result += parseTvdbEpisode(withSeason)
++            }
++        }
++        if (result.groupBy { it.id }.any { it.value.size > 1 } ||
++            result.groupBy { it.season to it.number }.any { it.value.size > 1 }
++        ) {
++            throw TvdbException(TvdbException.Reason.INVALID_RESPONSE)
++        }
++        return result
++    }
++
++    private suspend fun get(profileId: Int, path: String): JsonObject = mutex.withLock {
++        repeat(2) { attempt ->
++            val token = token(profileId)
++            val (code, body) = try {
++                execute { http.get("$BASE/$path") { header("Authorization", "Bearer ${token.value}") } }
++            } catch (cancelled: CancellationException) {
++                throw cancelled
++            } catch (_: IOException) {
++                throw TvdbException(TvdbException.Reason.NETWORK)
++            }
++            checkRevision(profileId, token.revision)
++            if (code == 401 && attempt == 0) {
++                tokens.remove(profileId)
++            } else {
++                checkStatus(code)
++                return@withLock decode(body)
++            }
++        }
++        throw TvdbException(TvdbException.Reason.AUTHENTICATION)
++    }
++
++    private suspend fun token(profileId: Int): Token {
++        val revision = credentials.revision(profileId)
++        tokens[profileId]?.takeIf { it.revision == revision && it.expiresAt > nowEpochMs() }?.let { return it }
++        val key = credentials.read(profileId) ?: throw TvdbException(TvdbException.Reason.NO_KEY)
++        // PIN deliberately omitted: API-key-only authentication is supported.
++        val (code, body) = try {
++            execute {
++                http.post("$BASE/login") {
++                    contentType(ContentType.Application.Json)
++                    setBody(buildLoginBody(key))
++                }
++            }
++        } catch (cancelled: CancellationException) {
++            throw cancelled
++        } catch (_: IOException) {
++            throw TvdbException(TvdbException.Reason.NETWORK)
++        }
++        checkRevision(profileId, revision)
++        checkStatus(code)
++        val value = decode(body).objectData()["token"]?.string()
++            ?: throw TvdbException(TvdbException.Reason.INVALID_RESPONSE)
++        return Token(revision, value, nowEpochMs() + TOKEN_LIFETIME_MS).also { tokens[profileId] = it }
++    }
++
++    private suspend fun execute(block: suspend () -> HttpResponse): Pair<Int, String> {
++        val response = block()
++        val code = response.status.value
++        val body = try {
++            readBoundedResponseBody(response.bodyAsChannel(), response.contentLength())
++        } catch (cancelled: CancellationException) {
++            throw cancelled
++        } catch (_: Exception) {
++            throw TvdbException(TvdbException.Reason.INVALID_RESPONSE)
++        }
++        return code to body
++    }
++
++    private fun checkRevision(profileId: Int, revision: Long) {
++        if (credentials.revision(profileId) != revision) {
++            throw TvdbException(TvdbException.Reason.CREDENTIALS_CHANGED)
++        }
++    }
++
++    private fun decode(body: String): JsonObject = try {
++        json.parseToJsonElement(body) as? JsonObject
++            ?: throw TvdbException(TvdbException.Reason.INVALID_RESPONSE)
++    } catch (cancelled: CancellationException) {
++        throw cancelled
++    } catch (_: Exception) {
++        throw TvdbException(TvdbException.Reason.INVALID_RESPONSE)
++    }
++
++    private fun checkStatus(code: Int) {
++        if (code in 200..299) return
++        throw TvdbException(
++            when (code) {
++                401, 403 -> TvdbException.Reason.AUTHENTICATION
++                404 -> TvdbException.Reason.UNAVAILABLE
++                429 -> TvdbException.Reason.RATE_LIMIT
++                else -> TvdbException.Reason.NETWORK
++            },
++        )
++    }
++
++    private companion object {
++        const val BASE = "https://api4.thetvdb.com/v4"
++        const val MAX_PAGES = 1000
++        const val TOKEN_LIFETIME_MS = 28L * 24 * 60 * 60 * 1000
++    }
++}
++
++private fun buildLoginBody(apiKey: String): String = buildJsonObject {
++    put("apikey", apiKey)
++}.toString()
++
++internal fun parseTvdbEpisode(row: JsonObject?): TvdbEpisode {
++    if (row == null) throw TvdbException(TvdbException.Reason.INVALID_RESPONSE)
++    val id = row["id"]?.long()?.takeIf { it > 0 }
++        ?: throw TvdbException(TvdbException.Reason.INVALID_RESPONSE)
++    val season = row["seasonNumber"]?.long()?.toInt()?.takeIf { it >= 0 }
++        ?: throw TvdbException(TvdbException.Reason.INVALID_RESPONSE)
++    val number = row["number"]?.long()?.toInt()?.takeIf { it > 0 }
++        ?: throw TvdbException(TvdbException.Reason.INVALID_RESPONSE)
++    return TvdbEpisode(
++        id = id,
++        season = season,
++        number = number,
++        title = row["name"]?.string().orEmpty(),
++        overview = row["overview"]?.string(),
++        image = row["image"]?.string()?.let { image ->
++            when {
++                image.startsWith("https://") || image.startsWith("http://") -> image
++                image.startsWith("//") -> "https:$image"
++                else -> "https://artworks.thetvdb.com/${image.trimStart('/')}"
++            }
++        },
++        aired = row["aired"]?.string(),
++        runtime = row["runtime"]?.long()?.toInt(),
++    )
++}
++
++private fun JsonObject.objectData(): JsonObject =
++    this["data"] as? JsonObject ?: throw TvdbException(TvdbException.Reason.INVALID_RESPONSE)
++
++private fun JsonElement?.string(): String? =
++    (this as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank)
++
++private fun JsonElement?.long(): Long? = (this as? JsonPrimitive)?.longOrNull
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbCredentialStore.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbCredentialStore.kt
+new file mode 100644
+index 0000000..d8bb497
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbCredentialStore.kt
+@@ -0,0 +1,31 @@
++package com.nuvio.app.features.tvdb
++
++import com.nuvio.app.features.profiles.ProfileRepository
++
++/**
++ * Per-profile TVDB v4 API key. Values are read from the profile-scoped storage and
++ * are never logged. `revision` lets callers detect credential changes mid-flight so
++ * a stale token or in-progress request cannot keep using old credentials; any save
++ * bumps the epoch for every profile (saves are user-driven and rare).
++ */
++object TvdbCredentialStore {
++    @Volatile
++    private var revisionEpoch = 0L
++
++    /** Keys are persisted under the active profile via ProfileScopedKey. */
++    fun read(profileId: Int): String? = TvdbSettingsStorage.loadApiKey()
++
++    fun revision(profileId: Int): Long = revisionEpoch
++
++    suspend fun save(profileId: Int, apiKey: String?) {
++        val normalized = apiKey?.trim()?.takeIf(String::isNotBlank)
++        TvdbSettingsStorage.saveApiKey(normalized)
++        revisionEpoch += 1L
++    }
++
++    fun savedKey(): String? = read(ProfileRepository.activeProfileId)
++
++    fun clearAllProfiles() {
++        revisionEpoch += 1_000_000L
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeCorrespondence.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeCorrespondence.kt
+new file mode 100644
+index 0000000..f5fdedb
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeCorrespondence.kt
+@@ -0,0 +1,190 @@
++package com.nuvio.app.features.tvdb
++
++private val extendedLabel = Regex("\\s*\\((?:extended(?: cut| edition)?|superfan(?: episode)?)\\)\\s*$", RegexOption.IGNORE_CASE)
++private val partLabel = Regex("^(.*?)\\s*(?:\\((\\d+)\\)|[-:]?\\s*Part\\s+(\\d+))$", RegexOption.IGNORE_CASE)
++private val titleArticle = Regex("\\bthe\\b")
++private val titleSpaces = Regex("\\s+")
++
++/**
++ * Metadata correspondence between a TVDB episode and the metadata provider's
++ * catalog. Stable TVDB IDs lead; variant titles additionally require a unique
++ * title/air-date anchor, and numbered parts require a complete 1..N family rather
++ * than positional matching. This is a bounded metadata correspondence, not a
++ * second history store.
++ */
++
++private fun matchStem(title: String): String = normalizeEpisodeName(title)
++    .replace(titleArticle, " ")
++    .replace(titleSpaces, " ")
++    .trim()
++
++internal fun tvdbEpisodeMatchTitle(title: String): String {
++    val cut = title.replace(extendedLabel, "").trim()
++    val part = partLabel.matchEntire(cut)
++    return if (part == null) {
++        matchStem(cut)
++    } else {
++        matchStem(part.groupValues[1]) + " part " + part.groupValues[2].ifBlank { part.groupValues[3] }
++    }
++}
++
++internal fun tvdbEpisodeBaseTitle(title: String): String {
++    val cut = title.replace(extendedLabel, "").trim()
++    return matchStem(partLabel.matchEntire(cut)?.groupValues?.get(1) ?: cut)
++}
++
++internal fun tvdbEpisodePartNumber(title: String): Int? {
++    val part = partLabel.matchEntire(title.replace(extendedLabel, "").trim()) ?: return null
++    return part.groupValues[2].ifBlank { part.groupValues[3] }.toIntOrNull()
++}
++
++internal fun tvdbEpisodeFamilies(episodes: List<TvdbEpisode>): List<List<TvdbEpisode>> = episodes
++    .filter { tvdbEpisodePartNumber(it.title) != null }
++    .groupBy { tvdbEpisodeBaseTitle(it.title) to it.season }
++    .values.mapNotNull { rows ->
++        val sorted = rows.sortedBy { tvdbEpisodePartNumber(it.title) }
++        sorted.takeIf {
++            it.size > 1 && it.map { row -> tvdbEpisodePartNumber(row.title) } == (1..it.size).toList()
++        }
++    }
++
++/**
++ * Complete part families establish content boundaries; display numbers never do.
++ * `byId` maps every known TVDB episode (across the selected, official and related
++ * orders) to the physical content it covers.
++ */
++internal class TvdbContentCoverage(order: TvdbEpisodeOrder) {
++    private val records = (order.officialEpisodes + order.episodes + order.relatedOrders.values.flatten())
++        .distinctBy { it.id }
++    private val lists = listOf(order.officialEpisodes) +
++        order.relatedOrders.entries.sortedBy { if (it.key == "alternate") "0" else it.key }.map { it.value } +
++        listOf(order.episodes)
++    private val allFamilies = lists.flatMap(::tvdbEpisodeFamilies)
++        .filter { !it.first().aired.isNullOrBlank() }
++    private val anchors: Map<Long, Set<Triple<String, String?, Int>>> = allFamilies
++        .flatMap { family ->
++            family.map { row ->
++                row.id to Triple(
++                    tvdbEpisodeBaseTitle(family.first().title),
++                    family.first().aired?.take(10),
++                    family.size,
++                )
++            }
++        }
++        .groupBy({ it.first }, { it.second })
++        .mapValues { it.value.toSet() }
++    private val families = allFamilies
++        .distinctBy { tvdbEpisodeBaseTitle(it.first().title) to it.first().aired?.take(10) }
++    private val familiesByTitle = families.groupBy { tvdbEpisodeBaseTitle(it.first().title) }
++    private val official = order.officialEpisodes.associateBy { it.id }
++    private val scalar = tvdbEpisodeCorrespondence(order)
++    val byId: Map<Long, List<TvdbEpisode>> = records.mapNotNull { row ->
++        val baseTitle = tvdbEpisodeBaseTitle(row.title)
++        val family = familiesByTitle[baseTitle].orEmpty().filter { candidate ->
++            candidate.any { it.id == row.id } ||
++                (
++                    tvdbEpisodePartNumber(row.title) == null &&
++                        candidate.first().aired?.take(10) == row.aired?.take(10)
++                    ) ||
++                anchors[row.id].orEmpty().contains(
++                    Triple(
++                        tvdbEpisodeBaseTitle(candidate.first().title),
++                        candidate.first().aired?.take(10),
++                        candidate.size,
++                    ),
++                )
++        }.singleOrNull()
++        val coverage = if (family != null) {
++            val number = tvdbEpisodePartNumber(row.title)
++            if (number == null) {
++                family
++            } else {
++                family.singleOrNull { tvdbEpisodePartNumber(it.title) == number }?.let(::listOf)
++            }
++        } else {
++            official[row.id]?.let(::listOf) ?: scalar[row.id]?.let(::listOf)
++        }
++        coverage?.let { row.id to it }
++    }.toMap()
++
++    private val byTitleDate = records.groupBy { tvdbEpisodeMatchTitle(it.title) to it.aired?.take(10) }
++
++    /** Match a provider episode (title + air date) to the TVDB content it covers. */
++    fun match(title: String, date: String?): List<TvdbEpisode> {
++        if (date.isNullOrBlank()) return emptyList()
++        val signature = tvdbEpisodeMatchTitle(title)
++        if (signature.isBlank()) return emptyList()
++        val candidates = byTitleDate[signature to date.take(10)].orEmpty()
++            .mapNotNull { byId[it.id] }
++        return candidates.distinctBy { it.map(TvdbEpisode::id).toSet() }.singleOrNull().orEmpty()
++    }
++}
++
++/**
++ * Stable IDs lead. Variant names additionally require a unique official title/date
++ * anchor; numbered parts require a complete 1..N group, not positional matching.
++ */
++internal fun tvdbEpisodeCorrespondence(order: TvdbEpisodeOrder): Map<Long, TvdbEpisode> {
++    val official = order.officialEpisodes.groupBy { it.id }
++    val byTitle = order.officialEpisodes.groupBy { tvdbEpisodeMatchTitle(it.title) }
++    val result = order.episodes.mapNotNull { episode ->
++        official[episode.id]?.singleOrNull()?.let { episode.id to it }
++    }.toMap().toMutableMap()
++    val parts = mutableListOf<Triple<TvdbEpisode, String, Int>>()
++    for (episode in order.episodes) {
++        if (episode.id in result) continue
++        val title = episode.title.replace(extendedLabel, "").trim()
++        val exact = byTitle[tvdbEpisodeMatchTitle(title)].orEmpty().filter {
++            !it.aired.isNullOrBlank() && it.aired.take(10) == episode.aired?.take(10)
++        }.singleOrNull()
++        if (exact != null) {
++            result[episode.id] = exact
++            continue
++        }
++        val part = partLabel.matchEntire(title)
++        if (part != null) {
++            val number = (part.groupValues[2].ifBlank { part.groupValues[3] }).toIntOrNull() ?: continue
++            parts += Triple(episode, matchStem(part.groupValues[1]), number)
++        }
++    }
++    for (group in parts.groupBy { it.second to it.first.season }.values) {
++        val sorted = group.sortedBy { it.third }
++        if (sorted.size < 2 || sorted.map { it.third } != (1..sorted.size).toList()) continue
++        val anchor = sorted.first().first.aired?.take(10) ?: continue
++        val canonical = byTitle[sorted.first().second].orEmpty()
++            .filter { it.aired?.take(10) == anchor }
++            .singleOrNull() ?: continue
++        sorted.forEach { result[it.first.id] = canonical }
++    }
++    return result
++}
++
++private val episodeCombiningFold = buildMap {
++    val foldFrom = "ÀÁÂÃÄÅĀĂĄÇĆČĈĊĎĐÈÉÊËĒĖĘĚĜĞĠĢĤĦÌÍÎÏĨĪĮİĴĶĹĻĽŁŃŅŇÑÒÓÔÕÖØŌŎŐŔŖŘŚŜŞŠẞŢŤŦÙÚÛÜŨŪŮŰŲŴÝŸŶŹŻŽàáâãäåāăąçćčĉċďđèéêëēėęěĝğġģĥħìíîïĩīįıĵķĺļľłńņňñòóôõöøōŏőŕŗřśŝşšßţťŧùúûüũūůűųŵýÿŷźżž"
++    val foldTo = "AAAAAAAACCCCDDEEEEEEEEFGGGGHHIIIIIIIIJKLLLLNNNOOOOOOORRRSSSSSBTTTTUUUUUUUWYYYYZZZaaaaaaaaccccddddooooooorrrssssbttttuuuuuuuwyyyyzzz"
++    require(foldFrom.length == foldTo.length)
++    foldFrom.forEachIndexed { index, char -> put(char, foldTo[index]) }
++    put('Æ', 'A')
++    put('æ', 'a')
++    put('Œ', 'O')
++    put('œ', 'o')
++    put('Ø', 'O')
++    put('ø', 'o')
++    put('Đ', 'D')
++    put('đ', 'd')
++    put('Ł', 'L')
++    put('ł', 'l')
++}
++
++/**
++ * KMP-safe stand-in for the TV fork's `java.text.Normalizer` NFKD + mark-strip:
++ * a fixed Latin fold table plus punctuation collapsing. Titles that survive this
++ * normalization are the ones the correspondence relies on.
++ */
++internal fun normalizeEpisodeName(value: String): String = buildString {
++    for (raw in value.lowercase()) {
++        append(episodeCombiningFold[raw] ?: raw)
++    }
++}.replace(episodePunctuation, " ").trim()
++
++private val episodePunctuation = Regex("[^\\p{L}\\p{N}]+")
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeOrderController.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeOrderController.kt
+new file mode 100644
+index 0000000..446efe0
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeOrderController.kt
+@@ -0,0 +1,263 @@
++package com.nuvio.app.features.tvdb
++
++import com.nuvio.app.features.details.MetaDetails
++import com.nuvio.app.features.details.MetaVideo
++import com.nuvio.app.features.profiles.ProfileRepository
++import com.nuvio.app.features.tmdb.TmdbService
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Job
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import kotlinx.coroutines.launch
++import kotlinx.coroutines.withContext
++import kotlinx.coroutines.withTimeoutOrNull
++
++data class TvdbEpisodeOrderUiState(
++    val selection: TvdbOrderPreference? = null,
++    val projection: TvdbEpisodeProjection? = null,
++    val orders: List<TvdbOrder> = emptyList(),
++    val pickerOpen: Boolean = false,
++    val pickerBusy: Boolean = false,
++    val pickerError: String? = null,
++    val loading: Boolean = false,
++    val pickerSeriesId: Long? = null,
++    val hasCredential: Boolean = false,
++) {
++    val active: Boolean get() = selection != null && projection != null
++
++    val statusMessage: String? get() = projection?.statusMessage
++}
++
++private val seriesLikeTypes = setOf("series", "show", "tv", "tvshow")
++
++internal fun isTvdbSeriesLike(type: String): Boolean = type.trim().lowercase() in seriesLikeTypes
++
++internal fun extractTvdbImdbId(value: String?): String? =
++    value?.trim()?.takeIf { it.matches(Regex("tt\\d+")) }
++
++internal fun extractTvdbTmdbId(value: String?): Int? =
++    value?.trim()?.takeIf { it.startsWith("tmdb:") }
++        ?.substringAfter(':')?.substringBefore(':')?.toIntOrNull()?.takeIf { it > 0 }
++
++/**
++ * Screen-scoped controller for the alternative episode order: observes the
++ * per-profile selection, loads the selected TVDB order and projects the provider
++ * episode list onto it. The provider list stays authoritative whenever no order is
++ * selected — without a configured key and selection nothing changes.
++ */
++class TvdbEpisodeOrderController(
++    private val scope: CoroutineScope,
++) {
++    private val client = TvdbClient(TvdbCredentialStore)
++    private val repository = TvdbOrderRepository(client)
++
++    private val _state = MutableStateFlow(TvdbEpisodeOrderUiState())
++    val state: StateFlow<TvdbEpisodeOrderUiState> = _state.asStateFlow()
++
++    private var job: Job? = null
++    private var generation = 0
++    private var observedAliases: List<String>? = null
++    private var observedKey: String? = null
++    private var loadedProjectionKey: String? = null
++    private var lastAliases: List<String> = emptyList()
++    private var lastMeta: MetaDetails? = null
++
++    fun aliases(meta: MetaDetails?, routeId: String): List<String> = listOfNotNull(
++        routeId.takeIf(String::isNotBlank),
++        meta?.id?.takeIf(String::isNotBlank),
++        meta?.imdbId?.takeIf(String::isNotBlank),
++    ).distinct()
++
++    /**
++     * Re-reads the persisted selection. Cheap (local storage), called whenever the
++     * content identity or the active profile changes.
++     */
++    fun observeSelection(aliases: List<String>) {
++        val key = aliases.joinToString("|")
++        if (observedKey == key && observedAliases != null) return
++        observedKey = key
++        observedAliases = aliases
++        lastAliases = aliases
++        val profile = ProfileRepository.activeProfileId
++        val hasKey = !TvdbCredentialStore.read(profile).isNullOrBlank()
++        val selection = if (hasKey) TvdbOrderStore.selected(aliases) else null
++        if (selection == null) {
++            generation++
++            job?.cancel()
++            loadedProjectionKey = null
++            _state.value = TvdbEpisodeOrderUiState(hasCredential = hasKey)
++        } else {
++            _state.value = _state.value.copy(
++                hasCredential = hasKey,
++                selection = selection,
++                projection = _state.value.projection
++                    ?.takeIf { it.seriesId == selection.seriesId && it.order.effectiveType == selection.orderType },
++            )
++        }
++    }
++
++    /**
++     * Loads the selected order and projects the provider episodes onto it. No-ops
++     * when no order is selected or the same input was already projected.
++     */
++    fun loadProjection(aliases: List<String>, providerMeta: MetaDetails?) {
++        lastAliases = aliases
++        lastMeta = providerMeta
++        val selection = _state.value.selection ?: return
++        if (providerMeta == null || !isTvdbSeriesLike(providerMeta.type)) return
++        val key = listOf(
++            ProfileRepository.activeProfileId,
++            selection.seriesId,
++            selection.orderType,
++            providerMeta.id,
++            providerMeta.videos.size,
++            providerMeta.videos.hashCode(),
++        ).joinToString(":")
++        if (loadedProjectionKey == key && _state.value.projection != null) return
++        loadedProjectionKey = key
++        val request = ++generation
++        job?.cancel()
++        job = scope.launch {
++            _state.value = _state.value.copy(loading = true)
++            try {
++                val projection = withTimeoutOrNull(LOAD_TIMEOUT_MS) {
++                    withContext(kotlinx.coroutines.Dispatchers.Default) {
++                        val order = repository.load(
++                            profileId = ProfileRepository.activeProfileId,
++                            seriesId = selection.seriesId,
++                            selected = selection.orderType,
++                            includeRelated = true,
++                        )
++                        TvdbEpisodeProjection(providerMeta, selection.seriesId, order)
++                    }
++                } ?: throw TvdbException(TvdbException.Reason.NETWORK)
++                if (request == generation) {
++                    _state.value = _state.value.copy(
++                        projection = projection,
++                        loading = false,
++                        pickerError = null,
++                    )
++                }
++            } catch (cancelled: CancellationException) {
++                throw cancelled
++            } catch (_: Exception) {
++                if (request == generation) {
++                    _state.value = _state.value.copy(
++                        projection = null,
++                        loading = false,
++                        pickerError = TVDB_UNAVAILABLE_MESSAGE,
++                    )
++                }
++            }
++        }
++    }
++
++    fun openPicker(providerMeta: MetaDetails?) {
++        if (_state.value.pickerBusy) return
++        val meta = providerMeta ?: return
++        if (!isTvdbSeriesLike(meta.type)) return
++        val aliases = lastAliases.ifEmpty { aliases(meta, meta.id) }
++        val request = ++generation
++        job?.cancel()
++        job = scope.launch {
++            _state.value = _state.value.copy(pickerOpen = true, pickerBusy = true, pickerError = null)
++            try {
++                val profile = ProfileRepository.activeProfileId
++                val seriesId = resolveSeriesId(profile, meta, aliases)
++                    ?: error("This series could not be identified on TheTVDB.")
++                val orders = repository.available(profile, seriesId).filter { it.type != "default" }
++                if (request == generation) {
++                    _state.value = _state.value.copy(
++                        pickerOpen = true,
++                        pickerBusy = false,
++                        pickerSeriesId = seriesId,
++                        orders = (listOf(TvdbOrder("official", "TVDB Standard (Aired)")) + orders)
++                            .distinctBy { it.type },
++                    )
++                }
++            } catch (cancelled: CancellationException) {
++                throw cancelled
++            } catch (e: Exception) {
++                if (request == generation) {
++                    _state.value = _state.value.copy(
++                        pickerBusy = false,
++                        pickerError = when ((e as? TvdbException)?.reason) {
++                            TvdbException.Reason.NO_KEY ->
++                                "Configure your TVDB API key in Settings > Integrations > TheTVDB."
++                            TvdbException.Reason.AUTHENTICATION ->
++                                "TheTVDB rejected your key. Test the connection in Settings."
++                            else -> "Unable to load TheTVDB episode orders. Check the connection and try again."
++                        },
++                    )
++                }
++            }
++        }
++    }
++
++    fun closePicker() {
++        generation++
++        job?.cancel()
++        _state.value = _state.value.copy(pickerOpen = false, pickerBusy = false, pickerError = null)
++    }
++
++    fun select(type: String?, seriesIdHint: Long? = null) {
++        val seriesId = _state.value.selection?.seriesId
++            ?: _state.value.pickerSeriesId
++            ?: seriesIdHint
++            ?: return
++        if (_state.value.pickerBusy && type != null) return
++        val profile = ProfileRepository.activeProfileId
++        val request = ++generation
++        job?.cancel()
++        job = scope.launch {
++            _state.value = _state.value.copy(pickerBusy = true, pickerError = null)
++            try {
++                TvdbOrderStore.save(seriesId, type, lastAliases)
++                if (request == generation) {
++                    _state.value = _state.value.copy(
++                        pickerOpen = false,
++                        pickerBusy = false,
++                        pickerError = null,
++                    )
++                    observedKey = null
++                    loadedProjectionKey = null
++                    observedAliases?.let(::observeSelection)
++                    lastMeta?.let { loadProjection(lastAliases, it) }
++                }
++            } catch (cancelled: CancellationException) {
++                throw cancelled
++            } catch (_: Exception) {
++                if (request == generation) {
++                    _state.value = _state.value.copy(pickerBusy = false, pickerError = "Unable to save the episode order.")
++                }
++            }
++        }
++    }
++
++    private suspend fun resolveSeriesId(profile: Int, meta: MetaDetails, aliases: List<String>): Long? {
++        TvdbOrderStore.knownSeries(aliases)?.let { return it }
++        meta.id.takeIf { it.startsWith("tvdb:") }
++            ?.substringAfter(':')?.substringBefore(':')?.toLongOrNull()?.takeIf { it > 0 }
++            ?.let { return it }
++        val imdb = extractTvdbImdbId(meta.imdbId)
++            ?: extractTvdbImdbId(meta.id)
++            ?: extractTvdbTmdbId(meta.id)
++                ?.takeIf { TvdbCredentialStore.read(profile) != null }
++                ?.let { tmdbId -> TmdbService.tmdbToImdb(tmdbId, "series") }
++        return imdb?.let { client.seriesByRemoteId(profile, it) }
++    }
++
++    /** Screen-level helpers mirroring [TvdbEpisodeProjection] with a null-safe fallback. */
++    fun resolvePlayback(row: MetaVideo): MetaVideo = _state.value.projection?.resolvePlayback(row) ?: row
++
++    fun toProviderEpisode(row: MetaVideo): MetaVideo = _state.value.projection?.toProviderEpisode(row) ?: row
++
++    fun providerSeasonOf(tvdbSeason: Int): Int? = _state.value.projection?.providerSeasonOf(tvdbSeason)
++
++    private companion object {
++        const val LOAD_TIMEOUT_MS = 20_000L
++        const val TVDB_UNAVAILABLE_MESSAGE = "TheTVDB is unavailable. Showing metadata provider episodes."
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeProjection.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeProjection.kt
+new file mode 100644
+index 0000000..6e74959
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeProjection.kt
+@@ -0,0 +1,176 @@
++package com.nuvio.app.features.tvdb
++
++import com.nuvio.app.features.details.MetaDetails
++import com.nuvio.app.features.details.MetaVideo
++import com.nuvio.app.features.details.TvdbEpisodeRef
++import com.nuvio.app.features.watchprogress.WatchProgressEntry
++import com.nuvio.app.features.watchprogress.buildPlaybackVideoId
++import com.nuvio.app.features.watched.watchedItemKey
++import com.nuvio.app.features.watched.watchedItemKeys
++
++/**
++ * Display projection of the provider's episode list onto a selected TVDB order.
++ *
++ * The projected rows are the TVDB episodes of the selected order, re-keyed to the
++ * order's season/episode numbers. Rows matched to the provider catalog (via the
++ * bounded metadata correspondence) carry the provider identity in [TvdbEpisodeRef]
++ * so watched badges, progress and stream requests resolve against the provider's
++ * actual season/episode. Unmatched rows keep TVDB numbering and surface a
++ * "Not matched" badge.
++ *
++ * Deferred on mobile: tracker/cloud translation, continue-watching projection and
++ * player-side projection are NOT implemented — history is only displayed here.
++ */
++class TvdbEpisodeProjection(
++    val provider: MetaDetails,
++    val seriesId: Long,
++    val order: TvdbEpisodeOrder,
++) {
++    private val coverage = TvdbContentCoverage(order)
++
++    private val genericEpisodeTitle = Regex("(?:episode|ep|e) ?\\d+")
++
++    /** Provider video for each TVDB episode id it verifiably covers. */
++    private val providerByTvdbId: Map<Long, MetaVideo> = buildMap {
++        for (video in provider.videos) {
++            if (video.id.isBlank()) continue
++            val season = video.season ?: continue
++            val episode = video.episode ?: continue
++            if (season < 0 || episode <= 0) continue
++            val date = video.released?.take(10)
++            val signature = tvdbEpisodeMatchTitle(video.title)
++            if (date == null || signature.isBlank() || genericEpisodeTitle.matches(signature)) continue
++            val covered = coverage.match(video.title, date)
++            val target = covered.singleOrNull() ?: continue
++            if (target.id !in this) this[target.id] = video
++        }
++    }
++
++    val rows: List<MetaVideo> = order.episodes
++        .map { episode ->
++            val source = providerByTvdbId[episode.id]
++            MetaVideo(
++                id = "tvdb:$seriesId:${episode.id}",
++                title = episode.title.ifBlank { source?.title ?: "Episode ${episode.number}" },
++                released = episode.aired ?: source?.released,
++                available = source?.available ?: true,
++                thumbnail = episode.image?.takeIf(String::isNotBlank) ?: source?.thumbnail,
++                season = episode.season,
++                episode = episode.number,
++                overview = episode.overview ?: source?.overview,
++                runtime = episode.runtime ?: source?.runtime,
++                rating = null,
++                tvdbOrder = TvdbEpisodeRef(
++                    seriesId = seriesId,
++                    episodeId = episode.id,
++                    orderType = order.effectiveType,
++                    matched = source != null,
++                    sourceVideoId = source?.id,
++                    sourceSeason = source?.season,
++                    sourceEpisode = source?.episode,
++                ),
++            )
++        }
++        .sortedWith(compareBy({ it.season ?: Int.MAX_VALUE }, { it.episode ?: Int.MAX_VALUE }))
++
++    val unmatchedCount: Int = rows.count { it.tvdbOrder?.matched != true }
++
++    val statusMessage: String? = listOfNotNull(
++        "Using the ${order.effectiveType} episode order from TheTVDB",
++        "Using cached TVDB metadata".takeIf { order.stale },
++        "$unmatchedCount episode(s) not matched; they keep TVDB numbering".takeIf { unmatchedCount > 0 },
++    ).joinToString(". ")
++
++    /** First provider season that corresponds to a TVDB season of this order. */
++    fun providerSeasonOf(tvdbSeason: Int): Int? = rows
++        .firstOrNull { it.season == tvdbSeason && it.tvdbOrder?.matched == true }
++        ?.tvdbOrder?.sourceSeason
++
++    /** Provider-season keys that do not appear in the selected TVDB order. */
++    fun droppedProviderSeasons(): Set<Int> {
++        val providerSeasons = provider.videos.mapNotNull { it.season?.let(::normalizeSeasonKey) }.toSet()
++        val projectedSeasons = rows.mapNotNull { it.season?.let(::normalizeSeasonKey) }.toSet()
++        return providerSeasons - projectedSeasons
++    }
++
++    private fun normalizeSeasonKey(season: Int): Int = if (season <= 0) 0 else season
++
++    /**
++     * Resolves the episode a play request should target. Matched rows map to the
++     * provider's actual season/episode (stream search stays physically correct);
++     * unmatched rows fall back to a provider-prefix request built from TVDB
++     * numbering. Rows from an unprojected list are returned unchanged.
++     */
++    fun resolvePlayback(row: MetaVideo): MetaVideo {
++        val ref = row.tvdbOrder ?: return row
++        if (ref.matched && ref.sourceVideoId != null && ref.sourceSeason != null && ref.sourceEpisode != null) {
++            return row.copy(
++                id = ref.sourceVideoId,
++                season = ref.sourceSeason,
++                episode = ref.sourceEpisode,
++            )
++        }
++        // Unmatched: TVDB numbering on the content id prefix, mirroring the TV fork.
++        return row.copy(id = "${provider.id}:${row.season}:${row.episode}")
++    }
++
++    /** The provider-equivalent of a projected row, for history-toggle actions. */
++    fun toProviderEpisode(row: MetaVideo): MetaVideo {
++        val ref = row.tvdbOrder ?: return row
++        if (!ref.matched) return row
++        val sourceSeason = ref.sourceSeason ?: return row
++        val sourceEpisode = ref.sourceEpisode ?: return row
++        return row.copy(
++            id = ref.sourceVideoId ?: row.id,
++            season = sourceSeason,
++            episode = sourceEpisode,
++        )
++    }
++
++    /** Watched keys re-keyed to the projected numbering (provider keys preserved). */
++    fun displayWatchedKeys(
++        metaType: String,
++        metaId: String,
++        providerWatched: Set<String>,
++        providerProgress: Map<String, WatchProgressEntry>,
++    ): Set<String> {
++        val extra = mutableSetOf<String>()
++        for (row in rows) {
++            val ref = row.tvdbOrder ?: continue
++            if (!ref.matched) continue
++            val sourceSeason = ref.sourceSeason ?: continue
++            val sourceEpisode = ref.sourceEpisode ?: continue
++            val watched = watchedItemKeys(metaType, metaId, sourceSeason, sourceEpisode)
++                .any(providerWatched::contains) ||
++                providerProgress[buildPlaybackVideoId(metaId, sourceSeason, sourceEpisode)]
++                    ?.isEffectivelyCompleted == true ||
++                ref.sourceVideoId?.let { providerProgress[it]?.isEffectivelyCompleted } == true
++            if (watched) {
++                extra += watchedItemKey(metaType, metaId, row.season, row.episode)
++            }
++        }
++        return if (extra.isEmpty()) providerWatched else providerWatched + extra
++    }
++
++    /** Progress entries re-keyed to the projected numbering (provider keys preserved). */
++    fun displayProgress(
++        metaId: String,
++        providerProgress: Map<String, WatchProgressEntry>,
++    ): Map<String, WatchProgressEntry> {
++        val extra = mutableMapOf<String, WatchProgressEntry>()
++        for (row in rows) {
++            val ref = row.tvdbOrder ?: continue
++            if (!ref.matched) continue
++            val sourceSeason = ref.sourceSeason
++            val sourceEpisode = ref.sourceEpisode
++            val entry = ref.sourceVideoId?.let(providerProgress::get)
++                ?: (if (sourceSeason != null && sourceEpisode != null) {
++                    providerProgress[buildPlaybackVideoId(metaId, sourceSeason, sourceEpisode)]
++                } else {
++                    null
++                }) ?: continue
++            extra["${metaId}:${row.season}:${row.episode}"] = entry
++        }
++        return if (extra.isEmpty()) providerProgress else providerProgress + extra
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbModels.kt
+new file mode 100644
+index 0000000..eed5966
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbModels.kt
+@@ -0,0 +1,50 @@
++package com.nuvio.app.features.tvdb
++
++/**
++ * TVDB v4 alternative episode ordering (port of the ReSeq / TV-fork engine, mobile
++ * pragmatic scope): login with a per-profile API key, discover a series' episode
++ * orders, load paginated episodes with full-page validation, and project the detail
++ * screen's episode list onto the selected order.
++ *
++ * Deferred on mobile (not implemented here): tracker/cloud translation of history
++ * writes, continue-watching projection and player-side projection.
++ */
++
++class TvdbException(val reason: Reason) : Exception(reason.name) {
++    enum class Reason {
++        NO_KEY,
++        AUTHENTICATION,
++        RATE_LIMIT,
++        UNAVAILABLE,
++        NETWORK,
++        INVALID_RESPONSE,
++        CREDENTIALS_CHANGED,
++    }
++}
++
++data class TvdbOrder(val type: String, val name: String)
++
++data class TvdbEpisode(
++    val id: Long,
++    val season: Int,
++    val number: Int,
++    val title: String,
++    val overview: String?,
++    val image: String?,
++    val aired: String?,
++    val runtime: Int?,
++)
++
++data class TvdbEpisodeOrder(
++    val selectedType: String,
++    val effectiveType: String,
++    val episodes: List<TvdbEpisode>,
++    val officialEpisodes: List<TvdbEpisode>,
++    val stale: Boolean = false,
++    val relatedOrders: Map<String, List<TvdbEpisode>> = emptyMap(),
++)
++
++data class TvdbOrderPreference(val seriesId: Long, val orderType: String)
++
++internal fun normalizeTvdbOrderType(value: String?): String? =
++    value?.trim()?.takeIf { it.isNotEmpty() && it.matches(Regex("[A-Za-z0-9_-]+")) }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbOrderControl.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbOrderControl.kt
+new file mode 100644
+index 0000000..44f1897
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbOrderControl.kt
+@@ -0,0 +1,172 @@
++package com.nuvio.app.features.tvdb
++
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.heightIn
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.foundation.lazy.items
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Surface
++import androidx.compose.material3.Text
++import androidx.compose.material3.TextButton
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.staticCompositionLocalOf
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.window.Dialog
++
++/**
++ * Row entry point for the episode-order control, rendered by the series episode
++ * list. The detail screen provides the actions; other consumers of the episode
++ * list render nothing when no actions are provided.
++ */
++data class TvdbOrderControlActions(
++    val visible: Boolean,
++    val label: String,
++    val statusMessage: String? = null,
++    val onClick: () -> Unit = {},
++)
++
++val LocalTvdbOrderControl = staticCompositionLocalOf<TvdbOrderControlActions?> { null }
++
++@Composable
++internal fun TvdbOrderControlRow(actions: TvdbOrderControlActions) {
++    if (!actions.visible) return
++    Row(
++        modifier = Modifier
++            .fillMaxWidth()
++            .padding(bottom = 8.dp),
++        horizontalArrangement = Arrangement.SpaceBetween,
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        TextButton(onClick = actions.onClick) {
++            Text(
++                text = actions.label,
++                style = MaterialTheme.typography.labelLarge,
++                maxLines = 2,
++                overflow = TextOverflow.Ellipsis,
++            )
++        }
++    }
++}
++
++@Composable
++internal fun TvdbOrderPickerDialog(
++    state: TvdbEpisodeOrderUiState,
++    selectedType: String?,
++    onDismiss: () -> Unit,
++    onSelect: (String?) -> Unit,
++) {
++    if (!state.pickerOpen) return
++    Dialog(onDismissRequest = onDismiss) {
++        Surface(
++            shape = RoundedCornerShape(20.dp),
++            color = MaterialTheme.colorScheme.surface,
++            tonalElevation = 6.dp,
++            modifier = Modifier.fillMaxWidth(),
++        ) {
++            Column(
++                modifier = Modifier.padding(20.dp),
++                verticalArrangement = Arrangement.spacedBy(10.dp),
++            ) {
++                Text(
++                    text = "Episode order",
++                    style = MaterialTheme.typography.titleLarge,
++                    fontWeight = FontWeight.SemiBold,
++                )
++                Text(
++                    text = state.pickerError
++                        ?: "Show episodes in an alternative TheTVDB order, or keep the metadata provider numbering.",
++                    style = MaterialTheme.typography.bodyMedium,
++                    color = if (state.pickerError != null) {
++                        MaterialTheme.colorScheme.error
++                    } else {
++                        MaterialTheme.colorScheme.onSurfaceVariant
++                    },
++                )
++                LazyColumn(
++                    modifier = Modifier.heightIn(max = 380.dp),
++                    verticalArrangement = Arrangement.spacedBy(4.dp),
++                ) {
++                    item(key = "provider") {
++                        TvdbOrderOptionRow(
++                            title = "Default (metadata provider)",
++                            selected = selectedType == null,
++                            enabled = !state.pickerBusy,
++                            onClick = { onSelect(null) },
++                        )
++                    }
++                    if (state.pickerBusy) {
++                        item(key = "busy") {
++                            Text(
++                                text = "Loading…",
++                                style = MaterialTheme.typography.bodyMedium,
++                                color = MaterialTheme.colorScheme.onSurfaceVariant,
++                                modifier = Modifier.padding(vertical = 8.dp),
++                            )
++                        }
++                    }
++                    items(state.orders, key = { it.type }) { order ->
++                        TvdbOrderOptionRow(
++                            title = order.name,
++                            selected = selectedType == order.type,
++                            enabled = !state.pickerBusy,
++                            onClick = { onSelect(order.type) },
++                        )
++                    }
++                    if (state.pickerError != null) {
++                        item(key = "retry") {
++                            TextButton(onClick = onDismiss) {
++                                Text("Close")
++                            }
++                        }
++                    }
++                }
++                Text(
++                    text = "Episode metadata provided by TheTVDB",
++                    style = MaterialTheme.typography.labelSmall,
++                    color = MaterialTheme.colorScheme.onSurfaceVariant,
++                )
++            }
++        }
++    }
++}
++
++@Composable
++private fun TvdbOrderOptionRow(
++    title: String,
++    selected: Boolean,
++    enabled: Boolean,
++    onClick: () -> Unit,
++) {
++    Surface(
++        shape = RoundedCornerShape(12.dp),
++        color = if (selected) {
++            MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
++        } else {
++            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
++        },
++        modifier = Modifier.fillMaxWidth(),
++        onClick = onClick,
++        enabled = enabled,
++    ) {
++        Row(
++            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
++            verticalAlignment = Alignment.CenterVertically,
++        ) {
++            Text(
++                text = if (selected) "✓ $title" else title,
++                style = MaterialTheme.typography.bodyLarge,
++                maxLines = 2,
++                overflow = TextOverflow.Ellipsis,
++            )
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbOrderRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbOrderRepository.kt
+new file mode 100644
+index 0000000..3a402b0
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbOrderRepository.kt
+@@ -0,0 +1,159 @@
++package com.nuvio.app.features.tvdb
++
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.sync.Mutex
++import kotlinx.coroutines.sync.withLock
++import kotlinx.coroutines.withTimeoutOrNull
++
++/**
++ * Bounded metadata cache for TVDB episode orders — not a separate episode or
++ * history database. Order data is fresh for 24 hours; authentication failures keep
++ * an existing complete cache usable with an explicit stale indication.
++ */
++class TvdbOrderRepository(private val api: TvdbClient) {
++    private data class Cached<T>(val value: T, val at: Long)
++
++    private val mutex = Mutex()
++    private val discoveries = LinkedHashMap<String, Cached<List<TvdbOrder>>>()
++    private val orders = LinkedHashMap<String, Cached<TvdbEpisodeOrder>>()
++
++    private fun <T> LinkedHashMap<String, T>.lruGet(key: String): T? {
++        val value = remove(key) ?: return null
++        put(key, value)
++        trim(LRU_LIMIT)
++        return value
++    }
++
++    private fun <T> LinkedHashMap<String, T>.lruPut(key: String, value: T) {
++        remove(key)
++        put(key, value)
++        trim(LRU_LIMIT)
++    }
++
++    private fun <T> LinkedHashMap<String, T>.trim(limit: Int) {
++        while (size > limit) remove(keys.first())
++    }
++
++    private fun fresh(at: Long): Boolean {
++        val age = nowEpochMs() - at
++        return age in 0 until FRESH_MS
++    }
++
++    private fun nowEpochMs(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
++
++    suspend fun available(profileId: Int, seriesId: Long): List<TvdbOrder> = mutex.withLock {
++        discover(profileId, seriesId)
++    }
++
++    private suspend fun discover(profileId: Int, seriesId: Long): List<TvdbOrder> {
++        discoveries.lruGet(seriesId.toString())?.takeIf { fresh(it.at) }?.let { return it.value }
++        val result = api.orders(profileId, seriesId)
++        discoveries.lruPut(seriesId.toString(), Cached(result, nowEpochMs()))
++        return result
++    }
++
++    suspend fun load(
++        profileId: Int,
++        seriesId: Long,
++        selected: String,
++        language: String = "eng",
++        includeRelated: Boolean = false,
++    ): TvdbEpisodeOrder = mutex.withLock {
++        val current = loadBase(profileId, seriesId, selected, language)
++        if (!includeRelated) return@withLock current
++        val related = linkedMapOf(
++            "official" to current.officialEpisodes,
++            selected to current.episodes,
++        )
++        // Supplementary metadata must not turn a successful selected-order load
++        // into a timeout. Partial supplementary reads are safe.
++        withTimeoutOrNull(SUPPLEMENTARY_TIMEOUT_MS) {
++            for (type in discover(profileId, seriesId).map { it.type }) {
++                if (type in related) continue
++                try {
++                    val key = "$seriesId:$type:$language"
++                    val cached = orders.lruGet(key)?.takeIf { fresh(it.at) }?.value?.episodes
++                    val episodes = cached ?: api.episodes(profileId, seriesId, type, language).also { rows ->
++                        if (rows.isNotEmpty()) {
++                            orders.lruPut(
++                                key,
++                                Cached(
++                                    TvdbEpisodeOrder(type, type, rows, current.officialEpisodes),
++                                    nowEpochMs(),
++                                ),
++                            )
++                        }
++                    }
++                    if (episodes.isNotEmpty()) related[type] = episodes
++                } catch (cancelled: CancellationException) {
++                    throw cancelled
++                } catch (_: TvdbException) {
++                    // Only the selected order may perform an expensive season fallback.
++                }
++            }
++        }
++        current.copy(relatedOrders = related)
++    }
++
++    private suspend fun loadBase(
++        profileId: Int,
++        seriesId: Long,
++        selected: String,
++        language: String,
++    ): TvdbEpisodeOrder {
++        val key = "$seriesId:$selected:$language"
++        val cached = orders.lruGet(key)
++        cached?.takeIf { fresh(it.at) }?.let { return it.value }
++        return try {
++            val available = discover(profileId, seriesId)
++            // Only an affirmative discovery response establishes unavailability.
++            val effective = if (selected == "official" || available.any { it.type == selected }) selected else "official"
++            val officialKey = "$seriesId:official:$language"
++            val official = orders.lruGet(officialKey)?.takeIf { fresh(it.at) }?.value?.officialEpisodes
++                ?: api.episodes(profileId, seriesId, "official", language).also { rows ->
++                    if (rows.isNotEmpty()) {
++                        orders.lruPut(
++                            officialKey,
++                            Cached(
++                                TvdbEpisodeOrder("official", "official", rows, rows),
++                                nowEpochMs(),
++                            ),
++                        )
++                    }
++                }
++            var effectiveType = effective
++            var episodes = if (effective == "official") official else try {
++                api.episodes(profileId, seriesId, effective, language)
++            } catch (e: TvdbException) {
++                if (e.reason != TvdbException.Reason.UNAVAILABLE) throw e
++                emptyList()
++            }
++            if (episodes.isEmpty() && effective != "official") {
++                val base = official.associateBy { it.id }
++                episodes = api.episodesFromSeasons(profileId, seriesId, effective).map { episode ->
++                    base[episode.id]?.copy(season = episode.season, number = episode.number) ?: episode
++                }
++                if (episodes.isEmpty()) {
++                    effectiveType = "official"
++                    episodes = official
++                }
++            }
++            if (episodes.isEmpty() || official.isEmpty()) throw TvdbException(TvdbException.Reason.UNAVAILABLE)
++            TvdbEpisodeOrder(selected, effectiveType, episodes, official).also {
++                orders.lruPut(key, Cached(it, nowEpochMs()))
++            }
++        } catch (cancelled: CancellationException) {
++            throw cancelled
++        } catch (e: TvdbException) {
++            // Authentication errors are not treated as missing orders. Existing
++            // complete data remains usable with an explicit stale indication.
++            cached?.value?.copy(stale = true) ?: throw e
++        }
++    }
++
++    private companion object {
++        const val LRU_LIMIT = 32
++        const val FRESH_MS = 24L * 60 * 60 * 1000
++        const val SUPPLEMENTARY_TIMEOUT_MS = 5_000L
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbOrderStore.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbOrderStore.kt
+new file mode 100644
+index 0000000..62c5aba
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbOrderStore.kt
+@@ -0,0 +1,38 @@
++package com.nuvio.app.features.tvdb
++
++/**
++ * Per-profile, per-series episode order selection. Selections are learned at
++ * explicit selection time only; reading never resolves IDs online.
++ */
++object TvdbOrderStore {
++    private val orderRegex = Regex("[A-Za-z0-9_-]+")
++
++    fun knownSeries(aliases: Collection<String>): Long? {
++        val ids = aliases.mapNotNull { alias ->
++            runCatching { TvdbSettingsStorage.loadAliasSeriesId(alias) }.getOrNull()
++        }.filter { it != null && it > 0 }.distinct()
++        return ids.singleOrNull()
++    }
++
++    fun selected(aliases: Collection<String>): TvdbOrderPreference? {
++        val id = knownSeries(aliases) ?: return null
++        val order = loadOrder(id) ?: return null
++        return TvdbOrderPreference(id, order)
++    }
++
++    fun loadOrder(seriesId: Long): String? {
++        if (seriesId <= 0) return null
++        return normalizeTvdbOrderType(
++            runCatching { TvdbSettingsStorage.loadOrder(seriesId) }.getOrNull(),
++        )
++    }
++
++    suspend fun save(seriesId: Long, order: String?, aliases: Collection<String>) {
++        require(seriesId > 0)
++        require(order == null || orderRegex.matches(order))
++        TvdbSettingsStorage.saveOrder(seriesId, order)
++        aliases.filter(String::isNotBlank).forEach { alias ->
++            runCatching { TvdbSettingsStorage.saveAliasSeriesId(alias, seriesId) }
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbSettingsPage.kt
+new file mode 100644
+index 0000000..c07c92b
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbSettingsPage.kt
+@@ -0,0 +1,136 @@
++package com.nuvio.app.features.tvdb
++
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.lazy.LazyListScope
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.material3.TextButton
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.rememberCoroutineScope
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.unit.dp
++import com.nuvio.app.features.profiles.ProfileRepository
++import com.nuvio.app.features.settings.SettingsGroup
++import com.nuvio.app.features.settings.SettingsSecretTextField
++import com.nuvio.app.features.settings.SettingsSection
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.launch
++
++/**
++ * TheTVDB episode ordering settings: per-profile API key with masked input and a
++ * test-connection action. The key is stored profile-scoped and never logged.
++ */
++internal fun LazyListScope.tvdbSettingsContent(isTablet: Boolean) {
++    item {
++        val scope = rememberCoroutineScope()
++        var apiKey by remember { mutableStateOf(TvdbCredentialStore.savedKey().orEmpty()) }
++        var testState by remember { mutableStateOf(TvdbTestState.Idle) }
++        SettingsSection(title = "TheTVDB Episode Ordering", isTablet = isTablet) {
++            SettingsGroup(isTablet = isTablet) {
++                SettingsSecretTextField(
++                    value = apiKey,
++                    onValueChange = { value ->
++                        apiKey = value
++                        testState = TvdbTestState.Idle
++                        scope.launch {
++                            TvdbCredentialStore.save(ProfileRepository.activeProfileId, value)
++                        }
++                    },
++                    label = "TVDB v4 API key",
++                    modifier = Modifier
++                        .fillMaxWidth()
++                        .padding(horizontal = 16.dp, vertical = 12.dp),
++                )
++                Text(
++                    text = "Powers alternative episode orders (DVD, absolute, aired) on series detail " +
++                        "screens. Each profile keeps its own key. Get a free key at thetvdb.com.",
++                    style = MaterialTheme.typography.bodySmall,
++                    color = MaterialTheme.colorScheme.onSurfaceVariant,
++                    modifier = Modifier
++                        .fillMaxWidth()
++                        .padding(horizontal = 16.dp),
++                )
++                TextButton(
++                    onClick = {
++                        if (testState == TvdbTestState.Testing) return@TextButton
++                        val key = apiKey.trim()
++                        if (key.isEmpty()) {
++                            testState = TvdbTestState.Failed("Enter an API key first.")
++                            return@TextButton
++                        }
++                        testState = TvdbTestState.Testing
++                        val profile = ProfileRepository.activeProfileId
++                        scope.launch {
++                            testState = try {
++                                TvdbClient(TvdbCredentialStore).testConnection(profile)
++                                TvdbTestState.Passed
++                            } catch (cancelled: CancellationException) {
++                                throw cancelled
++                            } catch (e: TvdbException) {
++                                TvdbTestState.Failed(tvdbTestFailureMessage(e.reason))
++                            } catch (_: Exception) {
++                                TvdbTestState.Failed(tvdbTestFailureMessage(TvdbException.Reason.NETWORK))
++                            }
++                        }
++                    },
++                    enabled = testState != TvdbTestState.Testing,
++                    modifier = Modifier.padding(horizontal = 8.dp),
++                ) {
++                    Text(
++                        text = when (testState) {
++                            TvdbTestState.Idle -> "Test connection"
++                            TvdbTestState.Testing -> "Testing…"
++                            TvdbTestState.Passed -> "Connected — try again"
++                            is TvdbTestState.Failed -> "Retry connection test"
++                        },
++                    )
++                }
++                when (val state = testState) {
++                    TvdbTestState.Idle -> Unit
++                    TvdbTestState.Testing -> Unit
++                    TvdbTestState.Passed -> Text(
++                        text = "Connection OK. The key is stored for this profile only.",
++                        style = MaterialTheme.typography.bodySmall,
++                        color = MaterialTheme.colorScheme.primary,
++                        modifier = Modifier.padding(horizontal = 16.dp),
++                    )
++                    is TvdbTestState.Failed -> Text(
++                        text = state.message,
++                        style = MaterialTheme.typography.bodySmall,
++                        color = MaterialTheme.colorScheme.error,
++                        modifier = Modifier.padding(horizontal = 16.dp),
++                    )
++                }
++                Text(
++                    text = "Pick an episode order per series from its detail screen.",
++                    style = MaterialTheme.typography.bodySmall,
++                    color = MaterialTheme.colorScheme.onSurfaceVariant,
++                    modifier = Modifier
++                        .fillMaxWidth()
++                        .padding(horizontal = 16.dp, vertical = 8.dp),
++                )
++            }
++        }
++    }
++}
++
++internal sealed class TvdbTestState {
++    data object Idle : TvdbTestState()
++    data object Testing : TvdbTestState()
++    data object Passed : TvdbTestState()
++    data class Failed(val message: String) : TvdbTestState()
++}
++
++private fun tvdbTestFailureMessage(reason: TvdbException.Reason): String = when (reason) {
++    TvdbException.Reason.NO_KEY -> "No API key configured."
++    TvdbException.Reason.AUTHENTICATION -> "TheTVDB rejected the key."
++    TvdbException.Reason.RATE_LIMIT -> "Rate limited by TheTVDB. Try again shortly."
++    TvdbException.Reason.UNAVAILABLE -> "TheTVDB endpoint is unavailable."
++    TvdbException.Reason.NETWORK -> "Network error reaching TheTVDB."
++    TvdbException.Reason.INVALID_RESPONSE -> "Unexpected response from TheTVDB."
++    TvdbException.Reason.CREDENTIALS_CHANGED -> "Key changed during the test."
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbSettingsStorage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbSettingsStorage.kt
+new file mode 100644
+index 0000000..39ba886
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbSettingsStorage.kt
+@@ -0,0 +1,17 @@
++package com.nuvio.app.features.tvdb
++
++/**
++ * Profile-scoped persistence for the TVDB integration. Keys are stored under the
++ * active profile (see ProfileScopedKey) so each profile carries its own API key and
++ * per-series order selections. Implementations must never log credential values.
++ */
++internal expect object TvdbSettingsStorage {
++    fun loadApiKey(): String?
++    fun saveApiKey(value: String?)
++
++    fun loadAliasSeriesId(alias: String): Long?
++    fun saveAliasSeriesId(alias: String, seriesId: Long)
++
++    fun loadOrder(seriesId: Long): String?
++    fun saveOrder(seriesId: Long, order: String?)
++}
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/tvdb/TvdbSettingsStorage.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/tvdb/TvdbSettingsStorage.ios.kt
+new file mode 100644
+index 0000000..5246435
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/tvdb/TvdbSettingsStorage.ios.kt
+@@ -0,0 +1,58 @@
++package com.nuvio.app.features.tvdb
++
++import com.nuvio.app.core.storage.ProfileScopedKey
++import platform.Foundation.NSUserDefaults
++
++internal actual object TvdbSettingsStorage {
++    private const val apiKeyKey = "tvdb_api_key"
++    private const val aliasKeyPrefix = "tvdb_series_"
++    private const val orderKeyPrefix = "tvdb_order_"
++
++    actual fun loadApiKey(): String? =
++        NSUserDefaults.standardUserDefaults
++            .stringForKey(ProfileScopedKey.of(apiKeyKey))
++            ?.takeIf(String::isNotBlank)
++
++    actual fun saveApiKey(value: String?) {
++        val defaults = NSUserDefaults.standardUserDefaults
++        val scopedKey = ProfileScopedKey.of(apiKeyKey)
++        if (value.isNullOrBlank()) {
++            defaults.removeObjectForKey(scopedKey)
++        } else {
++            defaults.setObject(value.trim(), forKey = scopedKey)
++        }
++    }
++
++    actual fun loadAliasSeriesId(alias: String): Long? {
++        if (alias.isBlank()) return null
++        val key = ProfileScopedKey.of(aliasKeyPrefix + alias)
++        val defaults = NSUserDefaults.standardUserDefaults
++        if (defaults.objectForKey(key) == null) return null
++        return defaults.integerForKey(key).takeIf { it > 0 }
++    }
++
++    actual fun saveAliasSeriesId(alias: String, seriesId: Long) {
++        if (alias.isBlank() || seriesId <= 0) return
++        NSUserDefaults.standardUserDefaults
++            .setInteger(seriesId, forKey = ProfileScopedKey.of(aliasKeyPrefix + alias))
++    }
++
++    actual fun loadOrder(seriesId: Long): String? {
++        if (seriesId <= 0) return null
++        val key = ProfileScopedKey.of(orderKeyPrefix + seriesId)
++        return NSUserDefaults.standardUserDefaults
++            .stringForKey(key)
++            ?.takeIf(String::isNotBlank)
++    }
++
++    actual fun saveOrder(seriesId: Long, order: String?) {
++        if (seriesId <= 0) return
++        val defaults = NSUserDefaults.standardUserDefaults
++        val key = ProfileScopedKey.of(orderKeyPrefix + seriesId)
++        if (order.isNullOrBlank()) {
++            defaults.removeObjectForKey(key)
++        } else {
++            defaults.setObject(order.trim(), forKey = key)
++        }
++    }
++}

@@ -1,0 +1,23 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt
+index adb11cd..c6cc990 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/updater/ForkBuild.kt
+@@ -13,6 +13,10 @@ internal object ForkBuild {
+     private const val TAG_PREFIX = "fork-build-"
+     private val assetPattern = Regex("-b(\\d+)\\.apk$", RegexOption.IGNORE_CASE)
+ 
++    // Hardening: only trust assets hosted under this fork's own releases/download/ path, so a
++    // spoofed or compromised release pointing at a foreign URL is never offered for install.
++    private const val ALLOWED_ASSET_PREFIX = "https://github.com/$REPO/releases/download/"
++
+     val localBuild: Int
+         get() = AppVersionConfig.VERSION_NAME.substringAfter("-fork.", "").toIntOrNull() ?: 0
+ 
+@@ -32,6 +36,7 @@ internal object ForkBuild {
+             for (asset in release.assets) {
+                 val build = assetPattern.find(asset.name)?.groupValues?.get(1)?.toIntOrNull() ?: continue
+                 if (build <= bestBuild) continue
++                if (!asset.browserDownloadUrl.startsWith(ALLOWED_ASSET_PREFIX)) continue
+                 bestBuild = build
+                 val name = release.name?.takeIf { it.isNotBlank() } ?: release.tagName.orEmpty()
+                 best = AppUpdate(

@@ -1,0 +1,3514 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
+index 510ce81..f0ace85 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
+@@ -159,6 +159,9 @@ open class MainActivity : AppCompatActivity() {
+         PlatformLocalAccountDataCleaner.initialize(applicationContext)
+         EpisodeReleaseNotificationPlatform.initialize(applicationContext)
+         EpisodeReleaseNotificationPlatform.bindActivity(this)
++        com.nuvio.app.features.highlights.SmartHighlightsStorage.initialize(applicationContext) // Nuvio fork: smart highlights + Gemini key
++        com.nuvio.app.features.reminders.ReleaseRemindersStorage.initialize(applicationContext) // Nuvio fork: release reminders
++        com.nuvio.app.features.reminders.ReleaseReminderNotificationPlatform.initialize(applicationContext) // Nuvio fork: release reminders
+         handleIncomingAppIntent(intent)
+ 
+         var contentShown = false
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.android.kt
+new file mode 100644
+index 0000000..7c6167a
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.android.kt
+@@ -0,0 +1,23 @@
++package com.nuvio.app.features.highlights
++
++import io.ktor.client.HttpClient
++import io.ktor.client.engine.okhttp.OkHttp
++import io.ktor.client.plugins.HttpTimeout
++import java.util.concurrent.TimeUnit
++
++internal actual fun createGeminiHttpClient(): HttpClient = HttpClient(OkHttp) {
++    expectSuccess = false
++    install(HttpTimeout) {
++        connectTimeoutMillis = 5_000
++        socketTimeoutMillis = 10_000
++        requestTimeoutMillis = 10_000
++    }
++    engine {
++        config {
++            retryOnConnectionFailure(false)
++            connectTimeout(5, TimeUnit.SECONDS)
++            readTimeout(10, TimeUnit.SECONDS)
++            callTimeout(10, TimeUnit.SECONDS)
++        }
++    }
++}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsStorage.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsStorage.android.kt
+new file mode 100644
+index 0000000..777347d
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsStorage.android.kt
+@@ -0,0 +1,67 @@
++package com.nuvio.app.features.highlights
++
++import android.content.Context
++import android.content.SharedPreferences
++import com.nuvio.app.core.storage.ProfileScopedKey
++
++internal actual object SmartHighlightsStorage {
++    private const val preferencesName = "nuvio_smart_highlights"
++    private const val enabledKey = "smart_highlights_enabled"
++    private const val apiKeyKey = "gemini_api_key"
++    private const val rankingCacheKey = "gemini_ranking_cache"
++
++    private var preferences: SharedPreferences? = null
++
++    fun initialize(context: Context) {
++        preferences = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
++    }
++
++    actual fun loadEnabled(): Boolean? =
++        preferences?.let { sharedPreferences ->
++            val key = ProfileScopedKey.of(enabledKey)
++            if (sharedPreferences.contains(key)) {
++                sharedPreferences.getBoolean(key, true)
++            } else {
++                null
++            }
++        }
++
++    actual fun saveEnabled(enabled: Boolean) {
++        preferences
++            ?.edit()
++            ?.putBoolean(ProfileScopedKey.of(enabledKey), enabled)
++            ?.apply()
++    }
++
++    actual fun loadApiKey(): String? =
++        preferences?.getString(ProfileScopedKey.of(apiKeyKey), null)
++            ?.trim()
++            ?.takeIf { it.isNotEmpty() }
++
++    actual fun saveApiKey(apiKey: String) {
++        val editor = preferences?.edit() ?: return
++        val normalized = apiKey.trim()
++        if (normalized.isEmpty()) {
++            editor.remove(ProfileScopedKey.of(apiKeyKey)).apply()
++        } else {
++            editor.putString(ProfileScopedKey.of(apiKeyKey), normalized).apply()
++        }
++    }
++
++    actual fun loadRankingCache(): String? =
++        preferences?.getString(ProfileScopedKey.of(rankingCacheKey), null)
++
++    actual fun saveRankingCache(payload: String) {
++        preferences
++            ?.edit()
++            ?.putString(ProfileScopedKey.of(rankingCacheKey), payload)
++            ?.apply()
++    }
++
++    actual fun clearRankingCache() {
++        preferences
++            ?.edit()
++            ?.remove(ProfileScopedKey.of(rankingCacheKey))
++            ?.apply()
++    }
++}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/DxStreamStatsAndroid.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/DxStreamStatsAndroid.kt
+index 43a2f7a..27e252f 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/DxStreamStatsAndroid.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/DxStreamStatsAndroid.kt
+@@ -31,6 +31,12 @@ internal fun dxFormatBitrate(bitsPerSecond: Long): String = when {
+     else -> "unknown"
+ }
+ 
++/** Nuvio fork: the latest measured speed-test result, shown under the Download row when fresh. */
++internal fun autoQualitySpeedTestRow(): Pair<String, String>? {
++    val bps = AutoQualitySpeedTest.latestBps() ?: return null
++    return "Speed test" to dxFormatBitrate(bps)
++}
++
+ /**
+  * dx.bi stream stats for the ExoPlayer engine: the video and audio Format, the video DecoderCounters, the buffered
+  * position, the bytes the player's own network counter saw in the last second and the shared BandwidthMeter estimate.
+@@ -86,6 +92,7 @@ internal class DxExoStats(
+         val estimate = runCatching { DefaultBandwidthMeter.getSingletonInstance(context).bitrateEstimate }.getOrDefault(C.LENGTH_UNSET.toLong())
+         val estimateText = if (estimate > 0L) " (est. ${dxFormatBitrate(estimate)})" else ""
+         rows += "Download" to dxFormatRate(lastSpeed) + estimateText
++        autoQualitySpeedTestRow()?.let { rows += it } // Nuvio fork: speed test
+         return rows
+     }
+ }
+@@ -124,5 +131,6 @@ internal fun dxMpvStats(property: (String) -> String?): List<Pair<String, String
+     val dropped = (property("frame-drop-count")?.toLongOrNull() ?: 0L) + (property("decoder-frame-drop-count")?.toLongOrNull() ?: 0L)
+     rows += "Dropped frames" to dropped.toString()
+     property("cache-speed")?.toDoubleOrNull()?.let { rows += "Download" to dxFormatRate(it) }
++    autoQualitySpeedTestRow()?.let { rows += it } // Nuvio fork: speed test
+     return rows
+ }
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+index bf679c9..62bb82e 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+@@ -303,6 +303,8 @@ private fun ExoPlayerSurface(
+     var selectedExternalSubtitleMimeType by remember(playerSourceKey) { mutableStateOf<String?>(null) }
+     val latestSubtitleDelayMs = rememberUpdatedState(subtitleDelayMs)
+     val latestExternalSubtitleMimeType = rememberUpdatedState(selectedExternalSubtitleMimeType)
++    // Nuvio fork: the auto quality speed test's sampling hook (set through the controller).
++    val latestAutoQualitySampleListener = rememberUpdatedState<PlayerBandwidthSampleListener?>(null)
+     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
+     var videoAspectRatio by remember(playerSourceKey) { mutableStateOf(0f) }
+     val latestVideoAspectRatio = rememberUpdatedState(videoAspectRatio)
+@@ -841,10 +843,23 @@ private fun ExoPlayerSurface(
+ 
+         }
+         exoPlayer.addListener(listener)
++        // Nuvio fork: forward the player's own bandwidth meter to the auto quality speed test.
++        val autoQualityAnalyticsListener = object : androidx.media3.exoplayer.analytics.AnalyticsListener {
++            override fun onBandwidthSample(
++                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
++                elapsedMs: Int,
++                bytes: Long,
++                bitrate: Long,
++            ) {
++                latestAutoQualitySampleListener.value?.onBandwidthSample(bitrate)
++            }
++        }
++        exoPlayer.addAnalyticsListener(autoQualityAnalyticsListener)
+         onDispose {
+             PlayerPictureInPictureManager.registerPausePlaybackCallback(null)
+             PlayerPictureInPictureManager.registerTogglePlaybackCallback(null)
+             exoPlayer.removeListener(listener)
++            exoPlayer.removeAnalyticsListener(autoQualityAnalyticsListener)
+             playerViewRef?.keepScreenOn = false
+             subtitleSelectionJob?.cancel()
+             sidecarController.stopSidecarAddonSubtitle(clearView = true)
+@@ -965,6 +980,11 @@ private fun ExoPlayerSurface(
+                     exoPlayer.applyVideoQuality(heightPx)
+                 }
+ 
++                // Nuvio fork: the auto quality speed test's sampling hook.
++                override fun setAutoQualityBandwidthListener(listener: PlayerBandwidthSampleListener?) {
++                    latestAutoQualitySampleListener.value = listener
++                }
++
+                 override fun supportsSmartEnhance(): Boolean = true
+ 
+                 override fun setSmartEnhance(enabled: Boolean) {
+@@ -1307,6 +1327,15 @@ private fun LibmpvPlayerSurface(
+     )
+     var playerViewRef by remember { mutableStateOf<NuvioLibmpvView?>(null) }
+     MpvThroughputEffect(playerViewRef, sourceUrl) { playerViewRef?.networkActivity() } // Nuvio fork: connection-speed learning
++    // Nuvio fork: mpv has no rendition hot swap, but its demuxer fill rate is a real throughput
++    // measurement and feeds the speed-test row of the stream stats overlay.
++    LaunchedEffect(playerViewRef) {
++        while (isActive) {
++            delay(1_000L)
++            val bytesPerSecond = playerViewRef?.networkActivity()?.first ?: 0L
++            AutoQualitySpeedTest.recordBytesPerSecondRate(bytesPerSecond)
++        }
++    }
+     val nowPlayingController = remember(context, playerViewRef) {
+         playerViewRef?.let { view ->
+             AndroidPlayerNowPlayingController(
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerSettingsStorage.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerSettingsStorage.android.kt
+index b0cbeaa..6aa496c 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerSettingsStorage.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerSettingsStorage.android.kt
+@@ -88,6 +88,8 @@ actual object PlayerSettingsStorage {
+     private const val localCreditsDetectionEnabledKey = "local_credits_detection_enabled"
+     private const val playbackIntroEnabledKey = "playback_intro_enabled"
+     private const val playbackIntroLengthSecondsKey = "playback_intro_length_seconds"
++    private const val autoQualityEnabledKey = "auto_quality_enabled"
++    private const val fastStartEnabledKey = "fast_start_enabled"
+     private const val streamAutoPlayNextEpisodeEnabledKey = "stream_auto_play_next_episode_enabled"
+     private const val streamAutoPlayNextEpisodeFallbackEnabledKey = "stream_auto_play_next_episode_fallback_enabled"
+     private const val streamAutoPlayPreferBingeGroupKey = "stream_auto_play_prefer_binge_group"
+@@ -167,6 +169,8 @@ actual object PlayerSettingsStorage {
+         localCreditsDetectionEnabledKey,
+         playbackIntroEnabledKey,
+         playbackIntroLengthSecondsKey,
++        autoQualityEnabledKey,
++        fastStartEnabledKey,
+         streamAutoPlayNextEpisodeEnabledKey,
+         streamAutoPlayNextEpisodeFallbackEnabledKey,
+         streamAutoPlayPreferBingeGroupKey,
+@@ -1080,6 +1084,41 @@ actual object PlayerSettingsStorage {
+             ?.apply()
+     }
+ 
++    // Nuvio fork: auto quality hot swap and fast start.
++    actual fun loadAutoQualityEnabled(): Boolean? =
++        preferences?.let { sharedPreferences ->
++            val key = ProfileScopedKey.of(autoQualityEnabledKey)
++            if (sharedPreferences.contains(key)) {
++                sharedPreferences.getBoolean(key, true)
++            } else {
++                null
++            }
++        }
++
++    actual fun saveAutoQualityEnabled(enabled: Boolean) {
++        preferences
++            ?.edit()
++            ?.putBoolean(ProfileScopedKey.of(autoQualityEnabledKey), enabled)
++            ?.apply()
++    }
++
++    actual fun loadFastStartEnabled(): Boolean? =
++        preferences?.let { sharedPreferences ->
++            val key = ProfileScopedKey.of(fastStartEnabledKey)
++            if (sharedPreferences.contains(key)) {
++                sharedPreferences.getBoolean(key, false)
++            } else {
++                null
++            }
++        }
++
++    actual fun saveFastStartEnabled(enabled: Boolean) {
++        preferences
++            ?.edit()
++            ?.putBoolean(ProfileScopedKey.of(fastStartEnabledKey), enabled)
++            ?.apply()
++    }
++
+     actual fun saveAnimeSkipEnabled(enabled: Boolean) {
+         preferences
+             ?.edit()
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/reminders/ReleaseReminderNotificationPlatform.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/reminders/ReleaseReminderNotificationPlatform.android.kt
+new file mode 100644
+index 0000000..fabb6b3
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/reminders/ReleaseReminderNotificationPlatform.android.kt
+@@ -0,0 +1,184 @@
++package com.nuvio.app.features.reminders
++
++import android.app.NotificationChannel
++import android.app.NotificationManager
++import android.app.PendingIntent
++import android.content.Context
++import android.content.Intent
++import androidx.core.app.NotificationCompat
++import androidx.core.app.NotificationManagerCompat
++import androidx.work.Data
++import androidx.work.ExistingWorkPolicy
++import androidx.work.OneTimeWorkRequestBuilder
++import androidx.work.Operation
++import androidx.work.WorkManager
++import com.nuvio.app.core.deeplink.buildMetaDeepLinkUrl
++import com.nuvio.app.core.storage.ProfileScopedKey
++import com.nuvio.app.features.settings.AppIconPlatform
++import java.util.concurrent.TimeUnit
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.runBlocking
++import kotlinx.coroutines.withContext
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.reminders_channel_description
++import nuvio.composeapp.generated.resources.reminders_channel_name
++import nuvio.composeapp.generated.resources.reminders_notification_body
++import nuvio.composeapp.generated.resources.reminders_notification_title_released
++import org.jetbrains.compose.resources.getString
++
++internal actual object ReleaseReminderNotificationPlatform {
++    private const val platformPreferencesName = "nuvio_release_reminders_platform"
++    private const val scheduledIdsKey = "scheduled_release_reminder_ids"
++    private const val workTag = "release_reminder_notifications"
++    internal const val channelId = "release_reminder_notifications"
++    internal const val workerItemIdKey = "item_id"
++    internal const val workerTitleKey = "title"
++    internal const val workerReleaseDateMsKey = "release_date_ms"
++
++    private var appContext: Context? = null
++
++    fun initialize(context: Context) {
++        appContext = context.applicationContext
++        ensureNotificationChannel()
++    }
++
++    internal suspend fun buildNotification(context: Context, reminder: ReleaseReminder): android.app.Notification {
++        val releaseDateText = formatReminderReleaseDate(reminder.releaseDateMs)
++        val title = runBlocking { getString(Res.string.reminders_notification_title_released, reminder.title) }
++        val body = runBlocking { getString(Res.string.reminders_notification_body, releaseDateText) }
++        val launchIntent = Intent().apply {
++            component = AppIconPlatform.currentLauncherComponent(context)
++            action = Intent.ACTION_VIEW
++            data = android.net.Uri.parse(
++                buildMetaDeepLinkUrl(type = reminder.itemType, id = reminder.contentId),
++            )
++            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
++                Intent.FLAG_ACTIVITY_CLEAR_TOP or
++                Intent.FLAG_ACTIVITY_SINGLE_TOP
++        }
++        val pendingIntent = PendingIntent.getActivity(
++            context,
++            kotlin.math.abs(reminder.itemId.hashCode()),
++            launchIntent,
++            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
++        )
++        return NotificationCompat.Builder(context, channelId)
++            .setSmallIcon(com.nuvio.app.R.drawable.ic_notification_small)
++            .setContentTitle(title)
++            .setContentText(body)
++            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
++            .setAutoCancel(true)
++            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
++            .setContentIntent(pendingIntent)
++            .build()
++    }
++
++    actual suspend fun notificationsAuthorized(): Boolean {
++        val context = appContext ?: return false
++        return androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()
++    }
++
++    actual suspend fun requestAuthorization(): Boolean {
++        val context = appContext ?: return false
++        // Below Android 13 notifications are granted by default; from 13 on the runtime grant is
++        // requested by the shared episode-release permission flow, which this repository calls
++        // before scheduling. Nothing extra to do here besides reporting the current state.
++        ensureNotificationChannel()
++        return androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()
++    }
++
++    actual suspend fun schedule(reminders: List<ReleaseReminder>) {
++        val context = appContext ?: return
++        ensureNotificationChannel()
++
++        withContext(Dispatchers.IO) {
++            val workManager = WorkManager.getInstance(context)
++            cancelTrackedWork(workManager)
++
++            val nowEpochMs = System.currentTimeMillis()
++            val scheduledIds = mutableListOf<String>()
++            reminders.forEach { reminder ->
++                val uniqueName = uniqueWorkName(reminder)
++                if (reminder.releaseDateMs <= nowEpochMs) {
++                    runCatching { workManager.cancelUniqueWork(uniqueName) }
++                    return@forEach
++                }
++                val initialDelayMs = reminder.releaseDateMs - nowEpochMs
++                val inputData = Data.Builder()
++                    .putString(workerItemIdKey, reminder.itemId)
++                    .putString(workerTitleKey, reminder.title)
++                    .putLong(workerReleaseDateMsKey, reminder.releaseDateMs)
++                    .build()
++                val workRequest = OneTimeWorkRequestBuilder<ReleaseReminderWorker>()
++                    .setInputData(inputData)
++                    .setInitialDelay(initialDelayMs, TimeUnit.MILLISECONDS)
++                    .addTag(workTag)
++                    .build()
++                awaitOperation(
++                    workManager.enqueueUniqueWork(
++                        uniqueName,
++                        ExistingWorkPolicy.REPLACE,
++                        workRequest,
++                    ),
++                )
++                scheduledIds += uniqueName
++            }
++
++            preferences(context)
++                .edit()
++                .putStringSet(ProfileScopedKey.of(scheduledIdsKey), scheduledIds.toSet())
++                .apply()
++        }
++    }
++
++    actual suspend fun clearAll() {
++        val context = appContext ?: return
++        withContext(Dispatchers.IO) {
++            val workManager = WorkManager.getInstance(context)
++            cancelTrackedWork(workManager)
++            preferences(context)
++                .edit()
++                .remove(ProfileScopedKey.of(scheduledIdsKey))
++                .apply()
++        }
++    }
++
++    private fun cancelTrackedWork(workManager: WorkManager) {
++        val context = appContext ?: return
++        preferences(context)
++            .getStringSet(ProfileScopedKey.of(scheduledIdsKey), emptySet())
++            .orEmpty()
++            .forEach { uniqueName ->
++                awaitOperation(workManager.cancelUniqueWork(uniqueName))
++            }
++    }
++
++    private fun awaitOperation(operation: Operation) {
++        operation.result.get()
++    }
++
++    private fun preferences(context: Context) =
++        context.getSharedPreferences(platformPreferencesName, Context.MODE_PRIVATE)
++
++    private fun uniqueWorkName(reminder: ReleaseReminder): String =
++        "$workTag:${buildReleaseReminderId(reminder)}"
++
++    private fun ensureNotificationChannel() {
++        val context = appContext ?: return
++        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) return
++
++        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
++            ?: return
++        val existingChannel = notificationManager.getNotificationChannel(channelId)
++        if (existingChannel != null) return
++
++        val channel = NotificationChannel(
++            channelId,
++            runBlocking { getString(Res.string.reminders_channel_name) },
++            NotificationManager.IMPORTANCE_DEFAULT,
++        ).apply {
++            description = runBlocking { getString(Res.string.reminders_channel_description) }
++        }
++        notificationManager.createNotificationChannel(channel)
++    }
++}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/reminders/ReleaseReminderWorker.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/reminders/ReleaseReminderWorker.android.kt
+new file mode 100644
+index 0000000..5ae2c08
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/reminders/ReleaseReminderWorker.android.kt
+@@ -0,0 +1,45 @@
++package com.nuvio.app.features.reminders
++
++import androidx.core.app.NotificationManagerCompat
++import androidx.work.CoroutineWorker
++import androidx.work.WorkerParameters
++import kotlin.math.abs
++
++/**
++ * Nuvio fork: fires the local notification for one release reminder when WorkManager runs it at
++ * (or shortly after) the release instant.
++ */
++class ReleaseReminderWorker(
++    appContext: android.content.Context,
++    workerParameters: WorkerParameters,
++) : CoroutineWorker(appContext, workerParameters) {
++
++    override suspend fun doWork(): Result {
++        if (!ReleaseReminderNotificationPlatform.notificationsAuthorized()) {
++            return Result.success()
++        }
++
++        val itemId = inputData.getString(ReleaseReminderNotificationPlatform.workerItemIdKey)
++            ?: return Result.failure()
++        val title = inputData.getString(ReleaseReminderNotificationPlatform.workerTitleKey)
++            ?: return Result.failure()
++        val releaseDateMs = inputData.getLong(ReleaseReminderNotificationPlatform.workerReleaseDateMsKey, 0L)
++        if (releaseDateMs <= 0L) return Result.failure()
++
++        val reminder = ReleaseReminder(
++            itemId = itemId,
++            title = title,
++            releaseDateMs = releaseDateMs,
++        )
++
++        val notification = ReleaseReminderNotificationPlatform.buildNotification(
++            context = applicationContext,
++            reminder = reminder,
++        )
++
++        NotificationManagerCompat.from(applicationContext)
++            .notify(abs(buildReleaseReminderId(reminder).hashCode()), notification)
++
++        return Result.success()
++    }
++}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/reminders/ReleaseRemindersStorage.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/reminders/ReleaseRemindersStorage.android.kt
+new file mode 100644
+index 0000000..2eb8531
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/reminders/ReleaseRemindersStorage.android.kt
+@@ -0,0 +1,34 @@
++package com.nuvio.app.features.reminders
++
++import android.content.Context
++import android.content.SharedPreferences
++import com.nuvio.app.core.storage.ProfileScopedKey
++import java.time.Instant
++import java.time.ZoneId
++import java.time.format.DateTimeFormatter
++import java.util.Locale
++
++internal actual object ReleaseRemindersStorage {
++    private const val preferencesName = "nuvio_release_reminders"
++    private const val payloadKey = "release_reminders_payload"
++
++    private var preferences: SharedPreferences? = null
++
++    fun initialize(context: Context) {
++        preferences = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
++    }
++
++    actual fun loadPayload(): String? =
++        preferences?.getString(ProfileScopedKey.of(payloadKey), null)
++
++    actual fun savePayload(payload: String) {
++        preferences
++            ?.edit()
++            ?.putString(ProfileScopedKey.of(payloadKey), payload)
++            ?.apply()
++    }
++}
++
++internal actual fun formatReminderReleaseDate(releaseDateMs: Long): String =
++    DateTimeFormatter.ofPattern("MMMM d, yyyy", Locale.getDefault())
++        .format(Instant.ofEpochMilli(releaseDateMs).atZone(ZoneId.systemDefault()).toLocalDate())
+diff --git a/composeApp/src/commonMain/composeResources/values/strings.xml b/composeApp/src/commonMain/composeResources/values/strings.xml
+index 1ff7480..e357396 100644
+--- a/composeApp/src/commonMain/composeResources/values/strings.xml
++++ b/composeApp/src/commonMain/composeResources/values/strings.xml
+@@ -2495,4 +2495,45 @@
+     <string name="compose_settings_page_cloudstream">CloudStream / CS3</string>
+     <string name="settings_content_discovery_cloudstream_description">Install CloudStream repositories and manage the providers they make available.</string>
+ 
++    <!-- Nuvio fork: Smart Highlights + Gemini ranking -->
++    <string name="home_smart_highlights_title">Smart Highlights</string>
++    <string name="settings_highlights_section">Smart Highlights</string>
++    <string name="settings_highlights_toggle">Smart Highlights</string>
++    <string name="settings_highlights_toggle_description">Show a top-picks rail from your library and progress on home. Add a Gemini API key below to have it ranked with reasons.</string>
++    <string name="settings_highlights_gemini_personal_key">Gemini API key</string>
++    <string name="settings_highlights_gemini_personal_key_description">Optional personal key. When set, Smart Highlights is ranked by Gemini with a short reason per pick. Stored per profile and never displayed again.</string>
++    <string name="settings_highlights_gemini_key_label">API key</string>
++    <string name="settings_highlights_gemini_key_saved">API key saved. Test the connection to verify it.</string>
++    <string name="settings_highlights_gemini_test_connection">Test connection</string>
++    <string name="settings_highlights_gemini_status_connected">Connected to Google Gemini</string>
++    <string name="settings_highlights_gemini_status_invalid_key">Gemini rejected the key. Check the Generative Language API is enabled for it.</string>
++    <string name="settings_highlights_gemini_status_rate_limited">Gemini rate limit reached. Try again later.</string>
++    <string name="settings_highlights_gemini_status_unreachable">Unable to reach Gemini. Check your connection and try again.</string>
++    <string name="settings_highlights_gemini_get_key">Get an API key from Google AI Studio</string>
++
++    <!-- Nuvio fork: genres browse -->
++    <string name="home_genres_title">Genres</string>
++    <string name="home_genres_item_count">%1$d titles</string>
++    <string name="home_genres_empty">No genres yet. Browse some catalogs first.</string>
++
++    <!-- Nuvio fork: auto quality + fast start -->
++    <string name="settings_playback_video_quality_section">Video quality</string>
++    <string name="settings_playback_auto_quality">Auto quality</string>
++    <string name="settings_playback_auto_quality_description">Adapts adaptive streams to the measured connection speed by switching renditions, keeping your position. Picking a quality in the player pauses it until Auto is picked again.</string>
++    <string name="settings_playback_fast_start">Fast start</string>
++    <string name="settings_playback_fast_start_description">Start adaptive streams at the lowest quality and step up automatically once the first buffering completes and the connection allows it. Requires Auto quality.</string>
++    <string name="stream_info_speed_test">Speed test</string>
++
++    <!-- Nuvio fork: release reminders -->
++    <string name="details_remind_me">Remind me</string>
++    <string name="details_reminder_set">Reminder set</string>
++    <string name="reminders_notification_title_released">%1$s is out</string>
++    <string name="reminders_notification_body">It released on %1$s. Open Nuvio to start watching.</string>
++    <string name="settings_reminders_section">Release reminders</string>
++    <string name="settings_reminders_empty">No reminders set. Open an unreleased title and tap "Remind me".</string>
++    <string name="settings_reminders_remove">Remove</string>
++    <string name="settings_reminders_releasing_on">Releasing %1$s</string>
++    <string name="reminders_channel_name">Release reminders</string>
++    <string name="reminders_channel_description">Notifies you when a title you set a reminder for is released.</string>
++
+ </resources>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt
+index 5d07fd2..29eb00f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/AppNavigationSupport.kt
+@@ -51,6 +51,7 @@ internal val navigationSavedStateConfiguration = SavedStateConfiguration {
+             subclass(CatalogRoute::class, CatalogRoute.serializer())
+             subclass(PlayerRoute::class, PlayerRoute.serializer())
+             subclass(com.nuvio.app.navigation.LiveTvRoute::class, com.nuvio.app.navigation.LiveTvRoute.serializer())
++            subclass(com.nuvio.app.navigation.GenresRoute::class, com.nuvio.app.navigation.GenresRoute.serializer())
+         }
+     }
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/AppShellComponents.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/AppShellComponents.kt
+index 2b95789..5da6975 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/AppShellComponents.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/AppShellComponents.kt
+@@ -110,6 +110,8 @@ internal data class AppTabActions(
+     val onCollectionsSettingsClick: () -> Unit = {},
+     val onWatchPartySettingsClick: () -> Unit = {},
+     val onFolderClick: ((collectionId: String, folderId: String) -> Unit)? = null,
++    // Nuvio fork: genres browse entry on home.
++    val onGenreClick: ((genre: String) -> Unit)? = null,
+     val onRequestedSettingsPageConsumed: () -> Unit = {},
+     val onInitialHomeContentRendered: () -> Unit = {},
+ )
+@@ -143,6 +145,7 @@ internal fun AppTabHost(
+                         continueWatchingDisintegrationRequest = state.continueWatchingDisintegrationRequest,
+                         onFolderClick = actions.onFolderClick,
+                         onFirstCatalogRendered = actions.onInitialHomeContentRendered,
++                        onGenreClick = actions.onGenreClick,
+                     )
+                 }
+             }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+index c1b6e6f..db1af14 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+@@ -1551,6 +1551,10 @@ internal fun MainAppContent(
+                         actions = { isTabletLayout ->
+                             AppTabActions(
+                                 onCatalogClick = onCatalogClick,
++                                // Nuvio fork: genres browse entry on home.
++                                onGenreClick = { genre ->
++                                    navController.navigate(com.nuvio.app.navigation.GenresRoute(genre = genre))
++                                },
+                                 onPosterClick = { meta ->
+                                     if (meta.id.startsWith(JELLYFIN_META_ID_PREFIX)) {
+                                         navController.navigate(
+@@ -1832,6 +1836,18 @@ internal fun MainAppContent(
+                     val onBack = rememberGuardedPopBackStack(navController, route)
+                     LiveTvScreen(onBack = onBack, onPlay = ::openLiveTvChannel)
+                 }
++                // Nuvio fork: genres browse (derived locally from already-fetched metadata).
++                entry<com.nuvio.app.navigation.GenresRoute> { route ->
++                    val onBack = rememberGuardedPopBackStack(navController, route)
++                    com.nuvio.app.features.genres.GenresScreen(
++                        initialGenre = route.genre,
++                        onBack = onBack,
++                        onPosterClick = { meta -> navController.openPreview(meta) },
++                        onPosterLongClick = { meta ->
++                            openPosterActions(PosterActionTarget(preview = meta))
++                        },
++                    )
++                }
+                 entry<JellyfinRoute> { route ->
+                     val onBack = rememberGuardedPopBackStack(navController, route)
+                     JellyfinScreen(
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/storage/LocalAccountDataCleaner.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/storage/LocalAccountDataCleaner.kt
+index 8e62353..cc147b9 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/storage/LocalAccountDataCleaner.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/storage/LocalAccountDataCleaner.kt
+@@ -63,6 +63,9 @@ internal object LocalAccountDataCleaner {
+         }
+         HomeRepository.clear()
+         HomeCatalogSettingsRepository.clearLocalState()
++        com.nuvio.app.features.highlights.SmartHighlightsRepository.clearLocalState() // Nuvio fork: smart highlights + Gemini key
++        com.nuvio.app.features.genres.GenreIndex.onProfileChanged() // Nuvio fork: genres browse
++        com.nuvio.app.features.reminders.ReleaseRemindersRepository.clearLocalState() // Nuvio fork: release reminders
+         MetaScreenSettingsRepository.clearLocalState()
+         com.nuvio.app.features.shuffle.EpisodeShuffleRepository.clearLocalState()
+         LibraryRepository.clearLocalState()
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailActionButtons.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailActionButtons.kt
+index 99c6e6d..96d53bd 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailActionButtons.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailActionButtons.kt
+@@ -33,6 +33,8 @@ import androidx.compose.material.icons.filled.Check
+ import androidx.compose.material.icons.filled.CheckCircle
+ import androidx.compose.material.icons.filled.CheckCircleOutline
+ import androidx.compose.material.icons.filled.MoreHoriz
++import androidx.compose.material.icons.filled.Notifications
++import androidx.compose.material.icons.filled.NotificationsActive
+ import androidx.compose.material.icons.filled.Shuffle
+ import androidx.compose.material3.Icon
+ import androidx.compose.material3.MaterialTheme
+@@ -279,6 +281,8 @@ fun DetailActions(
+     val downloadLabel = stringResource(Res.string.details_download_action)
+     val startFromBeginningLabel = stringResource(Res.string.details_action_start_from_beginning)
+     val externalPlayerLabel = stringResource(Res.string.streams_open_external_player)
++    // Nuvio fork: release reminder for titles that have not been released yet.
++    val releaseReminder = rememberReleaseReminderAction(meta)
+     val shuffleAction = onShuffleClick?.let { onClick ->
+         DetailSecondaryAction(
+             label = stringResource(if (shuffleEnabled) Res.string.shuffle_stop else Res.string.random_episode_title),
+@@ -294,6 +298,18 @@ fun DetailActions(
+         pinnedAction = shuffleAction?.takeIf { shuffleEnabled },
+         secondaryActions = buildList {
+             if (!shuffleEnabled) shuffleAction?.let(::add)
++            releaseReminder?.let { reminder ->
++                add(
++                    DetailSecondaryAction(
++                        label = stringResource(
++                            if (reminder.isReminded) Res.string.details_reminder_set else Res.string.details_remind_me,
++                        ),
++                        icon = if (reminder.isReminded) Icons.Default.NotificationsActive else Icons.Default.Notifications,
++                        isActive = reminder.isReminded,
++                        onClick = reminder.onToggle,
++                    ),
++                )
++            }
+             extraActions?.onDownload?.let { download ->
+                 add(DetailSecondaryAction(label = downloadLabel, icon = Icons.Rounded.Download, onClick = download))
+             }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailReleaseReminderAction.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailReleaseReminderAction.kt
+new file mode 100644
+index 0000000..843f565
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailReleaseReminderAction.kt
+@@ -0,0 +1,93 @@
++package com.nuvio.app.features.details.components
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.remember
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.features.details.MetaDetails
++import com.nuvio.app.features.reminders.ReleaseRemindersRepository
++import com.nuvio.app.features.watchprogress.WatchProgressClock
++import com.nuvio.app.features.watchprogress.parseReleaseDateToEpochMs
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.launch
++
++internal data class ReleaseReminderAction(
++    val itemId: String,
++    val title: String,
++    val releaseDateMs: Long,
++    val posterUrl: String?,
++    val isReminded: Boolean,
++    val onToggle: () -> Unit,
++)
++
++/**
++ * Nuvio fork: the "Remind me" detail action for titles that have not been released yet.
++ *
++ * The release instant is the title's earliest upcoming dated video (movies carry their single
++ * video's release date). When the release date is unknown or already in the past, the action is
++ * absent and the details screen is byte-identical to before.
++ */
++@Composable
++internal fun rememberReleaseReminderAction(meta: MetaDetails?): ReleaseReminderAction? {
++    val remindersState by ReleaseRemindersRepository.uiState.collectAsStateWithLifecycle()
++
++    LaunchedEffect(Unit) {
++        ReleaseRemindersRepository.ensureLoaded()
++    }
++
++    val target = remember(meta) {
++        val details = meta ?: return@remember null
++        val releaseDateMs = upcomingReleaseDateMs(details) ?: return@remember null
++        ReleaseReminderTarget(
++            itemId = "${details.type.trim().lowercase()}:${details.id}",
++            title = details.name,
++            releaseDateMs = releaseDateMs,
++            posterUrl = details.poster ?: details.background,
++        )
++    } ?: return null
++
++    val isReminded = remindersState.reminders.any {
++        it.itemId == target.itemId && it.releaseDateMs == target.releaseDateMs
++    }
++    return ReleaseReminderAction(
++        itemId = target.itemId,
++        title = target.title,
++        releaseDateMs = target.releaseDateMs,
++        posterUrl = target.posterUrl,
++        isReminded = isReminded,
++        onToggle = {
++            val next = !isReminded
++            ReleaseRemindersRepository.setReminded(
++                itemId = target.itemId,
++                title = target.title,
++                releaseDateMs = target.releaseDateMs,
++                posterUrl = target.posterUrl,
++                reminded = next,
++            )
++            if (next && !remindersState.permissionGranted) {
++                // Fire-and-forget: the repository records the grant for the next render.
++                CoroutineScope(Dispatchers.Default).launch {
++                    ReleaseRemindersRepository.requestPermission()
++                }
++            }
++        },
++    )
++}
++
++internal data class ReleaseReminderTarget(
++    val itemId: String,
++    val title: String,
++    val releaseDateMs: Long,
++    val posterUrl: String?,
++)
++
++/** The earliest upcoming, precisely dated release instant of [details], or null. */
++private fun upcomingReleaseDateMs(details: MetaDetails): Long? {
++    val nowEpochMs = WatchProgressClock.nowEpochMs()
++    return details.videos.asSequence()
++        .mapNotNull { episode -> parseReleaseDateToEpochMs(episode.released) }
++        .filter { it > nowEpochMs }
++        .minOrNull()
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/genres/ForkHomeGenresRow.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/genres/ForkHomeGenresRow.kt
+new file mode 100644
+index 0000000..4f85c1b
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/genres/ForkHomeGenresRow.kt
+@@ -0,0 +1,126 @@
++package com.nuvio.app.features.genres
++
++import androidx.compose.foundation.background
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.aspectRatio
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.lazy.LazyRow
++import androidx.compose.foundation.layout.PaddingValues
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.graphics.Brush
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.layout.ContentScale
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.Dp
++import androidx.compose.ui.unit.dp
++import coil3.compose.AsyncImage
++import com.nuvio.app.features.genres.GenreEntry
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.home_genres_title
++import org.jetbrains.compose.resources.stringResource
++
++/**
++ * Nuvio fork: the home "Genres" row — one chip per locally derived genre. Tapping a chip opens
++ * the genre's browse grid. Renders nothing (zero height) while the index is empty, so with no
++ * fetched metadata yet home looks exactly as before.
++ */
++@Composable
++internal fun ForkHomeGenresRow(
++    genres: List<GenreEntry>,
++    sectionPadding: Dp,
++    modifier: Modifier = Modifier,
++    onGenreClick: ((genre: String) -> Unit)? = null,
++) {
++    if (genres.isEmpty() || onGenreClick == null) return
++    Row(modifier = modifier.fillMaxWidth()) {
++        androidx.compose.foundation.layout.Column(modifier = Modifier.fillMaxWidth()) {
++            Text(
++                text = stringResource(Res.string.home_genres_title),
++                style = MaterialTheme.typography.titleLarge,
++                color = MaterialTheme.colorScheme.onBackground,
++                modifier = Modifier
++                    .padding(start = sectionPadding, end = sectionPadding, bottom = 8.dp),
++            )
++            LazyRow(
++                contentPadding = PaddingValues(horizontal = sectionPadding),
++                horizontalArrangement = Arrangement.spacedBy(10.dp),
++                modifier = Modifier.fillMaxWidth(),
++            ) {
++                items(
++                    count = genres.size,
++                    key = { index -> "genre_${genres[index].name}" },
++                ) { index ->
++                    val genre = genres[index]
++                    GenreChip(
++                        genre = genre,
++                        onClick = { onGenreClick(genre.name) },
++                    )
++                }
++            }
++        }
++    }
++}
++
++@Composable
++private fun GenreChip(
++    genre: GenreEntry,
++    onClick: () -> Unit,
++    modifier: Modifier = Modifier,
++) {
++    Box(
++        modifier = modifier
++            .width(148.dp)
++            .height(84.dp)
++            .clip(RoundedCornerShape(12.dp))
++            .background(MaterialTheme.colorScheme.surfaceVariant)
++            .clickable(onClick = onClick),
++    ) {
++        genre.posterUrl?.let { posterUrl ->
++            AsyncImage(
++                model = posterUrl,
++                contentDescription = null,
++                contentScale = ContentScale.Crop,
++                modifier = Modifier
++                    .aspectRatio(16f / 9f)
++                    .fillMaxWidth()
++                    .height(84.dp),
++            )
++        }
++        Box(
++            modifier = Modifier
++                .matchParentSize()
++                .background(
++                    Brush.horizontalGradient(
++                        colors = listOf(
++                            Color.Black.copy(alpha = 0.72f),
++                            Color.Black.copy(alpha = 0.24f),
++                        ),
++                    ),
++                ),
++        )
++        Text(
++            text = genre.name,
++            style = MaterialTheme.typography.titleSmall,
++            fontWeight = FontWeight.SemiBold,
++            color = Color.White,
++            maxLines = 2,
++            overflow = TextOverflow.Ellipsis,
++            modifier = Modifier
++                .align(Alignment.CenterStart)
++                .padding(horizontal = 12.dp),
++        )
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/genres/GenreIndex.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/genres/GenreIndex.kt
+new file mode 100644
+index 0000000..5c8be59
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/genres/GenreIndex.kt
+@@ -0,0 +1,130 @@
++package com.nuvio.app.features.genres
++
++import com.nuvio.app.core.time.EpisodeReleaseDatePlatform
++import com.nuvio.app.features.home.HomeRepository
++import com.nuvio.app.features.home.MetaPreview
++import com.nuvio.app.features.home.isUnreleased
++import com.nuvio.app.features.library.LibraryRepository
++import com.nuvio.app.features.library.toMetaPreview
++import com.nuvio.app.features.watchprogress.CurrentDateProvider
++import com.nuvio.app.features.watchprogress.WatchProgressRepository
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.SupervisorJob
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import kotlinx.coroutines.flow.collectLatest
++import kotlinx.coroutines.flow.combine
++import kotlinx.coroutines.launch
++import kotlin.concurrent.Volatile
++
++/** One browsable genre, derived locally from metadata the app has already fetched. */
++data class GenreEntry(
++    val name: String,
++    val count: Int,
++    val posterUrl: String?,
++)
++
++/**
++ * Nuvio fork: local genre index for the home "Genres" browse row and the Genres screen.
++ *
++ * Everything is derived from state the app has already fetched (home catalogs and hero, the saved
++ * library, continue-watching entries) — no new server calls. Unreleased titles are excluded so a
++ * genre page does not advertise items that cannot play yet.
++ */
++object GenreIndex {
++    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
++
++    private val _genres = MutableStateFlow<List<GenreEntry>>(emptyList())
++    val genres: StateFlow<List<GenreEntry>> = _genres.asStateFlow()
++
++    private val _itemsByGenre = MutableStateFlow<Map<String, List<MetaPreview>>>(emptyMap())
++    val itemsByGenre: StateFlow<Map<String, List<MetaPreview>>> = _itemsByGenre.asStateFlow()
++
++    @Volatile private var started = false
++
++    /** Starts the index once; safe to call from every home render. */
++    fun ensureStarted() {
++        if (started) return
++        started = true
++        scope.launch {
++            combine(
++                HomeRepository.uiState,
++                LibraryRepository.uiState,
++                WatchProgressRepository.uiState,
++            ) { home, library, progress ->
++                Triple(home, library.items, progress.entries)
++            }
++                .collectLatest { (home, libraryItems, progressEntries) ->
++                    rebuild(home.heroItems, home.sections.flatMap { it.items }, libraryItems, progressEntries)
++                }
++        }
++    }
++
++    fun onProfileChanged() {
++        _genres.value = emptyList()
++        _itemsByGenre.value = emptyMap()
++    }
++
++    private fun rebuild(
++        heroItems: List<MetaPreview>,
++        catalogItems: List<MetaPreview>,
++        libraryItems: List<com.nuvio.app.features.library.LibraryItem>,
++        progressEntries: List<com.nuvio.app.features.watchprogress.WatchProgressEntry>,
++    ) {
++        val nowEpochMs = EpisodeReleaseDatePlatform.nowEpochMs()
++        val todayIsoDate = CurrentDateProvider.todayIsoDate()
++        val itemsByGenre = LinkedHashMap<String, LinkedHashMap<String, MetaPreview>>()
++
++        fun add(preview: MetaPreview) {
++            if (preview.name.isBlank()) return
++            if (preview.poster.isNullOrBlank() && preview.banner.isNullOrBlank() &&
++                preview.landscapePoster.isNullOrBlank()
++            ) {
++                return
++            }
++            if (preview.isUnreleased(todayIsoDate, nowEpochMs)) return
++            preview.genres
++                .mapNotNull { genre -> genre.trim().takeIf { it.isNotEmpty() } }
++                .forEach { genre ->
++                    val bucket = itemsByGenre.getOrPut(genre) { LinkedHashMap() }
++                    bucket.putIfAbsent("${preview.type}:${preview.id}", preview)
++                }
++        }
++
++        progressEntries.forEach { entry ->
++            if (entry.title.isBlank()) return@forEach
++            add(
++                MetaPreview(
++                    id = entry.parentMetaId,
++                    type = entry.parentMetaType,
++                    name = entry.title,
++                    poster = entry.poster,
++                    banner = entry.background,
++                    posterShape = com.nuvio.app.features.home.PosterShape.Poster,
++                ),
++            )
++        }
++        libraryItems.forEach { item -> add(item.toMetaPreview()) }
++        heroItems.forEach(::add)
++        catalogItems.forEach(::add)
++
++        _itemsByGenre.value = itemsByGenre.mapValues { (_, bucket) -> bucket.values.toList() }
++        _genres.value = itemsByGenre
++            .map { (genre, bucket) ->
++                GenreEntry(
++                    name = genre,
++                    count = bucket.size,
++                    posterUrl = bucket.values.firstNotNullOfOrNull { preview ->
++                        preview.landscapePoster ?: preview.banner ?: preview.poster
++                    },
++                )
++            }
++            .sortedWith(compareByDescending<GenreEntry> { it.count }.thenBy { it.name.lowercase() })
++    }
++}
++
++/** The titles inside one genre, in a stable "poster" order for the browse grid. */
++internal fun genreItemsFor(genre: String): List<MetaPreview> =
++    GenreIndex.itemsByGenre.value[genre].orEmpty()
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/genres/GenresScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/genres/GenresScreen.kt
+new file mode 100644
+index 0000000..8caa84a
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/genres/GenresScreen.kt
+@@ -0,0 +1,155 @@
++package com.nuvio.app.features.genres
++
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.BoxWithConstraints
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.lazy.rememberLazyListState
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.saveable.rememberSaveable
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.style.TextAlign
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.dp
++import com.nuvio.app.core.ui.NuvioScreen
++import com.nuvio.app.core.ui.NuvioScreenHeader
++import com.nuvio.app.core.ui.PlatformBackHandler
++import com.nuvio.app.core.ui.posterGridColumnCountForWidth
++import com.nuvio.app.features.home.MetaPreview
++import com.nuvio.app.features.home.components.PosterGridRow
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.home_genres_item_count
++import nuvio.composeapp.generated.resources.home_genres_title
++import org.jetbrains.compose.resources.stringResource
++
++/**
++ * Nuvio fork: the genres browse screen. With no [initialGenre] it lists every locally derived
++ * genre; with one it shows the grid of that genre's titles, reusing the existing poster grid UI.
++ * The genre level is internal state (system back returns to the list first), so home chips can
++ * deep-link straight into a genre without extra routes. No server calls: everything comes from
++ * the already-fetched home catalog, library and progress metadata.
++ */
++@Composable
++internal fun GenresScreen(
++    initialGenre: String?,
++    onBack: () -> Unit,
++    onPosterClick: ((MetaPreview) -> Unit)? = null,
++    onPosterLongClick: ((MetaPreview) -> Unit)? = null,
++    modifier: Modifier = Modifier,
++) {
++    var selectedGenre by rememberSaveable { mutableStateOf(initialGenre) }
++    // Only the internally opened genre level is popped by system back; a route opened directly on
++    // a genre leaves via navigation.
++    PlatformBackHandler(enabled = initialGenre == null && selectedGenre != null) {
++        selectedGenre = null
++    }
++
++    val itemsByGenre = GenreIndex.itemsByGenre.value
++    val genres = remember(itemsByGenre) {
++        itemsByGenre.entries
++            .map { (name, items) -> GenreEntry(name, items.size, null) }
++            .sortedWith(compareByDescending<GenreEntry> { it.count }.thenBy { it.name.lowercase() })
++    }
++
++    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
++        val columns = posterGridColumnCountForWidth(maxWidth)
++        val gridRows = remember(itemsByGenre, selectedGenre, columns) {
++            selectedGenre?.let { genre -> itemsByGenre[genre].orEmpty().chunked(columns) }
++        }
++
++        NuvioScreen(
++            modifier = Modifier.fillMaxSize(),
++            listState = rememberLazyListState(),
++        ) {
++            stickyHeader {
++                NuvioScreenHeader(
++                    title = selectedGenre ?: stringResource(Res.string.home_genres_title),
++                    onBack = onBack,
++                )
++            }
++            val genre = selectedGenre
++            if (genre == null) {
++                if (genres.isEmpty()) {
++                    item(key = "genres_empty") {
++                        GenresEmptyLabel(modifier = Modifier)
++                    }
++                } else {
++                    items(
++                        count = genres.size,
++                        key = { index -> "genre_entry_${genres[index].name}" },
++                        contentType = { "genre_entry" },
++                    ) { index ->
++                        val entry = genres[index]
++                        Row(
++                            modifier = Modifier
++                                .fillMaxWidth()
++                                .clickable { selectedGenre = entry.name }
++                                .padding(horizontal = 16.dp, vertical = 14.dp),
++                            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
++                            verticalAlignment = Alignment.CenterVertically,
++                        ) {
++                            Text(
++                                text = entry.name,
++                                style = MaterialTheme.typography.bodyLarge,
++                                fontWeight = FontWeight.Medium,
++                                color = MaterialTheme.colorScheme.onSurface,
++                                maxLines = 1,
++                                overflow = TextOverflow.Ellipsis,
++                                modifier = Modifier.weight(1f),
++                            )
++                            Text(
++                                text = stringResource(Res.string.home_genres_item_count, entry.count),
++                                style = MaterialTheme.typography.bodySmall,
++                                color = MaterialTheme.colorScheme.onSurfaceVariant,
++                            )
++                        }
++                    }
++                }
++            } else {
++                val rows = gridRows.orEmpty()
++                if (rows.isEmpty()) {
++                    item(key = "genre_items_empty") {
++                        GenresEmptyLabel(modifier = Modifier)
++                    }
++                } else {
++                    items(
++                        count = rows.size,
++                        key = { index -> "genre_${genre}_row_$index" },
++                        contentType = { "genre_grid_row" },
++                    ) { index ->
++                        PosterGridRow(
++                            items = rows[index],
++                            columns = columns,
++                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
++                            onPosterClick = onPosterClick,
++                            onPosterLongClick = onPosterLongClick,
++                        )
++                    }
++                }
++            }
++        }
++    }
++}
++
++@Composable
++private fun GenresEmptyLabel(modifier: Modifier = Modifier) {
++    Text(
++        text = stringResource(Res.string.home_genres_empty),
++        style = MaterialTheme.typography.bodyMedium,
++        color = MaterialTheme.colorScheme.onSurfaceVariant,
++        textAlign = TextAlign.Center,
++        modifier = modifier
++            .fillMaxWidth()
++            .padding(horizontal = 16.dp, vertical = 48.dp),
++    )
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.kt
+new file mode 100644
+index 0000000..1f9255f
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.kt
+@@ -0,0 +1,10 @@
++package com.nuvio.app.features.highlights
++
++import io.ktor.client.HttpClient
++
++/**
++ * Nuvio fork: dedicated HTTP client for Gemini ranking calls — no logging plugins and hard
++ * timeouts (5s connect / 10s read) so home can never hang on a ranking request. Platform files
++ * build it so the connection pool stays separate from the addon/proxy clients.
++ */
++internal expect fun createGeminiHttpClient(): HttpClient
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/GeminiRankingClient.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/GeminiRankingClient.kt
+new file mode 100644
+index 0000000..a73616b
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/GeminiRankingClient.kt
+@@ -0,0 +1,173 @@
++package com.nuvio.app.features.highlights
++
++import co.touchlab.kermit.Logger
++import io.ktor.client.HttpClient
++import io.ktor.client.request.header
++import io.ktor.client.request.post
++import io.ktor.client.request.setBody
++import io.ktor.client.statement.bodyAsText
++import io.ktor.http.ContentType
++import io.ktor.http.HttpStatusCode
++import io.ktor.http.contentType
++import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.JsonObject
++import kotlinx.serialization.json.JsonPrimitive
++import kotlinx.serialization.json.add
++import kotlinx.serialization.json.buildJsonArray
++import kotlinx.serialization.json.buildJsonObject
++import kotlinx.serialization.json.int
++import kotlinx.serialization.json.jsonArray
++import kotlinx.serialization.json.jsonObject
++import kotlinx.serialization.json.jsonPrimitive
++import kotlinx.serialization.json.put
++import kotlinx.serialization.json.putJsonObject
++
++/** One ranked candidate: the candidate list index plus a short "why" for the reason chip. */
++internal data class GeminiRankEntry(
++    val index: Int,
++    val reason: String,
++)
++
++/** Thrown when Gemini cannot serve a ranking; callers fall back to the unranked order silently. */
++internal class GeminiRankingException(val reason: Reason) : Exception(reason.name) {
++    enum class Reason { NO_KEY, AUTHENTICATION, RATE_LIMIT, UNAVAILABLE, INVALID_RESPONSE }
++}
++
++/**
++ * Nuvio fork: REST call to Gemini `generateContent` (v1beta, gemini-2.0-flash) that orders a
++ * compact candidate list and returns a short reason per pick. The key travels in the
++ * `x-goog-api-key` header only — never in a URL, a log line, or storage outside the scoped
++ * preference store. The response is shape-enforced with a responseSchema, and the parser is
++ * defensive: any malformed answer maps to [GeminiRankingException] so the rail can fall back.
++ */
++internal class GeminiRankingClient(
++    private val client: HttpClient = createGeminiHttpClient(),
++) {
++    fun hasKey(): Boolean = SmartHighlightsPreferences.hasApiKey()
++
++    /** Cheap round trip used by the settings screen to verify a key. */
++    suspend fun testConnection() {
++        val body = buildJsonObject {
++            put("contents", buildJsonArray {
++                add(buildJsonObject {
++                    put("parts", buildJsonArray {
++                        add(buildJsonObject { put("text", "Reply with the single word: ok") })
++                    })
++                })
++            })
++            putJsonObject("generationConfig") { put("maxOutputTokens", 8) }
++        }
++        post(body)
++    }
++
++    /**
++     * Ranks [candidates] (already formatted one-per-line, 1-based). Returns entries in the order
++     * Gemini preferred them, restricted to in-range indexes with a non-blank reason.
++     */
++    suspend fun rank(candidates: List<String>, pickCount: Int): List<GeminiRankEntry> {
++        if (candidates.isEmpty()) return emptyList()
++        val prompt = buildString {
++            append("You curate a short \"Smart Highlights\" row on a streaming app's home screen. ")
++            append("Below is a numbered list of titles from this viewer's own library and continue-watching progress. ")
++            append("Choose the ")
++            append(pickCount.coerceAtMost(candidates.size))
++            append(" most appealing titles to feature first — favour a good mix, momentum (things they are part way through) ")
++            append("and what fits together — and order them best first. ")
++            append("For each pick give a reason of at most 6 words, addressed like a note to the viewer (e.g. \"you left off mid-season\"). ")
++            append("Respond with the picks as a JSON array of {\"index\": <candidate number>, \"reason\": \"...\"} objects, best pick first.\n\n")
++            append(candidates.joinToString("\n"))
++        }
++        val schema = buildJsonObject {
++            put("type", "ARRAY")
++            put("items", buildJsonObject {
++                put("type", "OBJECT")
++                put("properties", buildJsonObject {
++                    put("index", buildJsonObject { put("type", "INTEGER") })
++                    put("reason", buildJsonObject { put("type", "STRING") })
++                })
++                put("required", buildJsonArray {
++                    add(JsonPrimitive("index"))
++                    add(JsonPrimitive("reason"))
++                })
++            })
++        }
++        val body = buildJsonObject {
++            put("contents", buildJsonArray {
++                add(buildJsonObject {
++                    put("parts", buildJsonArray {
++                        add(buildJsonObject { put("text", prompt) })
++                    })
++                })
++            })
++            putJsonObject("generationConfig") {
++                put("responseMimeType", "application/json")
++                put("responseSchema", schema)
++                put("temperature", 0.3)
++            }
++        }
++        return parse(post(body), candidates.size)
++    }
++
++    private suspend fun post(body: JsonObject): String {
++        val apiKey = SmartHighlightsPreferences.readApiKey()
++            ?: throw GeminiRankingException(GeminiRankingException.Reason.NO_KEY)
++        val response = runCatching {
++            client.post("$BASE_URL/models/$MODEL:generateContent") {
++                header("x-goog-api-key", apiKey)
++                contentType(ContentType.Application.Json)
++                setBody(body.toString())
++            }
++        }.getOrElse { error ->
++            log.w(error) { "Gemini ranking request failed" }
++            throw GeminiRankingException(GeminiRankingException.Reason.UNAVAILABLE)
++        }
++        when {
++            response.status == HttpStatusCode.OK ||
++                response.status == HttpStatusCode.Created -> Unit
++            response.status == HttpStatusCode.Unauthorized ||
++                response.status == HttpStatusCode.Forbidden ->
++                throw GeminiRankingException(GeminiRankingException.Reason.AUTHENTICATION)
++            response.status == HttpStatusCode.TooManyRequests ->
++                throw GeminiRankingException(GeminiRankingException.Reason.RATE_LIMIT)
++            else -> throw GeminiRankingException(GeminiRankingException.Reason.UNAVAILABLE)
++        }
++        val payload = response.bodyAsText()
++        val text = runCatching {
++            json.parseToJsonElement(payload)
++                .jsonObject["candidates"]?.jsonArray
++                ?.firstOrNull()?.jsonObject?.get("content")?.jsonObject
++                ?.get("parts")?.jsonArray?.firstOrNull()?.jsonObject
++                ?.get("text")?.jsonPrimitive?.content
++        }.getOrNull()
++        if (text.isNullOrBlank()) {
++            throw GeminiRankingException(GeminiRankingException.Reason.INVALID_RESPONSE)
++        }
++        return text
++    }
++
++    private fun parse(text: String, candidateCount: Int): List<GeminiRankEntry> {
++        val stripped = text.trim()
++            .removePrefix("```json").removePrefix("```").trim().removeSuffix("```")
++        val array = runCatching { json.parseToJsonElement(stripped).jsonArray }.getOrNull()
++            ?: throw GeminiRankingException(GeminiRankingException.Reason.INVALID_RESPONSE)
++        val out = ArrayList<GeminiRankEntry>(array.size)
++        for (element in array) {
++            val entry = element as? JsonObject ?: continue
++            val index = entry["index"]?.jsonPrimitive?.int?.minus(1) ?: continue
++            if (index < 0 || index >= candidateCount) continue
++            val reason = entry["reason"]?.jsonPrimitive?.content?.trim()?.takeIf { it.isNotEmpty() } ?: continue
++            out += GeminiRankEntry(index, reason.take(SMART_HIGHLIGHTS_MAX_REASON_LENGTH))
++        }
++        if (out.isEmpty()) {
++            throw GeminiRankingException(GeminiRankingException.Reason.INVALID_RESPONSE)
++        }
++        return out.distinctBy { it.index }
++    }
++
++    companion object {
++        private val log = Logger.withTag("GeminiRanking")
++        private val json = Json { ignoreUnknownKeys = true }
++        private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
++        private const val MODEL = "gemini-2.0-flash"
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsModels.kt
+new file mode 100644
+index 0000000..5507abf
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsModels.kt
+@@ -0,0 +1,127 @@
++package com.nuvio.app.features.highlights
++
++import com.nuvio.app.features.home.MetaPreview
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import kotlinx.serialization.Serializable
++
++/** How many picks the Smart Highlights rail shows. */
++internal const val SMART_HIGHLIGHTS_MAX_PICKS = 6
++
++/** How many candidates at most are described to Gemini. */
++internal const val SMART_HIGHLIGHTS_MAX_CANDIDATES = 12
++
++/** In-progress and library candidates considered before the overall cap. */
++internal const val SMART_HIGHLIGHTS_MAX_PROGRESS_CANDIDATES = 8
++internal const val SMART_HIGHLIGHTS_MAX_LIBRARY_CANDIDATES = 8
++
++/** How long home waits after startup before the first ranking pass. */
++internal const val SMART_HIGHLIGHTS_STARTUP_DELAY_MS = 5_000L
++
++/** Reason chips are one short line; anything longer is clipped. */
++internal const val SMART_HIGHLIGHTS_MAX_REASON_LENGTH = 48
++
++/** One featured title with the short reason its chip shows. */
++data class SmartHighlightPick(
++    val item: MetaPreview,
++    val reason: String,
++    /** True when Gemini chose the position and wrote the reason; false for the fallback order. */
++    val ranked: Boolean,
++)
++
++/** A title eligible for the rail, before ranking. */
++internal data class SmartHighlightCandidate(
++    val item: MetaPreview,
++    /** 0..100 when the viewer is part way through, else null. */
++    val progressPercent: Int?,
++    /** True when the title comes from the saved library rather than playback progress. */
++    val fromLibrary: Boolean,
++) {
++    /** Stable identity of the candidate set membership; drives the ranking cache key. */
++    val cacheToken: String
++        get() = "${item.type}:${item.id}"
++}
++
++/**
++ * Nuvio fork: preferences for the Smart Highlights rail plus the per-profile Gemini API key.
++ * Defaults keep the behavior identical for anyone who never opens the new settings section.
++ */
++object SmartHighlightsPreferences {
++    private val _enabled = MutableStateFlow(true)
++    val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
++
++    private val _apiKeyConfigured = MutableStateFlow(false)
++    /** Never the key itself: settings only learn whether one is configured. */
++    val apiKeyConfigured: StateFlow<Boolean> = _apiKeyConfigured.asStateFlow()
++
++    private var enabledLoaded = false
++    private var apiKeyLoaded = false
++
++    fun ensureLoaded() {
++        if (!enabledLoaded) {
++            enabledLoaded = true
++            _enabled.value = SmartHighlightsStorage.loadEnabled() ?: true
++        }
++        if (!apiKeyLoaded) {
++            apiKeyLoaded = true
++            _apiKeyConfigured.value = SmartHighlightsStorage.loadApiKey() != null
++        }
++    }
++
++    fun isEnabled(): Boolean {
++        ensureLoaded()
++        return _enabled.value
++    }
++
++    fun setEnabled(value: Boolean) {
++        ensureLoaded()
++        _enabled.value = value
++        SmartHighlightsStorage.saveEnabled(value)
++    }
++
++    fun hasApiKey(): Boolean {
++        ensureLoaded()
++        return _apiKeyConfigured.value
++    }
++
++    /** Reads the configured key for the active profile; only the ranking client consumes this. */
++    fun readApiKey(): String? = SmartHighlightsStorage.loadApiKey()
++
++    fun setApiKey(apiKey: String?) {
++        ensureLoaded()
++        SmartHighlightsStorage.saveApiKey(apiKey.orEmpty())
++        _apiKeyConfigured.value = apiKey != null
++    }
++
++    fun onProfileChanged() {
++        enabledLoaded = false
++        apiKeyLoaded = false
++        _enabled.value = true
++        _apiKeyConfigured.value = false
++        ensureLoaded()
++    }
++
++    fun clearLocalState() {
++        enabledLoaded = false
++        apiKeyLoaded = false
++        _enabled.value = true
++        _apiKeyConfigured.value = false
++        SmartHighlightsStorage.saveEnabled(true)
++        SmartHighlightsStorage.saveApiKey("")
++        SmartHighlightsStorage.clearRankingCache()
++    }
++}
++
++@Serializable
++internal data class StoredSmartHighlightsRanking(
++    val hash: String = "",
++    val savedAtMs: Long = 0L,
++    val entries: List<StoredSmartHighlightsRankEntry> = emptyList(),
++)
++
++@Serializable
++internal data class StoredSmartHighlightsRankEntry(
++    val index: Int,
++    val reason: String,
++)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsRankingCache.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsRankingCache.kt
+new file mode 100644
+index 0000000..69ca1c6
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsRankingCache.kt
+@@ -0,0 +1,61 @@
++package com.nuvio.app.features.highlights
++
++import kotlinx.serialization.json.Json
++
++/**
++ * Nuvio fork: persisted Gemini ranking for the Smart Highlights rail, scoped to the active
++ * profile through [SmartHighlightsStorage]. A ranking is valid for [TTL_MS] and only for the
++ * candidate set it was computed from (its [StoredSmartHighlightsRanking.hash]); a changed
++ * library or a changed progress picture simply misses the cache.
++ */
++internal class SmartHighlightsRankingCache(
++    private val nowEpochMs: () -> Long = { kotlin.time.Clock.System.now().toEpochMilliseconds() },
++) {
++    companion object {
++        /** How long a Gemini ranking is reused before home asks Gemini again. */
++        const val TTL_MS = 6L * 60L * 60L * 1000L
++    }
++
++    private val json = Json { ignoreUnknownKeys = true }
++
++    /** The cached ranking for [hash], or null when absent, stale, or unreadable. */
++    fun read(hash: String): List<GeminiRankEntry>? {
++        if (hash.isBlank()) return null
++        val payload = SmartHighlightsStorage.loadRankingCache().orEmpty().trim()
++        if (payload.isEmpty()) return null
++        val stored = runCatching {
++            json.decodeFromString<StoredSmartHighlightsRanking>(payload)
++        }.getOrNull() ?: return null
++        if (stored.hash != hash) return null
++        if (nowEpochMs() - stored.savedAtMs > TTL_MS) return null
++        val entries = stored.entries
++            .filter { it.index >= 0 && it.reason.isNotBlank() }
++            .map { GeminiRankEntry(it.index, it.reason.take(SMART_HIGHLIGHTS_MAX_REASON_LENGTH)) }
++        return entries.distinctBy { it.index }.takeIf { it.isNotEmpty() }
++    }
++
++    fun write(hash: String, ranking: List<GeminiRankEntry>) {
++        if (hash.isBlank() || ranking.isEmpty()) return
++        val payload = runCatching {
++            json.encodeToString(
++                StoredSmartHighlightsRanking.serializer(),
++                StoredSmartHighlightsRanking(
++                    hash = hash,
++                    savedAtMs = nowEpochMs(),
++                    entries = ranking.map { entry ->
++                        StoredSmartHighlightsRankEntry(
++                            index = entry.index,
++                            reason = entry.reason.replace("\n", " "),
++                        )
++                    },
++                ),
++            )
++        }.getOrNull() ?: return
++        SmartHighlightsStorage.saveRankingCache(payload)
++    }
++
++    /** Called when the key is removed so a stale ranking cannot resurface for this profile. */
++    fun clear() {
++        SmartHighlightsStorage.clearRankingCache()
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsRepository.kt
+new file mode 100644
+index 0000000..b6aa9d2
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsRepository.kt
+@@ -0,0 +1,274 @@
++package com.nuvio.app.features.highlights
++
++import co.touchlab.kermit.Logger
++import com.nuvio.app.core.time.EpisodeReleaseDatePlatform
++import com.nuvio.app.features.home.HomeRepository
++import com.nuvio.app.features.home.MetaPreview
++import com.nuvio.app.features.home.PosterShape
++import com.nuvio.app.features.home.isUnreleased
++import com.nuvio.app.features.home.stableKey
++import com.nuvio.app.features.library.LibraryItem
++import com.nuvio.app.features.library.LibraryRepository
++import com.nuvio.app.features.library.toMetaPreview
++import com.nuvio.app.features.watchprogress.CurrentDateProvider
++import com.nuvio.app.features.watchprogress.WatchProgressRepository
++import com.nuvio.app.features.watchprogress.continueWatchingEntries
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.SupervisorJob
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import kotlinx.coroutines.flow.collectLatest
++import kotlinx.coroutines.flow.combine
++import kotlinx.coroutines.flow.distinctUntilChanged
++import kotlinx.coroutines.launch
++import kotlin.concurrent.Volatile
++
++private data class SmartHighlightsInput(
++    val enabled: Boolean,
++    val hasApiKey: Boolean,
++    val homeRevision: Int,
++    val libraryRevision: Int,
++    val progressRevision: Int,
++)
++
++/**
++ * Nuvio fork: the Smart Highlights home rail pipeline.
++ *
++ * Candidates are a blend of the profile's in-progress continue-watching titles (most recently
++ * watched first), the saved library (most recently listed first) and the already-fetched home
++ * catalog items, deduplicated and capped. The rail renders the fallback order straight away;
++ * while a Gemini key is configured for the profile, a cached or freshly fetched ranking reorders
++ * the same candidates and attaches a short reason to each pick. With no key nothing is fetched —
++ * the fallback order is the rail, silently.
++ */
++object SmartHighlightsRepository {
++    private val log = Logger.withTag("SmartHighlights")
++
++    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
++    private val client = GeminiRankingClient()
++    private val rankingCache = SmartHighlightsRankingCache()
++
++    private val _picks = MutableStateFlow<List<SmartHighlightPick>>(emptyList())
++    val picks: StateFlow<List<SmartHighlightPick>> = _picks.asStateFlow()
++
++    @Volatile private var started = false
++    @Volatile private var generation = 0
++
++    /** Starts the pipeline once; safe to call from every home render. */
++    fun ensureStarted() {
++        if (started) return
++        started = true
++        SmartHighlightsPreferences.ensureLoaded()
++        scope.launch {
++            var firstRun = true
++            combine(
++                SmartHighlightsPreferences.enabled,
++                SmartHighlightsPreferences.apiKeyConfigured,
++                HomeRepository.uiState,
++                LibraryRepository.uiState,
++                WatchProgressRepository.uiState,
++            ) { enabled, hasApiKey, home, library, progress ->
++                SmartHighlightsInput(
++                    enabled = enabled,
++                    hasApiKey = hasApiKey,
++                    homeRevision = home.sections.sumOf { section ->
++                        section.items.size * 31 + section.key.hashCode()
++                    } + home.heroItems.size,
++                    libraryRevision = library.items.size * 31 +
++                        library.items.fold(0) { acc, item -> acc + item.id.hashCode() },
++                    progressRevision = progress.entries.size * 31 +
++                        progress.entries.fold(0) { acc, entry -> acc + entry.videoId.hashCode() },
++                )
++            }
++                .distinctUntilChanged()
++                .collectLatest { input ->
++                    val requestGeneration = generation
++                    if (!input.enabled) {
++                        _picks.value = emptyList()
++                        firstRun = false
++                        return@collectLatest
++                    }
++                    if (firstRun) {
++                        // Let home's catalogs and continue watching load before spending work on the rail.
++                        delay(SMART_HIGHLIGHTS_STARTUP_DELAY_MS)
++                    }
++                    firstRun = false
++                    val candidates = buildSmartHighlightCandidates(
++                        homeItems = homeCandidates(),
++                        libraryItems = library.items.sortedByDescending { it.savedAtEpochMs },
++                        continueWatchingEntries = WatchProgressRepository.uiState.value.entries
++                            .continueWatchingEntries(),
++                    )
++                    _picks.value = if (candidates.isEmpty()) {
++                        emptyList()
++                    } else {
++                        computeSmartHighlightPicks(candidates, input.hasApiKey, requestGeneration)
++                    }
++                }
++        }
++    }
++
++    fun onProfileChanged() {
++        generation++
++        SmartHighlightsPreferences.onProfileChanged()
++        _picks.value = emptyList()
++    }
++
++    fun clearLocalState() {
++        generation++
++        SmartHighlightsPreferences.clearLocalState()
++        _picks.value = emptyList()
++    }
++
++    private fun homeCandidates(): List<MetaPreview> =
++        buildList {
++            addAll(HomeRepository.uiState.value.heroItems)
++            HomeRepository.uiState.value.sections.forEach { section -> addAll(section.items) }
++        }
++
++    private suspend fun computeSmartHighlightPicks(
++        candidates: List<SmartHighlightCandidate>,
++        hasApiKey: Boolean,
++        requestGeneration: Int,
++    ): List<SmartHighlightPick> {
++        val fallback = candidates
++            .take(SMART_HIGHLIGHTS_MAX_PICKS)
++            .map { it.toPick(fallbackReason(it)) }
++        if (!hasApiKey) return fallback
++
++        // The cache key covers the candidate set: a changed library or progress picture misses it.
++        val hash = candidates.joinToString("|") { it.cacheToken } + "#${candidates.size}"
++        val cached = rankingCache.read(hash)
++        if (cached != null) return applySmartHighlightsRanking(candidates, cached)
++
++        val fetched = runCatching {
++            client.rank(
++                candidates = candidates.take(SMART_HIGHLIGHTS_MAX_CANDIDATES).map(::describeCandidate),
++                pickCount = SMART_HIGHLIGHTS_MAX_PICKS,
++            )
++        }.getOrElse { error ->
++            if (error is CancellationException) throw error
++            log.i { "Smart Highlights ranking skipped: ${error.message}" }
++            null
++        }
++        if (generation != requestGeneration) return fallback
++        if (fetched != null) rankingCache.write(hash, fetched)
++        return fetched?.let { applySmartHighlightsRanking(candidates, it) } ?: fallback
++    }
++}
++
++/** Ranked picks in Gemini's order, with the remaining candidates appended in fallback order. */
++private fun applySmartHighlightsRanking(
++    candidates: List<SmartHighlightCandidate>,
++    ranking: List<GeminiRankEntry>,
++): List<SmartHighlightPick> {
++    val byIndex = candidates.withIndex().associate { (index, candidate) -> index to candidate }
++    val ranked = ranking.mapNotNull { entry ->
++        byIndex[entry.index]?.let { candidate ->
++            SmartHighlightPick(item = candidate.item, reason = entry.reason, ranked = true)
++        }
++    }
++    val rankedKeys = ranked.map { it.item.stableKey() }.toSet()
++    val remainder = candidates
++        .filter { it.item.stableKey() !in rankedKeys }
++        .map { it.toPick(fallbackReason(it)) }
++    return (ranked + remainder)
++        .distinctBy { it.item.stableKey() }
++        .take(SMART_HIGHLIGHTS_MAX_PICKS)
++}
++
++internal fun buildSmartHighlightCandidates(
++    homeItems: List<MetaPreview>,
++    libraryItems: List<LibraryItem>,
++    continueWatchingEntries: List<com.nuvio.app.features.watchprogress.WatchProgressEntry>,
++): List<SmartHighlightCandidate> {
++    val nowEpochMs = EpisodeReleaseDatePlatform.nowEpochMs()
++    val todayIsoDate = CurrentDateProvider.todayIsoDate()
++    val seen = HashSet<String>()
++    val candidates = ArrayList<SmartHighlightCandidate>()
++
++    fun addCandidate(item: MetaPreview, progressPercent: Int?, fromLibrary: Boolean) {
++        if (item.name.isBlank()) return
++        // A card without art would render as an empty frame on the home screen.
++        if (item.poster.isNullOrBlank() && item.banner.isNullOrBlank() && item.landscapePoster.isNullOrBlank()) return
++        if (item.isUnreleased(todayIsoDate, nowEpochMs)) return
++        if (!seen.add(item.stableKey())) return
++        candidates += SmartHighlightCandidate(item, progressPercent, fromLibrary)
++    }
++
++    continueWatchingEntries.asSequence()
++        .filter { entry -> entry.title.isNotBlank() }
++        .take(SMART_HIGHLIGHTS_MAX_PROGRESS_CANDIDATES)
++        .forEach { entry ->
++            val percent = entry.normalizedProgressPercent
++                ?.toInt()
++                ?.takeIf { it in 1..99 }
++            addCandidate(
++                item = MetaPreview(
++                    id = entry.parentMetaId,
++                    type = entry.parentMetaType,
++                    name = entry.title,
++                    poster = entry.poster,
++                    banner = entry.background,
++                    logo = entry.logo,
++                    posterShape = PosterShape.Poster,
++                ),
++                progressPercent = percent,
++                fromLibrary = false,
++            )
++        }
++
++    libraryItems.asSequence()
++        .take(SMART_HIGHLIGHTS_MAX_LIBRARY_CANDIDATES)
++        .forEach { libraryItem ->
++            addCandidate(libraryItem.toMetaPreview(), progressPercent = null, fromLibrary = true)
++        }
++
++    homeItems.asSequence()
++        .take(SMART_HIGHLIGHTS_MAX_LIBRARY_CANDIDATES)
++        .forEach { preview ->
++            addCandidate(preview, progressPercent = null, fromLibrary = true)
++        }
++
++    return candidates.take(SMART_HIGHLIGHTS_MAX_CANDIDATES)
++}
++
++/** One prompt line per candidate: title, type, year, genres and how far along the viewer is. */
++private fun describeCandidate(candidate: SmartHighlightCandidate): String = buildString {
++    append(candidate.item.name)
++    append(" (")
++    append(candidate.item.type)
++    candidate.item.releaseInfo?.trim()?.takeIf { it.isNotEmpty() }?.let { year ->
++        append(", ")
++        append(year.take(12))
++    }
++    append(")")
++    val genres = candidate.item.genres.take(3).filter { it.isNotBlank() }
++    if (genres.isNotEmpty()) {
++        append(" [")
++        append(genres.joinToString(", "))
++        append("]")
++    }
++    when {
++        candidate.progressPercent != null -> {
++            append(" — ")
++            append(candidate.progressPercent)
++            append("% watched")
++        }
++        candidate.fromLibrary -> append(" — in their watchlist")
++    }
++}
++
++private fun SmartHighlightCandidate.toPick(reason: String) =
++    SmartHighlightPick(item = item, reason = reason, ranked = false)
++
++private fun fallbackReason(candidate: SmartHighlightCandidate): String =
++    if (candidate.progressPercent != null) {
++        "Continue watching"
++    } else {
++        "Saved recently"
++    }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsStorage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsStorage.kt
+new file mode 100644
+index 0000000..64f9175
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsStorage.kt
+@@ -0,0 +1,18 @@
++package com.nuvio.app.features.highlights
++
++/**
++ * Nuvio fork: per-profile persistence for the Smart Highlights rail. Values are stored under a
++ * profile-scoped key so switching profiles never leaks one profile's rail settings (or API key)
++ * into another. The API key is only ever handed to the ranking client as a request header; it is
++ * never logged and never displayed back.
++ */
++internal expect object SmartHighlightsStorage {
++    fun loadEnabled(): Boolean?
++    fun saveEnabled(enabled: Boolean)
++    fun loadApiKey(): String?
++    fun saveApiKey(apiKey: String)
++    /** Serialized [SmartHighlightsRankingCachePayload], or null when nothing is cached. */
++    fun loadRankingCache(): String?
++    fun saveRankingCache(payload: String)
++    fun clearRankingCache()
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt
+index ff56275..2d41a20 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt
+@@ -143,6 +143,7 @@ fun HomeScreen(
+     continueWatchingDisintegrationRequest: DisintegrationRequest<String>? = null,
+     onFolderClick: ((collectionId: String, folderId: String) -> Unit)? = null,
+     onFirstCatalogRendered: (() -> Unit)? = null,
++    onGenreClick: ((genre: String) -> Unit)? = null,
+ ) {
+     LaunchedEffect(Unit) {
+         AddonRepository.initialize()
+@@ -186,6 +187,13 @@ fun HomeScreen(
+     val watchProgressUiState by WatchProgressRepository.uiState.collectAsStateWithLifecycle()
+     val effectiveWatchProgressSource = watchProgressUiState.source
+     val cloudLibraryUiState by CloudLibraryRepository.uiState.collectAsStateWithLifecycle()
++    // Nuvio fork: Smart Highlights picks (top picks from the profile's own library and progress).
++    LaunchedEffect(Unit) { com.nuvio.app.features.highlights.SmartHighlightsRepository.ensureStarted() }
++    val smartHighlightPicks by com.nuvio.app.features.highlights.SmartHighlightsRepository.picks
++        .collectAsStateWithLifecycle()
++    // Nuvio fork: genres derived locally from the already-fetched home/library metadata.
++    val homeGenres by com.nuvio.app.features.genres.GenreIndex.genres.collectAsStateWithLifecycle()
++    LaunchedEffect(Unit) { com.nuvio.app.features.genres.GenreIndex.ensureStarted() }
+     val networkStatusUiState by NetworkStatusRepository.uiState.collectAsStateWithLifecycle()
+     val trackingSettingsUiState by remember {
+         TrackingSettingsRepository.ensureLoaded()
+@@ -1202,6 +1210,27 @@ fun HomeScreen(
+                         onItemLongPress = onContinueWatchingLongPress,
+                         disintegrationRequest = continueWatchingDisintegrationRequest,
+                     )
++                    // Nuvio fork: Smart Highlights — top picks from the profile's library and progress.
++                    if (smartHighlightPicks.isNotEmpty()) {
++                        item(key = "fork_home_smart_highlights", contentType = "smart_highlights") {
++                            com.nuvio.app.features.home.components.SmartHighlightsRailSection(
++                                title = stringResource(Res.string.home_smart_highlights_title),
++                                picks = smartHighlightPicks,
++                                sectionPadding = homeSectionPadding,
++                                modifier = Modifier.padding(bottom = 12.dp),
++                                onPosterClick = onPosterClick,
++                                onPosterLongClick = onPosterLongClick,
++                            )
++                        }
++                    }
++                    // Nuvio fork: genres browse entry, derived locally from fetched metadata.
++                    item(key = "fork_home_genres", contentType = "genres") {
++                        com.nuvio.app.features.genres.ForkHomeGenresRow(
++                            genres = homeGenres,
++                            sectionPadding = homeSectionPadding,
++                            onGenreClick = onGenreClick,
++                        )
++                    }
+                     item(key = "fork_home_library_rows", contentType = "fork_rows") {
+                         ForkHomeLibraryRows(sectionPadding = homeSectionPadding, onPosterClick = onPosterClick)
+                     }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/components/SmartHighlightsSection.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/components/SmartHighlightsSection.kt
+new file mode 100644
+index 0000000..433309c
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/components/SmartHighlightsSection.kt
+@@ -0,0 +1,95 @@
++package com.nuvio.app.features.home.components
++
++import androidx.compose.foundation.background
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.PaddingValues
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.dp
++import com.nuvio.app.core.ui.NuvioShelfSection
++import com.nuvio.app.features.highlights.SmartHighlightPick
++import com.nuvio.app.features.home.MetaPreview
++import com.nuvio.app.features.home.stableKey
++
++/**
++ * Nuvio fork: the short "why" badge the Smart Highlights rail draws on each featured poster.
++ * Dark scrim with white label text so it stays legible over any artwork.
++ */
++@Composable
++internal fun SmartHighlightReasonChip(
++    text: String,
++    modifier: Modifier = Modifier,
++) {
++    Text(
++        text = text,
++        style = MaterialTheme.typography.labelMedium,
++        color = Color.White,
++        maxLines = 1,
++        overflow = TextOverflow.Ellipsis,
++        modifier = modifier
++            .clip(RoundedCornerShape(6.dp))
++            .background(Color.Black.copy(alpha = 0.72f))
++            .padding(horizontal = 8.dp, vertical = 3.dp),
++    )
++}
++
++/**
++ * Nuvio fork: the Smart Highlights rail — top picks from the profile's own library and progress,
++ * with a reason chip drawn onto each poster. Clicks navigate to the detail screen like any
++ * catalog card. Hidden entirely when [picks] is empty.
++ */
++@Composable
++internal fun SmartHighlightsRailSection(
++    title: String,
++    picks: List<SmartHighlightPick>,
++    sectionPadding: androidx.compose.ui.unit.Dp,
++    modifier: Modifier = Modifier,
++    onPosterClick: ((MetaPreview) -> Unit)? = null,
++    onPosterLongClick: ((MetaPreview) -> Unit)? = null,
++) {
++    if (picks.isEmpty()) return
++    NuvioShelfSection(
++        title = title,
++        entries = picks,
++        modifier = modifier,
++        headerHorizontalPadding = sectionPadding,
++        rowContentPadding = PaddingValues(horizontal = sectionPadding),
++        key = { pick -> "${pick.item.stableKey()}|highlight" },
++    ) { pick ->
++        SmartHighlightPosterCard(
++            pick = pick,
++            onClick = onPosterClick?.let { { it(pick.item) } },
++            onLongClick = onPosterLongClick?.let { { it(pick.item) } },
++        )
++    }
++}
++
++@Composable
++private fun SmartHighlightPosterCard(
++    pick: SmartHighlightPick,
++    onClick: (() -> Unit)?,
++    onLongClick: (() -> Unit)?,
++    modifier: Modifier = Modifier,
++) {
++    Box(modifier = modifier) {
++        HomePosterCard(
++            item = pick.item,
++            onClick = onClick,
++            onLongClick = onLongClick,
++        )
++        SmartHighlightReasonChip(
++            text = pick.reason,
++            modifier = Modifier
++                .align(Alignment.BottomStart)
++                .padding(8.dp),
++        )
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerAutoQuality.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerAutoQuality.kt
+new file mode 100644
+index 0000000..fe94192
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerAutoQuality.kt
+@@ -0,0 +1,296 @@
++package com.nuvio.app.features.player
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.DisposableEffect
++import androidx.compose.runtime.LaunchedEffect
++import co.touchlab.kermit.Logger
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.isActive
++
++/*
++ * Nuvio fork: auto quality for adaptive (multi-rendition) streams, driven by a measured
++ * throughput sample of the playing stream. Three pieces:
++ *
++ *  - [AutoQualitySpeedTest] keeps the latest measured download speed. On Android's ExoPlayer it is
++ *    fed from the player's own bandwidth meter (an AnalyticsListener hook reporting real bytes
++ *    over real load time); on Android's libmpv engine from its `cache-speed` fill rate. The
++ *    latest result also surfaces in the dx stream stats overlay. Other platforms sample nothing.
++ *  - Auto quality hot swap: while enabled and an adaptive stream plays, the playing rendition is
++ *    compared against the measured speed every tick. An upgrade needs the estimate to stay above
++ *    1.3x the next rendition's bitrate for AUTO_QUALITY_UPGRADE_HOLD_MS with at least
++ *    AUTO_QUALITY_UPGRADE_MIN_BUFFER_MS of buffer; a downgrade takes
++ *    AUTO_QUALITY_DOWNGRADE_SAMPLES consecutive samples below the playing rendition's bitrate.
++ *    Switches happen one step at a time through the same HLS variant switch the Quality panel
++ *    uses (position-preserving), with AUTO_QUALITY_SWITCH_SETTLE_MS between switches.
++ *  - Fast start: when enabled (with auto quality on), a fresh adaptive stream starts on its
++ *    lowest rendition and upgrades run through the same hysteresis once the first buffering has
++ *    completed.
++ *
++ * A quality picked by hand in the player (any override the engine did not set) stands the engine
++ * down until the panel's Auto entry is picked again.
++ */
++
++private val autoQualityLog = Logger.withTag("AutoQuality")
++
++private const val AUTO_QUALITY_UPGRADE_HEADROOM = 1.3
++private const val AUTO_QUALITY_UPGRADE_HOLD_MS = 5_000L
++private const val AUTO_QUALITY_UPGRADE_MIN_BUFFER_MS = 10_000L
++private const val AUTO_QUALITY_DOWNGRADE_SAMPLES = 2
++private const val AUTO_QUALITY_SWITCH_SETTLE_MS = 10_000L
++private const val AUTO_QUALITY_TICK_MS = 500L
++
++/**
++ * Nuvio fork: per-playback state of the auto quality controller, owned by the player screen's
++ * runtime and only touched from its tick coroutine. Nothing here survives the player screen.
++ */
++internal class PlayerAutoQualityState {
++    /** The stream the state below was built for; a change resets everything transient. */
++    var lastSeenStreamKey: String = ""
++
++    /** The rendition the controller pinned through the variant-switch state, if any. */
++    var pinnedQualityId: String? = null
++
++    /** True while a fresh stream still has to be pinned to its lowest rendition. */
++    var fastStartPending: Boolean = false
++
++    /** When the estimate first satisfied the upgrade hysteresis, for its hold window. */
++    var upgradeHoldSinceMs: Long? = null
++
++    /** Consecutive samples that measured below the playing rendition's bitrate. */
++    var downgradeStreak: Int = 0
++
++    /** When the last rendition switch was applied, for the settle window between switches. */
++    var lastSwitchAtMs: Long = 0L
++
++    /** Drops everything that belongs to the previous stream. */
++    fun onStreamChanged() {
++        upgradeHoldSinceMs = null
++        downgradeStreak = 0
++        lastSwitchAtMs = 0L
++    }
++}
++
++/**
++ * The latest measured download speed. Samples are an exponential moving average so a single fast
++ * burst cannot trigger an upgrade on its own.
++ */
++object AutoQualitySpeedTest {
++    /** Smoothing weight of a new measurement (EMA). */
++    private const val EMA_NEW_WEIGHT = 0.3
++
++    /** A result older than this is from another session and is not used. */
++    private const val FRESH_MS = 120_000L
++
++    private val lock = Any()
++    @Volatile private var estimateBps: Long = 0L
++    @Volatile private var latestAtMs: Long = 0L
++
++    /** One bandwidth-meter reading (bits/s); several arrive while data loads. */
++    fun recordBandwidthEstimate(bitrateEstimateBps: Long) {
++        if (bitrateEstimateBps <= 0L) return
++        synchronized(lock) {
++            estimateBps = if (estimateBps <= 0L) {
++                bitrateEstimateBps
++            } else {
++                (estimateBps * (1.0 - EMA_NEW_WEIGHT) + bitrateEstimateBps * EMA_NEW_WEIGHT).toLong()
++            }
++            latestAtMs = nowMs()
++        }
++    }
++
++    /** A demuxer fill rate (bytes/s), sampled from the mpv engine; feeds the overlay only. */
++    fun recordBytesPerSecondRate(bytesPerSecond: Long) {
++        if (bytesPerSecond <= 0L) return
++        recordBandwidthEstimate(bytesPerSecond * 8L)
++    }
++
++    /** The smoothed measurement in bits/s, or null when nothing has been measured recently. */
++    fun latestBps(): Long? {
++        val at = latestAtMs
++        if (at == 0L || nowMs() - at > FRESH_MS) return null
++        return estimateBps.takeIf { it > 0L }
++    }
++
++    private fun nowMs(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
++}
++
++/** The currently playing rendition id (manual override or the resolver's recommendation). */
++private val PlayerScreenRuntime.playingQualityId: String?
++    get() = selectedPlayerQualityId ?: playerQualityState.recommendedVariantId
++
++/** The effective playback URL the surface consumes, variant switch included. */
++private val PlayerScreenRuntime.effectivePlaybackUrl: String?
++    get() = qualityPlaybackUrl ?: activeSourceUrl
++
++/**
++ * One look at playback, from the engine's own ~500 ms ticker. mpv and streams without rendition
++ * metadata do nothing but feed the speed test, so nothing is faked there. With auto quality off
++ * the function returns immediately and nothing about playback changes.
++ */
++internal fun PlayerScreenRuntime.autoQualityTick(nowMs: Long) {
++    if (!playerSettingsUiState.autoQualityEnabled) return
++    // Torrent/P2P sources have no rendition ladder to hot-swap.
++    if (activeTorrentInfoHash != null) return
++
++    val state = autoQualityState
++    val streamKey = effectivePlaybackUrl.orEmpty()
++    if (streamKey != state.lastSeenStreamKey) {
++        val wasOurs = state.pinnedQualityId != null && selectedPlayerQualityId == state.pinnedQualityId
++        if (wasOurs) {
++            // A new stream: drop the variant pin so the fresh stream starts from the master URL.
++            selectedPlayerQualityId = null
++            qualityPlaybackUrl = null
++        }
++        state.onStreamChanged()
++        state.lastSeenStreamKey = streamKey
++        state.pinnedQualityId = null
++        state.fastStartPending = playerSettingsUiState.fastStartEnabled
++    }
++
++    if (playbackSnapshot.isEnded || !errorMessage.isNullOrBlank()) return
++    val variants = playerQualityState.variants
++    if (variants.size < 2) return
++
++    val pinned = state.pinnedQualityId
++    if (selectedPlayerQualityId != pinned) {
++        if (pinned != null && selectedPlayerQualityId == null) {
++            // The user picked Auto again: the engine takes over from the ladder's default.
++            state.pinnedQualityId = null
++        } else {
++            // A hand-picked quality stands until the chooser's Auto entry clears it.
++            state.upgradeHoldSinceMs = null
++            state.downgradeStreak = 0
++            return
++        }
++    }
++
++    // Fast start: pin the lowest rendition as soon as the ladder is known, before the initial
++    // buffering completes. The settle window below is what defers the first upgrade until after
++    // the first buffering has completed.
++    if (state.fastStartPending) {
++        state.fastStartPending = false
++        val lowest = variants.minByOrNull { it.sortHeight } ?: return
++        if (lowest.id != playingQualityId) {
++            applyAutoQualityVariant(lowest.id, state, nowMs)
++        }
++        return
++    }
++
++    if (!initialLoadCompleted) return
++    val snapshot = playbackSnapshot
++    if (!snapshot.isPlaying || snapshot.isLoading) return
++    if (nowMs - state.lastSwitchAtMs < AUTO_QUALITY_SWITCH_SETTLE_MS) return
++
++    val estimateBps = AutoQualitySpeedTest.latestBps() ?: return
++    val current = playingQualityId
++        ?.let { id -> variants.firstOrNull { it.id == id } }
++        ?: return
++    val playingBitrateBps = current.bandwidth?.takeIf { it > 0L } ?: return
++
++    // Downgrade first: two consecutive samples below what is playing. The target is one step down
++    // (the next-lower rendition); it always fits by construction of the ladder order.
++    if (estimateBps < playingBitrateBps) {
++        state.upgradeHoldSinceMs = null
++        state.downgradeStreak += 1
++        if (state.downgradeStreak >= AUTO_QUALITY_DOWNGRADE_SAMPLES) {
++            state.downgradeStreak = 0
++            val target = variants
++                .filter { it.sortHeight < current.sortHeight }
++                .maxByOrNull { it.sortHeight }
++                ?: return
++            applyAutoQualityVariant(target.id, state, nowMs)
++        }
++        return
++    }
++    state.downgradeStreak = 0
++
++    // Upgrade: the estimate must stay above 1.3x the next rendition for a while, with buffer to
++    // hide the switch, and the next rendition must declare a bitrate (missing metadata is not
++    // evidence that it fits).
++    val bufferedAheadMs = (snapshot.bufferedPositionMs - snapshot.positionMs).coerceAtLeast(0L)
++    val next = variants
++        .filter { it.sortHeight > current.sortHeight }
++        .minByOrNull { it.sortHeight }
++    val nextBitrateBps = next?.bandwidth?.takeIf { it > 0L }
++    val upgradeSustained = if (
++        bufferedAheadMs >= AUTO_QUALITY_UPGRADE_MIN_BUFFER_MS &&
++        nextBitrateBps != null &&
++        nextBitrateBps * AUTO_QUALITY_UPGRADE_HEADROOM <= estimateBps
++    ) {
++        val since = state.upgradeHoldSinceMs
++        if (since == null) {
++            state.upgradeHoldSinceMs = nowMs
++            false
++        } else {
++            nowMs - since >= AUTO_QUALITY_UPGRADE_HOLD_MS
++        }
++    } else {
++        state.upgradeHoldSinceMs = null
++        false
++    }
++    if (upgradeSustained && next != null) {
++        state.upgradeHoldSinceMs = null
++        applyAutoQualityVariant(next.id, state, nowMs)
++    }
++}
++
++/**
++ * Applies a rendition switch through the same HLS variant mechanism the Quality panel uses
++ * ([PlayerScreenRuntime.selectPlayerQuality]'s state changes, without its UI side effects) and
++ * records it as the engine's own pin, so a user's hand-picked quality is never mistaken for it.
++ */
++private fun PlayerScreenRuntime.applyAutoQualityVariant(
++    variantId: String,
++    state: PlayerAutoQualityState,
++    nowMs: Long,
++) {
++    val targetUrl = playerQualityState.playbackUrlFor(variantId)
++    if (targetUrl == null || targetUrl == effectivePlaybackUrl) return
++    val previous = state.pinnedQualityId
++    val previousVariant = previous?.let { id -> playerQualityState.variants.firstOrNull { it.id == id } }
++    val nextVariant = playerQualityState.variants.firstOrNull { it.id == variantId }
++    state.pinnedQualityId = variantId
++    state.lastSwitchAtMs = nowMs
++    selectedPlayerQualityId = variantId
++    qualityPlaybackUrl = targetUrl
++    activeInitialPositionMs = playbackSnapshot.positionMs
++    initialSeekApplied = false
++    playbackSnapshot = playbackSnapshot.copy(isLoading = true, videoWidth = 0, videoHeight = 0)
++    initialLoadCompleted = false
++    errorMessage = null
++    shouldPlay = true
++    val direction = if (previousVariant != null && nextVariant != null &&
++        nextVariant.sortHeight < previousVariant.sortHeight
++    ) {
++        "down"
++    } else {
++        "up"
++    }
++    autoQualityLog.i { "auto quality $direction rendition=$variantId" }
++}
++
++/**
++ * The engine's ticker plus the bandwidth sampling hookup. Runs for the player's whole lifetime;
++ * with auto quality and fast start off the tick returns immediately, so the only cost is the
++ * timer and (on ExoPlayer) the meter listener the player already produces anyway.
++ */
++@Composable
++internal fun PlayerAutoQualityEffects(runtime: PlayerScreenRuntime) {
++    val controller = runtime.playerController
++    DisposableEffect(controller) {
++        controller?.setAutoQualityBandwidthListener(
++            PlayerBandwidthSampleListener { bitrateEstimateBps ->
++                AutoQualitySpeedTest.recordBandwidthEstimate(bitrateEstimateBps)
++            },
++        )
++        onDispose {
++            controller?.setAutoQualityBandwidthListener(null)
++        }
++    }
++    LaunchedEffect(runtime) {
++        while (isActive) {
++            delay(AUTO_QUALITY_TICK_MS)
++            runtime.autoQualityTick(nowMs = kotlin.time.Clock.System.now().toEpochMilliseconds())
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
+index d158235..e1ca789 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerEngine.kt
+@@ -54,6 +54,17 @@ interface PlayerEngineController {
+     suspend fun getChapters(): List<PlayerChapter> = emptyList()
+     /** dx.bi stream stats: label and value rows for the stats overlay (empty where an engine has none). */
+     suspend fun dxStreamStats(): List<Pair<String, String>> = emptyList()
++    /**
++     * Nuvio fork: receives the engine's measured download speed in bits/s while data loads.
++     * ExoPlayer reports its own bandwidth meter; engines without a meter never call the listener.
++     * Only the auto quality engine's speed test consumes it.
++     */
++    fun setAutoQualityBandwidthListener(listener: PlayerBandwidthSampleListener?) {}
++}
++
++/** Nuvio fork: one measured download speed (bits/s) from the playing stream. */
++fun interface PlayerBandwidthSampleListener {
++    fun onBandwidthSample(bitrateEstimateBps: Long)
+ }
+ 
+ internal fun sanitizePlaybackHeaders(headers: Map<String, String>?): Map<String, String> {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt
+index 7af053f..09e2370 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt
+@@ -174,6 +174,7 @@ internal fun PlayerScreenContent(args: PlayerScreenArgs) {
+         }
+         runtime.BindMiniPlayerEffects(miniPresentation)
+         runtime.BindPlayerRuntimeEffects()
++        PlayerAutoQualityEffects(runtime) // Nuvio fork: auto quality hot swap + speed test
+         runtime.WithSeekPreview { runtime.RenderPlayerRuntimeUi() } // Seek previews hook
+ 
+         // Playback intro (Nuvio fork): covers player startup until the video's first frame is
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
+index f20cbfc..c391876 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeState.kt
+@@ -256,4 +256,7 @@ internal class PlayerScreenRuntime(
+     var lastSyncedSettingsResizeMode: PlayerResizeMode? = null
+     var lastResetPlaybackIdentity: PlaybackKey? = null
+     var lastResetVideoIdentity: String? = null
++
++    // Nuvio fork: auto quality hot swap's per-playback state; see PlayerAutoQuality.kt.
++    val autoQualityState = PlayerAutoQualityState()
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSettingsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSettingsRepository.kt
+index 25f2afe..eb1e1c7 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSettingsRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSettingsRepository.kt
+@@ -89,6 +89,9 @@ data class PlayerSettingsUiState(
+     val localCreditsDetectionEnabled: Boolean = false,
+     val playbackIntroEnabled: Boolean = false,
+     val playbackIntroLengthSeconds: Int = PlaybackIntroState.DEFAULT_LENGTH_SECONDS,
++    // Nuvio fork: auto quality hot swap for adaptive streams, plus fast start.
++    val autoQualityEnabled: Boolean = true,
++    val fastStartEnabled: Boolean = false,
+     val streamAutoPlayNextEpisodeEnabled: Boolean = false,
+     val streamAutoPlayNextEpisodeFallbackEnabled: Boolean = true,
+     val streamAutoPlayPreferBingeGroup: Boolean = true,
+@@ -176,6 +179,8 @@ object PlayerSettingsRepository {
+     private var localCreditsDetectionEnabled = false
+     private var playbackIntroEnabled = false
+     private var playbackIntroLengthSeconds = PlaybackIntroState.DEFAULT_LENGTH_SECONDS
++    private var autoQualityEnabled = true
++    private var fastStartEnabled = false
+     private var streamAutoPlayNextEpisodeEnabled = false
+     private var streamAutoPlayNextEpisodeFallbackEnabled = true
+     private var streamAutoPlayPreferBingeGroup = true
+@@ -269,6 +274,8 @@ object PlayerSettingsRepository {
+         localCreditsDetectionEnabled = false
+         playbackIntroEnabled = false
+         playbackIntroLengthSeconds = PlaybackIntroState.DEFAULT_LENGTH_SECONDS
++        autoQualityEnabled = true
++        fastStartEnabled = false
+         streamAutoPlayNextEpisodeEnabled = false
+         streamAutoPlayNextEpisodeFallbackEnabled = true
+         streamAutoPlayPreferBingeGroup = true
+@@ -428,6 +435,8 @@ object PlayerSettingsRepository {
+         playbackIntroLengthSeconds = PlayerSettingsStorage.loadPlaybackIntroLengthSeconds()
+             ?.takeIf { it in PlaybackIntroState.LENGTHS }
+             ?: PlaybackIntroState.DEFAULT_LENGTH_SECONDS
++        autoQualityEnabled = PlayerSettingsStorage.loadAutoQualityEnabled() ?: true
++        fastStartEnabled = PlayerSettingsStorage.loadFastStartEnabled() ?: false
+         streamAutoPlayNextEpisodeEnabled = PlayerSettingsStorage.loadStreamAutoPlayNextEpisodeEnabled() ?: false
+         streamAutoPlayNextEpisodeFallbackEnabled = PlayerSettingsStorage.loadStreamAutoPlayNextEpisodeFallbackEnabled() ?: true
+         streamAutoPlayPreferBingeGroup = PlayerSettingsStorage.loadStreamAutoPlayPreferBingeGroup() ?: true
+@@ -967,6 +976,23 @@ object PlayerSettingsRepository {
+         PlayerSettingsStorage.savePlaybackIntroLengthSeconds(normalized)
+     }
+ 
++    // Nuvio fork: auto quality hot swap and fast start.
++    fun setAutoQualityEnabled(enabled: Boolean) {
++        ensureLoaded()
++        if (autoQualityEnabled == enabled) return
++        autoQualityEnabled = enabled
++        publish()
++        PlayerSettingsStorage.saveAutoQualityEnabled(enabled)
++    }
++
++    fun setFastStartEnabled(enabled: Boolean) {
++        ensureLoaded()
++        if (fastStartEnabled == enabled) return
++        fastStartEnabled = enabled
++        publish()
++        PlayerSettingsStorage.saveFastStartEnabled(enabled)
++    }
++
+     fun setStreamAutoPlayNextEpisodeEnabled(enabled: Boolean) {
+         ensureLoaded()
+         if (streamAutoPlayNextEpisodeEnabled == enabled) return
+@@ -1276,6 +1302,8 @@ object PlayerSettingsRepository {
+             localCreditsDetectionEnabled = localCreditsDetectionEnabled,
+             playbackIntroEnabled = playbackIntroEnabled,
+             playbackIntroLengthSeconds = playbackIntroLengthSeconds,
++            autoQualityEnabled = autoQualityEnabled,
++            fastStartEnabled = fastStartEnabled,
+             streamAutoPlayNextEpisodeEnabled = streamAutoPlayNextEpisodeEnabled,
+             streamAutoPlayNextEpisodeFallbackEnabled = streamAutoPlayNextEpisodeFallbackEnabled,
+             streamAutoPlayPreferBingeGroup = streamAutoPlayPreferBingeGroup,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSettingsStorage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSettingsStorage.kt
+index cbd91f2..0f4effd 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSettingsStorage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerSettingsStorage.kt
+@@ -142,6 +142,11 @@ internal expect object PlayerSettingsStorage {
+     fun savePlaybackIntroEnabled(enabled: Boolean)
+     fun loadPlaybackIntroLengthSeconds(): Int?
+     fun savePlaybackIntroLengthSeconds(seconds: Int)
++    // Nuvio fork: auto quality hot swap and fast start.
++    fun loadAutoQualityEnabled(): Boolean?
++    fun saveAutoQualityEnabled(enabled: Boolean)
++    fun loadFastStartEnabled(): Boolean?
++    fun saveFastStartEnabled(enabled: Boolean)
+     fun loadStreamAutoPlayNextEpisodeEnabled(): Boolean?
+     fun saveStreamAutoPlayNextEpisodeEnabled(enabled: Boolean)
+     fun loadStreamAutoPlayNextEpisodeFallbackEnabled(): Boolean?
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileRepository.kt
+index f82b09f..22d20b0 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileRepository.kt
+@@ -178,6 +178,9 @@ object ProfileRepository {
+         P2pSettingsRepository.onProfileChanged()
+         HomeCatalogSettingsRepository.onProfileChanged()
+         HomeRepository.clear()
++        com.nuvio.app.features.highlights.SmartHighlightsRepository.onProfileChanged() // Nuvio fork: smart highlights + Gemini key
++        com.nuvio.app.features.genres.GenreIndex.onProfileChanged() // Nuvio fork: genres browse
++        com.nuvio.app.features.reminders.ReleaseRemindersRepository.onProfileChanged() // Nuvio fork: release reminders
+         MetaScreenSettingsRepository.onProfileChanged()
+         com.nuvio.app.features.shuffle.EpisodeShuffleRepository.onProfileChanged()
+         ContinueWatchingPreferencesRepository.onProfileChanged()
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/reminders/ReleaseReminderModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/reminders/ReleaseReminderModels.kt
+new file mode 100644
+index 0000000..37c4ebd
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/reminders/ReleaseReminderModels.kt
+@@ -0,0 +1,38 @@
++package com.nuvio.app.features.reminders
++
++import kotlinx.serialization.Serializable
++
++/**
++ * Nuvio fork: one release reminder the user set from a detail screen of an unreleased title.
++ * Stored per profile; a local notification is delivered at [releaseDateMs].
++ */
++@Serializable
++data class ReleaseReminder(
++    /** Stable content key, "$type:$id" of the title the reminder belongs to. */
++    val itemId: String,
++    val title: String,
++    val releaseDateMs: Long,
++    val posterUrl: String? = null,
++) {
++    val itemType: String
++        get() = itemId.substringBefore(':', missingDelimiterValue = "")
++
++    val contentId: String
++        get() = itemId.substringAfter(':', missingDelimiterValue = itemId)
++}
++
++data class ReleaseRemindersUiState(
++    val reminders: List<ReleaseReminder> = emptyList(),
++    val permissionGranted: Boolean = false,
++)
++
++internal fun buildReleaseReminderId(reminder: ReleaseReminder): String {
++    val contentHash = kotlin.math.abs(reminder.itemId.hashCode())
++    return "release-reminder-${com.nuvio.app.features.profiles.ProfileRepository.activeProfileId}-$contentHash-${reminder.releaseDateMs}"
++}
++
++/**
++ * Formats a reminder's release timestamp for the notification body and the settings list.
++ * Uses the same day-precision display the rest of the app uses for release dates.
++ */
++internal expect fun formatReminderReleaseDate(releaseDateMs: Long): String
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/reminders/ReleaseReminderNotificationPlatform.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/reminders/ReleaseReminderNotificationPlatform.kt
+new file mode 100644
+index 0000000..5974454
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/reminders/ReleaseReminderNotificationPlatform.kt
+@@ -0,0 +1,18 @@
++package com.nuvio.app.features.reminders
++
++/**
++ * Nuvio fork: platform notification delivery for release reminders.
++ *
++ * - Android: scheduled as WorkManager one-time jobs (the same mechanism the tree's episode
++ *   release notifications use). WorkManager persists pending work across reboots on its own, so
++ *   no BOOT receiver and no exact-alarm permission are needed; an in-process refresh also runs
++ *   on app start via [ReleaseRemindersRepository].
++ * - iOS: UNUserNotificationCenter calendar triggers (the tree's iosMain already links
++ *   UserNotifications for episode release notifications).
++ */
++internal expect object ReleaseReminderNotificationPlatform {
++    suspend fun notificationsAuthorized(): Boolean
++    suspend fun requestAuthorization(): Boolean
++    suspend fun schedule(reminders: List<ReleaseReminder>)
++    suspend fun clearAll()
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/reminders/ReleaseRemindersRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/reminders/ReleaseRemindersRepository.kt
+new file mode 100644
+index 0000000..07a66d9
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/reminders/ReleaseRemindersRepository.kt
+@@ -0,0 +1,159 @@
++package com.nuvio.app.features.reminders
++
++import co.touchlab.kermit.Logger
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.SupervisorJob
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import kotlinx.coroutines.launch
++import kotlinx.serialization.builtins.ListSerializer
++import kotlinx.serialization.json.Json
++import kotlin.concurrent.Volatile
++
++/**
++ * Nuvio fork: release reminders set from detail screens of unreleased titles. Reminders persist
++ * per profile and produce one local notification at the title's release instant; the list is
++ * managed from Settings > Notifications.
++ */
++object ReleaseRemindersRepository {
++    private val log = Logger.withTag("ReleaseReminders")
++
++    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
++    private val json = Json {
++        ignoreUnknownKeys = true
++        encodeDefaults = true
++    }
++
++    private val _uiState = MutableStateFlow(ReleaseRemindersUiState())
++    val uiState: StateFlow<ReleaseRemindersUiState> = _uiState.asStateFlow()
++
++    @Volatile private var hasLoaded = false
++
++    fun ensureLoaded() {
++        if (hasLoaded) return
++        hasLoaded = true
++        loadFromDisk()
++        refreshPermissionState()
++        // In-process safety net: re-schedule whatever WorkManager may have lost (e.g. work cleared
++        // by an aggressive vendor cleaner) whenever the app starts.
++        scheduleAll()
++    }
++
++    fun onProfileChanged() {
++        loadFromDisk()
++        refreshPermissionState()
++        scheduleAll()
++    }
++
++    fun clearLocalState() {
++        hasLoaded = false
++        _uiState.value = ReleaseRemindersUiState()
++        scope.launch {
++            runCatching { ReleaseReminderNotificationPlatform.clearAll() }
++                .onFailure { error -> log.w { "Failed to clear scheduled reminders: ${error.message}" } }
++        }
++    }
++
++    /** True when this exact item+release pairing already has a reminder. */
++    fun isReminded(itemId: String, releaseDateMs: Long): Boolean {
++        ensureLoaded()
++        return _uiState.value.reminders.any { reminder ->
++            reminder.itemId == itemId && reminder.releaseDateMs == releaseDateMs
++        }
++    }
++
++    fun setReminded(
++        itemId: String,
++        title: String,
++        releaseDateMs: Long,
++        posterUrl: String?,
++        reminded: Boolean,
++    ) {
++        ensureLoaded()
++        val current = _uiState.value.reminders
++        val updated = if (reminded) {
++            val reminder = ReleaseReminder(
++                itemId = itemId,
++                title = title,
++                releaseDateMs = releaseDateMs,
++                posterUrl = posterUrl?.takeIf { it.isNotBlank() },
++            )
++            current.filterNot { it.itemId == itemId } + reminder
++        } else {
++            current.filterNot { it.itemId == itemId }
++        }
++        _uiState.value = _uiState.value.copy(reminders = updated)
++        persist(updated)
++        scope.launch { scheduleAll() }
++    }
++
++    fun remove(itemId: String) {
++        setReminded(itemId = itemId, title = "", releaseDateMs = 0L, posterUrl = null, reminded = false)
++    }
++
++    fun refreshAsync() {
++        ensureLoaded()
++        scope.launch { scheduleAll() }
++    }
++
++    /** Requests notification permission through the shared runtime prompt flow. */
++    suspend fun requestPermission(): Boolean =
++        runCatching { com.nuvio.app.features.notifications.EpisodeReleaseNotificationPlatform.requestAuthorization() }
++            .onFailure { error ->
++                log.w { "Failed to request notification permission: ${error.message}" }
++            }
++            .getOrElse { false }
++            .also { granted ->
++                _uiState.value = _uiState.value.copy(permissionGranted = granted)
++            }
++
++    private fun refreshPermissionState() {
++        scope.launch {
++            val granted = runCatching { ReleaseReminderNotificationPlatform.notificationsAuthorized() }
++                .onFailure { error ->
++                    log.w { "Failed to read notification permission: ${error.message}" }
++                }
++                .getOrDefault(false)
++            _uiState.value = _uiState.value.copy(permissionGranted = granted)
++        }
++    }
++
++    private fun scheduleAll() {
++        val reminders = _uiState.value.reminders
++        scope.launch {
++            runCatching { ReleaseReminderNotificationPlatform.schedule(reminders) }
++                .onFailure { error ->
++                    log.w { "Failed to schedule release reminders: ${error.message}" }
++                }
++        }
++    }
++
++    private fun loadFromDisk() {
++        hasLoaded = true
++        val payload = ReleaseRemindersStorage.loadPayload().orEmpty().trim()
++        val reminders = payload.takeIf { it.isNotEmpty() }
++            ?.let { rawPayload ->
++                runCatching {
++                    json.decodeFromString(ListSerializer(ReleaseReminder.serializer()), rawPayload)
++                }.onFailure { error ->
++                    log.w { "Failed to decode release reminders payload: ${error.message}" }
++                }.getOrNull()
++            }
++            .orEmpty()
++            .filter { it.itemId.isNotBlank() && it.releaseDateMs > 0L }
++        _uiState.value = ReleaseRemindersUiState(reminders = reminders)
++    }
++
++    private fun persist(reminders: List<ReleaseReminder>) {
++        runCatching {
++            ReleaseRemindersStorage.savePayload(
++                json.encodeToString(
++                    ListSerializer(ReleaseReminder.serializer()),
++                    reminders.sortedBy { it.releaseDateMs },
++                ),
++            )
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/reminders/ReleaseRemindersStorage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/reminders/ReleaseRemindersStorage.kt
+new file mode 100644
+index 0000000..aee0a15
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/reminders/ReleaseRemindersStorage.kt
+@@ -0,0 +1,10 @@
++package com.nuvio.app.features.reminders
++
++/**
++ * Nuvio fork: per-profile persistence for release reminders. One JSON payload of
++ * [ReleaseReminder] entries keyed under a profile-scoped preference.
++ */
++internal expect object ReleaseRemindersStorage {
++    fun loadPayload(): String?
++    fun savePayload(payload: String)
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/HomescreenSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/HomescreenSettingsPage.kt
+index deddf8d..25ce3a5 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/HomescreenSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/HomescreenSettingsPage.kt
+@@ -124,6 +124,7 @@ internal fun LazyListScope.homescreenSettingsContent(
+         }
+     }
+     item { ForkHomeRowsSettingsSection(isTablet = isTablet) } // fork home rows hook
++    item { SmartHighlightsSettingsSection(isTablet = isTablet) } // Nuvio fork: smart highlights + Gemini key
+     item { ForkAboutSettingsSection(isTablet = isTablet) } // fork about hook
+     item {
+         val catalogOnlyItems = items.filter { !it.isCollection }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NotificationsSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NotificationsSettingsPage.kt
+index a7eab2c..45da8cd 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NotificationsSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/NotificationsSettingsPage.kt
+@@ -5,15 +5,18 @@ import androidx.compose.foundation.layout.Column
+ import androidx.compose.foundation.layout.Spacer
+ import androidx.compose.foundation.layout.fillMaxWidth
+ import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.padding
+ import androidx.compose.foundation.lazy.LazyListScope
+ import androidx.compose.material3.Button
+ import androidx.compose.material3.ButtonDefaults
+ import androidx.compose.material3.MaterialTheme
+ import androidx.compose.material3.Text
+ import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.unit.dp
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
+ import com.nuvio.app.features.notifications.EpisodeReleaseNotificationsRepository
+ import com.nuvio.app.features.notifications.EpisodeReleaseNotificationsUiState
+ import nuvio.composeapp.generated.resources.Res
+@@ -29,6 +32,10 @@ import nuvio.composeapp.generated.resources.settings_notifications_sending_test
+ import nuvio.composeapp.generated.resources.settings_notifications_test_for_title
+ import nuvio.composeapp.generated.resources.settings_notifications_test_requires_saved_show
+ import nuvio.composeapp.generated.resources.settings_notifications_test_title
++import nuvio.composeapp.generated.resources.settings_reminders_empty
++import nuvio.composeapp.generated.resources.settings_reminders_releasing_on
++import nuvio.composeapp.generated.resources.settings_reminders_remove
++import nuvio.composeapp.generated.resources.settings_reminders_section
+ import org.jetbrains.compose.resources.stringResource
+ 
+ internal fun LazyListScope.notificationsSettingsContent(
+@@ -64,6 +71,83 @@ internal fun LazyListScope.notificationsSettingsContent(
+             )
+         }
+     }
++
++    // Nuvio fork: release reminders set from detail screens of unreleased titles.
++    item {
++        ReleaseRemindersSettingsSection(isTablet = isTablet)
++    }
++}
++
++@Composable
++private fun ReleaseRemindersSettingsSection(isTablet: Boolean) {
++    val remindersState by com.nuvio.app.features.reminders.ReleaseRemindersRepository.uiState
++        .collectAsStateWithLifecycle()
++    androidx.compose.runtime.LaunchedEffect(Unit) {
++        com.nuvio.app.features.reminders.ReleaseRemindersRepository.ensureLoaded()
++    }
++
++    SettingsSection(
++        title = stringResource(Res.string.settings_reminders_section),
++        isTablet = isTablet,
++    ) {
++        if (remindersState.reminders.isEmpty()) {
++            SettingsGroup(isTablet = isTablet) {
++                Text(
++                    text = stringResource(Res.string.settings_reminders_empty),
++                    style = MaterialTheme.typography.bodyMedium,
++                    color = MaterialTheme.colorScheme.onSurfaceVariant,
++                    modifier = Modifier
++                        .fillMaxWidth()
++                        .padding(horizontal = 16.dp, vertical = 14.dp),
++                )
++            }
++        } else {
++            SettingsGroup(isTablet = isTablet) {
++                val releasingLabel = stringResource(Res.string.settings_reminders_releasing_on)
++                val removeLabel = stringResource(Res.string.settings_reminders_remove)
++                remindersState.reminders.forEachIndexed { index, reminder ->
++                    if (index > 0) {
++                        SettingsGroupDivider(isTablet = isTablet)
++                    }
++                    Column(
++                        modifier = Modifier
++                            .fillMaxWidth()
++                            .padding(horizontal = 16.dp, vertical = 12.dp),
++                        verticalArrangement = Arrangement.spacedBy(4.dp),
++                    ) {
++                        Text(
++                            text = reminder.title.ifBlank { reminder.itemId },
++                            style = MaterialTheme.typography.bodyLarge,
++                            fontWeight = FontWeight.Medium,
++                            color = MaterialTheme.colorScheme.onSurface,
++                        )
++                        Text(
++                            text = "$releasingLabel ${com.nuvio.app.features.reminders.formatReminderReleaseDate(reminder.releaseDateMs)}",
++                            style = MaterialTheme.typography.bodySmall,
++                            color = MaterialTheme.colorScheme.onSurfaceVariant,
++                        )
++                        if (!remindersState.permissionGranted) {
++                            Text(
++                                text = stringResource(Res.string.settings_notifications_permission_disabled),
++                                style = MaterialTheme.typography.bodySmall,
++                                color = MaterialTheme.colorScheme.error,
++                            )
++                        }
++                        Button(
++                            onClick = { com.nuvio.app.features.reminders.ReleaseRemindersRepository.remove(reminder.itemId) },
++                            enabled = true,
++                            colors = ButtonDefaults.buttonColors(
++                                containerColor = MaterialTheme.colorScheme.surfaceVariant,
++                                contentColor = MaterialTheme.colorScheme.onSurface,
++                            ),
++                        ) {
++                            Text(removeLabel)
++                        }
++                    }
++                }
++            }
++        }
++    }
+ }
+ 
+ @Composable
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+index ff7c46c..5ea59a5 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+@@ -682,6 +682,33 @@ private fun PlaybackSettingsSection(
+         DxStatsSettingsSection(isTablet = isTablet) // dx.bi stream stats hook
+         ForkPlayerPrefsSettingsSection(isTablet = isTablet) // fork player prefs hook
+ 
++        // Nuvio fork: auto quality hot swap + fast start for adaptive streams.
++        if (!autoPlayPlayerSettings.externalPlayerEnabled) {
++            SettingsSection(
++                title = stringResource(Res.string.settings_playback_video_quality_section),
++                isTablet = isTablet,
++            ) {
++                SettingsGroup(isTablet = isTablet) {
++                    SettingsSwitchRow(
++                        title = stringResource(Res.string.settings_playback_auto_quality),
++                        description = stringResource(Res.string.settings_playback_auto_quality_description),
++                        checked = autoPlayPlayerSettings.autoQualityEnabled,
++                        isTablet = isTablet,
++                        onCheckedChange = PlayerSettingsRepository::setAutoQualityEnabled,
++                    )
++                    SettingsGroupDivider(isTablet = isTablet)
++                    SettingsSwitchRow(
++                        title = stringResource(Res.string.settings_playback_fast_start),
++                        description = stringResource(Res.string.settings_playback_fast_start_description),
++                        checked = autoPlayPlayerSettings.fastStartEnabled,
++                        enabled = autoPlayPlayerSettings.autoQualityEnabled,
++                        isTablet = isTablet,
++                        onCheckedChange = PlayerSettingsRepository::setFastStartEnabled,
++                    )
++                }
++            }
++        }
++
+         ConnectionFitSettingsSection(isTablet = isTablet) // Nuvio fork: connection-speed fit
+ 
+         SubtitleFontSettingsSection(isTablet = isTablet) // Nuvio fork: custom subtitle font
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SmartHighlightsSettingsSection.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SmartHighlightsSettingsSection.kt
+new file mode 100644
+index 0000000..7dc09b8
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SmartHighlightsSettingsSection.kt
+@@ -0,0 +1,183 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
++import androidx.compose.material3.Button
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.rememberCoroutineScope
++import androidx.compose.runtime.saveable.rememberSaveable
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.platform.LocalUriHandler
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.unit.dp
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.features.highlights.GeminiRankingClient
++import com.nuvio.app.features.highlights.GeminiRankingException
++import com.nuvio.app.features.highlights.SmartHighlightsPreferences
++import com.nuvio.app.features.highlights.SmartHighlightsRankingCache
++import kotlinx.coroutines.launch
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.action_reset
++import nuvio.composeapp.generated.resources.action_save
++import nuvio.composeapp.generated.resources.settings_highlights_gemini_get_key
++import nuvio.composeapp.generated.resources.settings_highlights_gemini_key_label
++import nuvio.composeapp.generated.resources.settings_highlights_gemini_key_saved
++import nuvio.composeapp.generated.resources.settings_highlights_gemini_personal_key
++import nuvio.composeapp.generated.resources.settings_highlights_gemini_personal_key_description
++import nuvio.composeapp.generated.resources.settings_highlights_gemini_status_connected
++import nuvio.composeapp.generated.resources.settings_highlights_gemini_status_invalid_key
++import nuvio.composeapp.generated.resources.settings_highlights_gemini_status_rate_limited
++import nuvio.composeapp.generated.resources.settings_highlights_gemini_status_unreachable
++import nuvio.composeapp.generated.resources.settings_highlights_gemini_test_connection
++import nuvio.composeapp.generated.resources.settings_highlights_section
++import nuvio.composeapp.generated.resources.settings_highlights_toggle
++import nuvio.composeapp.generated.resources.settings_highlights_toggle_description
++import org.jetbrains.compose.resources.stringResource
++
++/**
++ * Nuvio fork: Smart Highlights settings — the rail toggle plus the per-profile Gemini API key
++ * (masked field, test connection, remove). Placed in Home screen settings, next to the other
++ * home layout switches. The key is never displayed back and never logged; only its presence is
++ * reflected in the UI.
++ */
++@Composable
++internal fun SmartHighlightsSettingsSection(isTablet: Boolean) {
++    val enabled by SmartHighlightsPreferences.enabled.collectAsStateWithLifecycle()
++    val apiKeyConfigured by SmartHighlightsPreferences.apiKeyConfigured.collectAsStateWithLifecycle()
++
++    SettingsSection(
++        title = stringResource(Res.string.settings_highlights_section),
++        isTablet = isTablet,
++    ) {
++        SettingsGroup(isTablet = isTablet) {
++            SettingsSwitchRow(
++                title = stringResource(Res.string.settings_highlights_toggle),
++                description = stringResource(Res.string.settings_highlights_toggle_description),
++                checked = enabled,
++                isTablet = isTablet,
++                onCheckedChange = SmartHighlightsPreferences::setEnabled,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            GeminiApiKeyRow(
++                isTablet = isTablet,
++                apiKeyConfigured = apiKeyConfigured,
++            )
++        }
++    }
++}
++
++@Composable
++private fun GeminiApiKeyRow(
++    isTablet: Boolean,
++    apiKeyConfigured: Boolean,
++) {
++    // The stored key is never prefilled or displayed; the draft starts empty every time.
++    var draft by rememberSaveable { mutableStateOf("") }
++    var statusMessage by rememberSaveable { mutableStateOf("") }
++    var busy by rememberSaveable { mutableStateOf(false) }
++    val scope = rememberCoroutineScope()
++    val uriHandler = LocalUriHandler.current
++    val keySavedMessage = stringResource(Res.string.settings_highlights_gemini_key_saved)
++    val connectedMessage = stringResource(Res.string.settings_highlights_gemini_status_connected)
++    val invalidKeyMessage = stringResource(Res.string.settings_highlights_gemini_status_invalid_key)
++    val rateLimitedMessage = stringResource(Res.string.settings_highlights_gemini_status_rate_limited)
++    val unreachableMessage = stringResource(Res.string.settings_highlights_gemini_status_unreachable)
++
++    Column(
++        modifier = Modifier
++            .fillMaxWidth()
++            .padding(horizontal = if (isTablet) 20.dp else 16.dp, vertical = if (isTablet) 16.dp else 14.dp),
++        verticalArrangement = Arrangement.spacedBy(10.dp),
++    ) {
++        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
++            Text(
++                text = stringResource(Res.string.settings_highlights_gemini_personal_key),
++                style = MaterialTheme.typography.bodyLarge,
++                color = MaterialTheme.colorScheme.onSurface,
++                fontWeight = FontWeight.Medium,
++            )
++            Text(
++                text = stringResource(Res.string.settings_highlights_gemini_personal_key_description),
++                style = MaterialTheme.typography.bodyMedium,
++                color = MaterialTheme.colorScheme.onSurfaceVariant,
++            )
++        }
++        SettingsSecretTextField(
++            value = draft,
++            onValueChange = { draft = it },
++            modifier = Modifier.fillMaxWidth(),
++            label = stringResource(Res.string.settings_highlights_gemini_key_label),
++        )
++        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
++            Button(
++                onClick = {
++                    SmartHighlightsPreferences.setApiKey(draft.trim())
++                    draft = ""
++                    statusMessage = keySavedMessage
++                },
++                enabled = draft.isNotBlank(),
++            ) {
++                Text(stringResource(Res.string.action_save))
++            }
++            Button(
++                onClick = {
++                    if (busy) return@Button
++                    busy = true
++                    statusMessage = ""
++                    scope.launch {
++                        val result = runCatching { GeminiRankingClient().testConnection() }
++                        busy = false
++                        statusMessage = result.fold(
++                            onSuccess = { connectedMessage },
++                            onFailure = { error ->
++                                when ((error as? GeminiRankingException)?.reason) {
++                                    GeminiRankingException.Reason.NO_KEY,
++                                    GeminiRankingException.Reason.AUTHENTICATION -> invalidKeyMessage
++                                    GeminiRankingException.Reason.RATE_LIMIT -> rateLimitedMessage
++                                    else -> unreachableMessage
++                                }
++                            },
++                        )
++                    }
++                },
++                enabled = SmartHighlightsPreferences.hasApiKey() && !busy,
++            ) {
++                Text(stringResource(Res.string.settings_highlights_gemini_test_connection))
++            }
++            if (apiKeyConfigured) {
++                Button(
++                    onClick = {
++                        SmartHighlightsPreferences.setApiKey(null)
++                        SmartHighlightsRankingCache().clear()
++                        draft = ""
++                        statusMessage = ""
++                    },
++                ) {
++                    Text(stringResource(Res.string.action_reset))
++                }
++            }
++        }
++        if (statusMessage.isNotBlank()) {
++            Text(
++                text = statusMessage,
++                style = MaterialTheme.typography.bodySmall,
++                color = MaterialTheme.colorScheme.onSurfaceVariant,
++            )
++        }
++        Text(
++            text = stringResource(Res.string.settings_highlights_gemini_get_key),
++            style = MaterialTheme.typography.bodySmall,
++            color = MaterialTheme.colorScheme.primary,
++            modifier = Modifier.clickable { uriHandler.openUri("https://aistudio.google.com/app/apikey") },
++        )
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/navigation/Routes.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/navigation/Routes.kt
+index 141eecf..27c9639 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/navigation/Routes.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/navigation/Routes.kt
+@@ -162,6 +162,19 @@ data class CatalogRoute(
+ @Serializable
+ data class LiveTvRoute(override val title: String = "Live TV") : AppRoute
+ 
++/**
++ * Nuvio fork (genres browse): locally derived genre browsing. A null [genre] shows the genre
++ * list; a named one opens that genre's grid directly.
++ */
++@Serializable
++data class GenresRoute(
++    val genre: String? = null,
++    override val title: String = "",
++) : AppRoute {
++    override val navigationIdentity: String
++        get() = "GenresRoute(genre=$genre)"
++}
++
+ @Serializable
+ data class PlayerRoute(
+     val launchId: Long,
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.ios.kt
+new file mode 100644
+index 0000000..9500fab
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.ios.kt
+@@ -0,0 +1,13 @@
++package com.nuvio.app.features.highlights
++
++import io.ktor.client.HttpClient
++import io.ktor.client.engine.darwin.Darwin
++import io.ktor.client.plugins.HttpTimeout
++
++internal actual fun createGeminiHttpClient(): HttpClient = HttpClient(Darwin) {
++    expectSuccess = false
++    install(HttpTimeout) {
++        connectTimeoutMillis = 5_000
++        requestTimeoutMillis = 10_000
++    }
++}
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsStorage.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsStorage.ios.kt
+new file mode 100644
+index 0000000..cffd06b
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsStorage.ios.kt
+@@ -0,0 +1,46 @@
++package com.nuvio.app.features.highlights
++
++import com.nuvio.app.core.storage.ProfileScopedKey
++import platform.Foundation.NSUserDefaults
++
++internal actual object SmartHighlightsStorage {
++    private const val enabledKey = "smart_highlights_enabled"
++    private const val apiKeyKey = "gemini_api_key"
++    private const val rankingCacheKey = "gemini_ranking_cache"
++
++    actual fun loadEnabled(): Boolean? =
++        NSUserDefaults.standardUserDefaults.objectForKey(ProfileScopedKey.of(enabledKey))?.let {
++            NSUserDefaults.standardUserDefaults.boolForKey(ProfileScopedKey.of(enabledKey))
++        }
++
++    actual fun saveEnabled(enabled: Boolean) {
++        NSUserDefaults.standardUserDefaults.setBool(enabled, forKey = ProfileScopedKey.of(enabledKey))
++    }
++
++    actual fun loadApiKey(): String? =
++        NSUserDefaults.standardUserDefaults.stringForKey(ProfileScopedKey.of(apiKeyKey))
++            ?.trim()
++            ?.takeIf { it.isNotEmpty() }
++
++    actual fun saveApiKey(apiKey: String) {
++        val defaults = NSUserDefaults.standardUserDefaults
++        val key = ProfileScopedKey.of(apiKeyKey)
++        val normalized = apiKey.trim()
++        if (normalized.isEmpty()) {
++            defaults.removeObjectForKey(key)
++        } else {
++            defaults.setObject(normalized, forKey = key)
++        }
++    }
++
++    actual fun loadRankingCache(): String? =
++        NSUserDefaults.standardUserDefaults.stringForKey(ProfileScopedKey.of(rankingCacheKey))
++
++    actual fun saveRankingCache(payload: String) {
++        NSUserDefaults.standardUserDefaults.setObject(payload, forKey = ProfileScopedKey.of(rankingCacheKey))
++    }
++
++    actual fun clearRankingCache() {
++        NSUserDefaults.standardUserDefaults.removeObjectForKey(ProfileScopedKey.of(rankingCacheKey))
++    }
++}
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerSettingsStorage.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerSettingsStorage.ios.kt
+index daa9dc8..5212811 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerSettingsStorage.ios.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/player/PlayerSettingsStorage.ios.kt
+@@ -85,6 +85,8 @@ actual object PlayerSettingsStorage {
+     private const val localCreditsDetectionEnabledKey = "local_credits_detection_enabled"
+     private const val playbackIntroEnabledKey = "playback_intro_enabled"
+     private const val playbackIntroLengthSecondsKey = "playback_intro_length_seconds"
++    private const val autoQualityEnabledKey = "auto_quality_enabled"
++    private const val fastStartEnabledKey = "fast_start_enabled"
+     private const val streamAutoPlayNextEpisodeEnabledKey = "stream_auto_play_next_episode_enabled"
+     private const val streamAutoPlayNextEpisodeFallbackEnabledKey = "stream_auto_play_next_episode_fallback_enabled"
+     private const val streamAutoPlayPreferBingeGroupKey = "stream_auto_play_prefer_binge_group"
+@@ -163,6 +165,8 @@ actual object PlayerSettingsStorage {
+         localCreditsDetectionEnabledKey,
+         playbackIntroEnabledKey,
+         playbackIntroLengthSecondsKey,
++        autoQualityEnabledKey,
++        fastStartEnabledKey,
+         streamAutoPlayNextEpisodeEnabledKey,
+         streamAutoPlayNextEpisodeFallbackEnabledKey,
+         streamAutoPlayPreferBingeGroupKey,
+@@ -887,6 +891,35 @@ actual object PlayerSettingsStorage {
+         NSUserDefaults.standardUserDefaults.setInteger(seconds.toLong(), forKey = ProfileScopedKey.of(playbackIntroLengthSecondsKey))
+     }
+ 
++    // Nuvio fork: auto quality hot swap and fast start.
++    actual fun loadAutoQualityEnabled(): Boolean? {
++        val defaults = NSUserDefaults.standardUserDefaults
++        val key = ProfileScopedKey.of(autoQualityEnabledKey)
++        return if (defaults.objectForKey(key) != null) {
++            defaults.boolForKey(key)
++        } else {
++            null
++        }
++    }
++
++    actual fun saveAutoQualityEnabled(enabled: Boolean) {
++        NSUserDefaults.standardUserDefaults.setBool(enabled, forKey = ProfileScopedKey.of(autoQualityEnabledKey))
++    }
++
++    actual fun loadFastStartEnabled(): Boolean? {
++        val defaults = NSUserDefaults.standardUserDefaults
++        val key = ProfileScopedKey.of(fastStartEnabledKey)
++        return if (defaults.objectForKey(key) != null) {
++            defaults.boolForKey(key)
++        } else {
++            null
++        }
++    }
++
++    actual fun saveFastStartEnabled(enabled: Boolean) {
++        NSUserDefaults.standardUserDefaults.setBool(enabled, forKey = ProfileScopedKey.of(fastStartEnabledKey))
++    }
++
+     actual fun loadAnimeSkipEnabled(): Boolean? {
+         val defaults = NSUserDefaults.standardUserDefaults
+         val key = ProfileScopedKey.of(animeSkipEnabledKey)
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/reminders/ReleaseReminderNotificationPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/reminders/ReleaseReminderNotificationPlatform.ios.kt
+new file mode 100644
+index 0000000..639b204
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/reminders/ReleaseReminderNotificationPlatform.ios.kt
+@@ -0,0 +1,151 @@
++package com.nuvio.app.features.reminders
++
++import com.nuvio.app.core.deeplink.buildMetaDeepLinkUrl
++import com.nuvio.app.core.storage.ProfileScopedKey
++import kotlinx.coroutines.runBlocking
++import kotlinx.coroutines.suspendCancellableCoroutine
++import nuvio.composeapp.generated.resources.Res
++import nuvio.composeapp.generated.resources.reminders_notification_body
++import nuvio.composeapp.generated.resources.reminders_notification_title_released
++import org.jetbrains.compose.resources.getString
++import platform.Foundation.NSCalendar
++import platform.Foundation.NSCalendarUnitDay
++import platform.Foundation.NSCalendarUnitHour
++import platform.Foundation.NSCalendarUnitMinute
++import platform.Foundation.NSCalendarUnitMonth
++import platform.Foundation.NSCalendarUnitYear
++import platform.Foundation.NSDate
++import platform.Foundation.NSDateComponents
++import platform.Foundation.dateWithTimeIntervalSince1970
++import platform.Foundation.timeIntervalSince1970
++import platform.UserNotifications.UNAuthorizationOptionAlert
++import platform.UserNotifications.UNAuthorizationOptionBadge
++import platform.UserNotifications.UNAuthorizationOptionSound
++import platform.UserNotifications.UNAuthorizationStatusAuthorized
++import platform.UserNotifications.UNAuthorizationStatusProvisional
++import platform.UserNotifications.UNCalendarNotificationTrigger
++import platform.UserNotifications.UNMutableNotificationContent
++import platform.UserNotifications.UNNotificationRequest
++import platform.UserNotifications.UNUserNotificationCenter
++import kotlin.coroutines.resume
++
++/**
++ * Nuvio fork: iOS delivery for release reminders via UNUserNotificationCenter — the framework
++ * the tree's iosApp already links for episode release notifications. Each reminder becomes a
++ * one-shot calendar trigger on its release day at 09:00 local time.
++ */
++internal actual object ReleaseReminderNotificationPlatform {
++    private const val scheduledIdsKey = "release_reminder_scheduled_ids"
++    private const val remindersHour = 9L
++    private const val remindersMinute = 0L
++
++    actual suspend fun notificationsAuthorized(): Boolean = suspendCancellableCoroutine { continuation ->
++        UNUserNotificationCenter.currentNotificationCenter().getNotificationSettingsWithCompletionHandler { settings ->
++            val status = settings?.authorizationStatus
++            continuation.resume(
++                status == UNAuthorizationStatusAuthorized || status == UNAuthorizationStatusProvisional,
++            )
++        }
++    }
++
++    actual suspend fun requestAuthorization(): Boolean = suspendCancellableCoroutine { continuation ->
++        UNUserNotificationCenter.currentNotificationCenter().requestAuthorizationWithOptions(
++            options = UNAuthorizationOptionAlert or UNAuthorizationOptionSound or UNAuthorizationOptionBadge,
++        ) { granted, _ ->
++            continuation.resume(granted)
++        }
++    }
++
++    actual suspend fun schedule(reminders: List<ReleaseReminder>) {
++        clearAll()
++
++        val center = UNUserNotificationCenter.currentNotificationCenter()
++        val scheduledIds = mutableListOf<String>()
++        reminders.forEach { reminder ->
++            val dateComponents = dateComponentsFor(reminder.releaseDateMs) ?: return@forEach
++            val scheduledDate = NSCalendar.currentCalendar.dateFromComponents(dateComponents) ?: return@forEach
++            if (scheduledDate.timeIntervalSince1970 <= NSDate().timeIntervalSince1970) return@forEach
++
++            val content = UNMutableNotificationContent().apply {
++                setTitle(
++                    runBlocking {
++                        getString(Res.string.reminders_notification_title_released, reminder.title)
++                    },
++                )
++                setBody(
++                    runBlocking {
++                        getString(
++                            Res.string.reminders_notification_body,
++                            formatReminderReleaseDate(reminder.releaseDateMs),
++                        )
++                    },
++                )
++                setUserInfo(
++                    mapOf(
++                        "deeplink" to buildMetaDeepLinkUrl(
++                            type = reminder.itemType,
++                            id = reminder.contentId,
++                        ),
++                    ),
++                )
++            }
++            val trigger = UNCalendarNotificationTrigger.triggerWithDateMatchingComponents(
++                dateComponents = dateComponents,
++                repeats = false,
++            )
++            val identifier = buildReleaseReminderId(reminder)
++            center.addNotificationRequest(
++                UNNotificationRequest.requestWithIdentifier(
++                    identifier = identifier,
++                    content = content,
++                    trigger = trigger,
++                ),
++            ) { _ -> }
++            scheduledIds += identifier
++        }
++
++        storeScheduledIds(scheduledIds.joinToString(separator = "|"))
++    }
++
++    actual suspend fun clearAll() {
++        val identifiers = readScheduledIds()
++            ?.split('|')
++            ?.filter { value -> value.isNotBlank() }
++            .orEmpty()
++        if (identifiers.isNotEmpty()) {
++            UNUserNotificationCenter.currentNotificationCenter()
++                .removePendingNotificationRequestsWithIdentifiers(identifiers)
++        }
++        clearScheduledIds()
++    }
++
++    private fun dateComponentsFor(releaseDateMs: Long): NSDateComponents? {
++        if (releaseDateMs <= 0L) return null
++        val date = NSDate.dateWithTimeIntervalSince1970(releaseDateMs / 1000.0)
++        val units = NSCalendarUnitYear or NSCalendarUnitMonth or NSCalendarUnitDay or
++            NSCalendarUnitHour or NSCalendarUnitMinute
++        val components = NSCalendar.currentCalendar.components(units, fromDate = date) ?: return null
++        components.hour = remindersHour
++        components.minute = remindersMinute
++        components.second = 0
++        return components
++    }
++
++    private fun storeScheduledIds(value: String) {
++        platform.Foundation.NSUserDefaults.standardUserDefaults.setObject(
++            value,
++            forKey = ProfileScopedKey.of(scheduledIdsKey),
++        )
++    }
++
++    private fun readScheduledIds(): String? =
++        platform.Foundation.NSUserDefaults.standardUserDefaults.stringForKey(
++            ProfileScopedKey.of(scheduledIdsKey),
++        )
++
++    private fun clearScheduledIds() {
++        platform.Foundation.NSUserDefaults.standardUserDefaults.removeObjectForKey(
++            ProfileScopedKey.of(scheduledIdsKey),
++        )
++    }
++}
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/reminders/ReleaseRemindersStorage.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/reminders/ReleaseRemindersStorage.ios.kt
+new file mode 100644
+index 0000000..4f696d2
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/reminders/ReleaseRemindersStorage.ios.kt
+@@ -0,0 +1,28 @@
++package com.nuvio.app.features.reminders
++
++import com.nuvio.app.core.storage.ProfileScopedKey
++import platform.Foundation.NSDate
++import platform.Foundation.NSDateFormatter
++import platform.Foundation.NSDateFormatterStyle
++import platform.Foundation.NSUserDefaults
++import platform.Foundation.dateWithTimeIntervalSince1970
++
++internal actual object ReleaseRemindersStorage {
++    private const val payloadKey = "release_reminders_payload"
++
++    actual fun loadPayload(): String? =
++        NSUserDefaults.standardUserDefaults.stringForKey(ProfileScopedKey.of(payloadKey))
++
++    actual fun savePayload(payload: String) {
++        NSUserDefaults.standardUserDefaults.setObject(payload, forKey = ProfileScopedKey.of(payloadKey))
++    }
++}
++
++internal actual fun formatReminderReleaseDate(releaseDateMs: Long): String {
++    val formatter = NSDateFormatter().apply {
++        dateStyle = NSDateFormatterStyle.NSDateFormatterMediumStyle
++        timeStyle = NSDateFormatterStyle.NSDateFormatterNoStyle
++    }
++    val date = NSDate.dateWithTimeIntervalSince1970(releaseDateMs / 1000.0)
++    return formatter.stringFromDate(date)
++}
