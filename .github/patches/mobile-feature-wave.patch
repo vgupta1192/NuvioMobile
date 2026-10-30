@@ -7541,10 +7541,10 @@ index 0000000..17697b9
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/skip/SkipFrameGrabber.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/skip/SkipFrameGrabber.android.kt
 new file mode 100644
-index 0000000..77b3453
+index 0000000..36fd812
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/skip/SkipFrameGrabber.android.kt
-@@ -0,0 +1,87 @@
+@@ -0,0 +1,88 @@
 +package com.nuvio.app.features.player.skip
 +
 +import android.graphics.Bitmap
@@ -7597,6 +7597,7 @@ index 0000000..77b3453
 +                    SKIP_FRAME_WIDTH,
 +                    SKIP_FRAME_HEIGHT,
 +                ) ?: return null
++            } else {
 +                val full = retriever.getFrameAtTime(
 +                    positionMs * 1000,
 +                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
@@ -11822,10 +11823,10 @@ index 0000000..71e5188
 +internal expect fun platformIntroChimePlayer(seconds: Int): IntroChimePlayer?
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/intro/PlaybackIntroOverlay.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/intro/PlaybackIntroOverlay.kt
 new file mode 100644
-index 0000000..61f5c7b
+index 0000000..a9a2663
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/intro/PlaybackIntroOverlay.kt
-@@ -0,0 +1,342 @@
+@@ -0,0 +1,341 @@
 +package com.nuvio.app.features.player.intro
 +
 +import androidx.compose.foundation.Canvas
@@ -11842,7 +11843,6 @@ index 0000000..61f5c7b
 +import androidx.compose.runtime.setValue
 +import androidx.compose.runtime.withFrameNanos
 +import androidx.compose.ui.Modifier
-+import androidx.compose.ui.geometry.IntSize
 +import androidx.compose.ui.geometry.Offset
 +import androidx.compose.ui.geometry.Size
 +import androidx.compose.ui.graphics.BlendMode
