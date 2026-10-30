@@ -200,14 +200,19 @@ jobs:
 
       - name: Create local.properties (self-hosted backend)
         if: steps.ver.outputs.should_build == 'true'
+        env:
+          NUVIO_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_SUPABASE_ANON_KEY }}
+          SIMKL_CLIENT_ID: ${{ secrets.SIMKL_CLIENT_ID }}
+          MDBLIST_CLIENT_ID: ${{ secrets.MDBLIST_CLIENT_ID }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: |
           printf '%s\n' \
             'NUVIO_SUPABASE_URL=https://nuviobackend.kissmissi.duckdns.org' \
-            'NUVIO_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzg5NzY2MDkyLCJleHAiOjE5NDc0NDYwOTJ9.XB5a12DpW9Uf11QARCv4AAfYHGyk4qRq2Oi_7t8t7X0' \
+            "NUVIO_SUPABASE_ANON_KEY=$NUVIO_SUPABASE_ANON_KEY" \
             'NUVIO_SUPABASE_FALLBACK_URL=' \
-            'SIMKL_CLIENT_ID=cf7f2a335cfcd9759fa01d752d9cf8f42fb4fa1a4e4ff08fe4cafb84ec836621' \
-            'MDBLIST_CLIENT_ID=37RRuqIIBQbBsHmxcdl3RGRMhrpTK8FdFxAGltS0' \
-            'TMDB_API_KEY=af624aa414c84ad32d55d5ac45feae76' \
+            "SIMKL_CLIENT_ID=$SIMKL_CLIENT_ID" \
+            "MDBLIST_CLIENT_ID=$MDBLIST_CLIENT_ID" \
+            "TMDB_API_KEY=$TMDB_API_KEY" \
             'NUVIO_ANDROID_DISTRIBUTION=full' \
             'nuvio.app.versionName=${{ steps.ver.outputs.ver }}' \
             > local.properties
@@ -515,14 +520,19 @@ jobs:
 
       - name: Create local.properties (self-hosted backend)
         if: steps.ver.outputs.should_build == 'true'
+        env:
+          NUVIO_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_SUPABASE_ANON_KEY }}
+          SIMKL_CLIENT_ID: ${{ secrets.SIMKL_CLIENT_ID }}
+          MDBLIST_CLIENT_ID: ${{ secrets.MDBLIST_CLIENT_ID }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: |
           printf '%s\n' \
             'NUVIO_SUPABASE_URL=https://nuviobackend.kissmissi.duckdns.org' \
-            'NUVIO_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzg5NzY2MDkyLCJleHAiOjE5NDc0NDYwOTJ9.XB5a12DpW9Uf11QARCv4AAfYHGyk4qRq2Oi_7t8t7X0' \
+            "NUVIO_SUPABASE_ANON_KEY=$NUVIO_SUPABASE_ANON_KEY" \
             'NUVIO_SUPABASE_FALLBACK_URL=' \
-            'SIMKL_CLIENT_ID=cf7f2a335cfcd9759fa01d752d9cf8f42fb4fa1a4e4ff08fe4cafb84ec836621' \
-            'MDBLIST_CLIENT_ID=37RRuqIIBQbBsHmxcdl3RGRMhrpTK8FdFxAGltS0' \
-            'TMDB_API_KEY=af624aa414c84ad32d55d5ac45feae76' \
+            "SIMKL_CLIENT_ID=$SIMKL_CLIENT_ID" \
+            "MDBLIST_CLIENT_ID=$MDBLIST_CLIENT_ID" \
+            "TMDB_API_KEY=$TMDB_API_KEY" \
             'NUVIO_ANDROID_DISTRIBUTION=full' \
             'NUVIO_IOS_DISTRIBUTION=full' \
             > local.properties
