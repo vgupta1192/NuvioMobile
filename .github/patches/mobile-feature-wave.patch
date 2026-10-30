@@ -39,7 +39,7 @@ index a6e3b25..4b62045 100644
 +internal actual fun ImageRequest.Builder.allowSoftwareBitmaps(): ImageRequest.Builder =
 +    allowHardware(false)
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/AndroidDownloadScheduler.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/AndroidDownloadScheduler.kt
-index 427546d..cf07444 100644
+index 427546d..264e99a 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/AndroidDownloadScheduler.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/AndroidDownloadScheduler.kt
 @@ -37,7 +37,7 @@ import okhttp3.ConnectionPool
@@ -73,7 +73,7 @@ index 427546d..cf07444 100644
              .setPersisted(true)
              .setEstimatedNetworkBytes(transfer.item.totalBytes ?: JobInfo.NETWORK_BYTES_UNKNOWN.toLong(), 0L)
              .setBackoffCriteria(30_000L, JobInfo.BACKOFF_POLICY_EXPONENTIAL)
-@@ -352,6 +356,7 @@ internal class AndroidDownloadScheduler(val context: Context) {
+@@ -352,10 +356,10 @@ internal class AndroidDownloadScheduler(val context: Context) {
      private fun workName(transfer: AndroidDownloadTransfer) = "nuvio-download-${transfer.jobId}"
  
      companion object {
@@ -81,39 +81,10 @@ index 427546d..cf07444 100644
          const val FILE_NAME = "download_file_name"
          const val GENERATION = "download_generation"
          const val JOB_NAMESPACE = "nuvio-downloads"
-diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsLocationStorage.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsLocationStorage.android.kt
-new file mode 100644
-index 0000000..2c7e918
---- /dev/null
-+++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsLocationStorage.android.kt
-@@ -0,0 +1,27 @@
-+package com.nuvio.app.features.downloads
-+
-+import android.content.Context
-+
-+internal actual object DownloadsLocationStorage {
-+    private const val PREFERENCES_NAME = "nuvio_downloads_settings"
-+    private const val LOCATION_KEY = "download_location_uri"
-+    private const val SHOW_BUTTON_KEY = "show_download_button"
-+
-+    private fun preferences() =
-+        DownloadsPlatformDownloader.applicationContextOrNull()
-+            ?.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
-+
-+    actual fun loadLocationUri(): String? = preferences()?.getString(LOCATION_KEY, null)?.takeIf { it.isNotBlank() }
-+
-+    actual fun saveLocationUri(uri: String?) {
-+        preferences()?.edit()?.run {
-+            if (uri == null) remove(LOCATION_KEY) else putString(LOCATION_KEY, uri)
-+        }?.apply()
-+    }
-+
-+    actual fun loadShowDownloadButton(): Boolean = preferences()?.getBoolean(SHOW_BUTTON_KEY, true) ?: true
-+
-+    actual fun saveShowDownloadButton(enabled: Boolean) {
-+        preferences()?.edit()?.putBoolean(SHOW_BUTTON_KEY, enabled)?.apply()
-+    }
-+}
+-        private const val TAG = "NuvioDownloads"
+     }
+ }
+ 
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsNetworkPolicy.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsNetworkPolicy.android.kt
 new file mode 100644
 index 0000000..f4183dd
@@ -139,14 +110,13 @@ index 0000000..f4183dd
 +    }
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt
-index ca4b55b..5c63e74 100644
+index ca4b55b..e788eca 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/downloads/DownloadsPlatformDownloader.android.kt
-@@ -26,6 +26,8 @@ internal actual object DownloadsPlatformDownloader {
+@@ -26,6 +26,7 @@ internal actual object DownloadsPlatformDownloader {
          scheduler(context)
      }
  
-+    internal fun applicationContextOrNull(): Context? = appContext
 +
      @Synchronized
      internal fun scheduler(context: Context): AndroidDownloadScheduler {
@@ -329,7 +299,7 @@ index 43a2f7a..27e252f 100644
      return rows
  }
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index bf679c9..62bb82e 100644
+index bf679c9..85c648c 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 @@ -303,6 +303,8 @@ private fun ExoPlayerSurface(
@@ -337,7 +307,7 @@ index bf679c9..62bb82e 100644
      val latestSubtitleDelayMs = rememberUpdatedState(subtitleDelayMs)
      val latestExternalSubtitleMimeType = rememberUpdatedState(selectedExternalSubtitleMimeType)
 +    // Nuvio fork: the auto quality speed test's sampling hook (set through the controller).
-+    val latestAutoQualitySampleListener = rememberUpdatedState<PlayerBandwidthSampleListener?>(null)
++    val latestAutoQualitySampleListener = remember { mutableStateOf<PlayerBandwidthSampleListener?>(null) }
      var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
      var videoAspectRatio by remember(playerSourceKey) { mutableStateOf(0f) }
      val latestVideoAspectRatio = rememberUpdatedState(videoAspectRatio)
@@ -347,7 +317,7 @@ index bf679c9..62bb82e 100644
          exoPlayer.addListener(listener)
 +        // Nuvio fork: forward the player's own bandwidth meter to the auto quality speed test.
 +        val autoQualityAnalyticsListener = object : androidx.media3.exoplayer.analytics.AnalyticsListener {
-+            override fun onBandwidthSample(
++            override fun onBandwidthEstimate(
 +                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
 +                elapsedMs: Int,
 +                bytes: Long,
@@ -7571,15 +7541,14 @@ index 0000000..17697b9
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/skip/SkipFrameGrabber.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/skip/SkipFrameGrabber.android.kt
 new file mode 100644
-index 0000000..a4a3876
+index 0000000..77b3453
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/skip/SkipFrameGrabber.android.kt
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,87 @@
 +package com.nuvio.app.features.player.skip
 +
 +import android.graphics.Bitmap
 +import android.media.MediaMetadataRetriever
-+import android.net.Uri
 +import android.os.Build
 +import com.nuvio.app.core.storage.AppContextHolder
 +import kotlin.math.roundToInt
@@ -7606,7 +7575,10 @@ index 0000000..a4a3876
 +            // setDataSource with a header map needs the framework http source; anything it refuses means no
 +            // pictures.
 +            runCatching {
-+                retriever.setDataSource(context, Uri.parse(url), headers)
++                // (String, Map) overload: headers ride along and the http source is chosen by the
++                // framework; not the removed (Context, Uri, Map) overload (gone from the API-36
++                // surface this project compiles against).
++                retriever.setDataSource(url, headers)
 +                opened = true
 +            }.onFailure {
 +                runCatching { retriever.release() }
@@ -7624,8 +7596,7 @@ index 0000000..a4a3876
 +                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
 +                    SKIP_FRAME_WIDTH,
 +                    SKIP_FRAME_HEIGHT,
-+                )
-+            } else {
++                ) ?: return null
 +                val full = retriever.getFrameAtTime(
 +                    positionMs * 1000,
 +                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
@@ -8441,7 +8412,7 @@ index 0000000..bffa48f
 +)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/AmbientWash.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/AmbientWash.kt
 new file mode 100644
-index 0000000..f4e054f
+index 0000000..6e8bde5
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/AmbientWash.kt
 @@ -0,0 +1,73 @@
@@ -8462,7 +8433,7 @@ index 0000000..f4e054f
 +import androidx.compose.ui.geometry.Offset
 +import androidx.compose.ui.graphics.Brush
 +import androidx.compose.ui.graphics.Color
-+import androidx.compose.ui.graphics.DrawScope
++import androidx.compose.ui.graphics.drawscope.DrawScope
 +
 +/** How strongly the wash tints the hero, lighter than the TV fork's 0.51 because it sits over a visible image. */
 +private const val WASH_STRENGTH = 0.34f
@@ -8777,10 +8748,20 @@ index 0000000..f317d06
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/Theme.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/Theme.kt
-index 12806d3..7c7d7b7 100644
+index 12806d3..25667ec 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/Theme.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/Theme.kt
-@@ -59,63 +59,88 @@ private fun buildColorScheme(palette: ThemeColorPalette, amoled: Boolean = false
+@@ -23,6 +23,9 @@ import nuvio.composeapp.generated.resources.Res
+ import nuvio.composeapp.generated.resources.jetbrains_sans_bold
+ import nuvio.composeapp.generated.resources.jetbrains_sans_regular
+ import nuvio.composeapp.generated.resources.jetbrains_sans_semibold
++import nuvio.composeapp.generated.resources.dm_sans_variable
++import nuvio.composeapp.generated.resources.inter_variable
++import nuvio.composeapp.generated.resources.opensans_variable
+ import org.jetbrains.compose.resources.Font
+ 
+ val LocalAppTheme = staticCompositionLocalOf { AppTheme.WHITE }
+@@ -59,63 +62,88 @@ private fun buildColorScheme(palette: ThemeColorPalette, amoled: Boolean = false
      onError = Color(0xFFFCE5EC),
  )
  
@@ -8886,7 +8867,7 @@ index 12806d3..7c7d7b7 100644
              fontSize = NuvioTokens.Type.labelSm,
              lineHeight = NuvioTokens.LineHeight.labelXs,
              fontWeight = FontWeight.SemiBold,
-@@ -123,65 +148,63 @@ private val NuvioTypography: Typography
+@@ -123,65 +151,63 @@ private val NuvioTypography: Typography
          ),
      )
  
@@ -8963,7 +8944,7 @@ index 12806d3..7c7d7b7 100644
              fontSize = NuvioTokens.Type.displayMd,
              lineHeight = NuvioTokens.LineHeight.displayMd,
              fontWeight = FontWeight.Bold,
-@@ -196,7 +219,9 @@ private val NuvioRippleConfiguration = RippleConfiguration(
+@@ -196,7 +222,9 @@ private val NuvioRippleConfiguration = RippleConfiguration(
  fun NuvioTheme(
      darkTheme: Boolean = isSystemInDarkTheme(),
      appTheme: AppTheme = AppTheme.WHITE,
@@ -8973,7 +8954,7 @@ index 12806d3..7c7d7b7 100644
      customThemeColors: CustomThemeColors = CustomThemeColors.Default,
      content: @Composable () -> Unit,
  ) {
-@@ -205,6 +230,7 @@ fun NuvioTheme(
+@@ -205,6 +233,7 @@ fun NuvioTheme(
      }
      val colorScheme = buildColorScheme(palette, amoled = amoled)
      val tokens = defaultNuvioThemeTokens(palette, amoled = amoled, colorScheme = colorScheme)
@@ -8981,7 +8962,7 @@ index 12806d3..7c7d7b7 100644
  
      val density = LocalDensity.current
      CompositionLocalProvider(
-@@ -213,14 +239,15 @@ fun NuvioTheme(
+@@ -213,14 +242,15 @@ fun NuvioTheme(
              fontScale = 1f,
          ),
          LocalNuvioThemeTokens provides tokens,
@@ -9380,7 +9361,7 @@ index 1fac58b..61ed2e0 100644
 + */
 +internal expect fun ImageRequest.Builder.allowSoftwareBitmaps(): ImageRequest.Builder
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailActionButtons.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailActionButtons.kt
-index 99c6e6d..96d53bd 100644
+index 99c6e6d..0df856c 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailActionButtons.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/components/DetailActionButtons.kt
 @@ -33,6 +33,8 @@ import androidx.compose.material.icons.filled.Check
@@ -9392,7 +9373,16 @@ index 99c6e6d..96d53bd 100644
  import androidx.compose.material.icons.filled.Shuffle
  import androidx.compose.material3.Icon
  import androidx.compose.material3.MaterialTheme
-@@ -279,6 +281,8 @@ fun DetailActions(
+@@ -68,6 +70,8 @@ import nuvio.composeapp.generated.resources.hero_remove_from_library
+ import nuvio.composeapp.generated.resources.playback_unavailable
+ import nuvio.composeapp.generated.resources.random_episode_title
+ import nuvio.composeapp.generated.resources.shuffle_stop
++import nuvio.composeapp.generated.resources.details_reminder_set
++import nuvio.composeapp.generated.resources.details_remind_me
+ import org.jetbrains.compose.resources.stringResource
+ 
+ data class DetailSecondaryAction(
+@@ -279,6 +283,8 @@ fun DetailActions(
      val downloadLabel = stringResource(Res.string.details_download_action)
      val startFromBeginningLabel = stringResource(Res.string.details_action_start_from_beginning)
      val externalPlayerLabel = stringResource(Res.string.streams_open_external_player)
@@ -9401,7 +9391,7 @@ index 99c6e6d..96d53bd 100644
      val shuffleAction = onShuffleClick?.let { onClick ->
          DetailSecondaryAction(
              label = stringResource(if (shuffleEnabled) Res.string.shuffle_stop else Res.string.random_episode_title),
-@@ -294,6 +298,18 @@ fun DetailActions(
+@@ -294,6 +300,18 @@ fun DetailActions(
          pinnedAction = shuffleAction?.takeIf { shuffleEnabled },
          secondaryActions = buildList {
              if (!shuffleEnabled) shuffleAction?.let(::add)
@@ -9569,21 +9559,6 @@ index 62f895a..c59e567 100644
              SeriesSeasonSelector(
                  meta = meta,
                  seasons = seasons,
-diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsLocationStorage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsLocationStorage.kt
-new file mode 100644
-index 0000000..35d1f3f
---- /dev/null
-+++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsLocationStorage.kt
-@@ -0,0 +1,9 @@
-+package com.nuvio.app.features.downloads
-+
-+/** Device-level download preferences: custom download folder and details-page button visibility. */
-+internal expect object DownloadsLocationStorage {
-+    fun loadLocationUri(): String?
-+    fun saveLocationUri(uri: String?)
-+    fun loadShowDownloadButton(): Boolean
-+    fun saveShowDownloadButton(enabled: Boolean)
-+}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsNetworkPolicy.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/downloads/DownloadsNetworkPolicy.kt
 new file mode 100644
 index 0000000..f6aabba
@@ -9915,10 +9890,10 @@ index 0000000..5c8be59
 +    GenreIndex.itemsByGenre.value[genre].orEmpty()
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/genres/GenresScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/genres/GenresScreen.kt
 new file mode 100644
-index 0000000..8caa84a
+index 0000000..193c793
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/genres/GenresScreen.kt
-@@ -0,0 +1,155 @@
+@@ -0,0 +1,156 @@
 +package com.nuvio.app.features.genres
 +
 +import androidx.compose.foundation.clickable
@@ -9945,12 +9920,13 @@ index 0000000..8caa84a
 +import com.nuvio.app.core.ui.NuvioScreen
 +import com.nuvio.app.core.ui.NuvioScreenHeader
 +import com.nuvio.app.core.ui.PlatformBackHandler
-+import com.nuvio.app.core.ui.posterGridColumnCountForWidth
++import com.nuvio.app.features.home.components.posterGridColumnCountForWidth
 +import com.nuvio.app.features.home.MetaPreview
 +import com.nuvio.app.features.home.components.PosterGridRow
 +import nuvio.composeapp.generated.resources.Res
 +import nuvio.composeapp.generated.resources.home_genres_item_count
 +import nuvio.composeapp.generated.resources.home_genres_title
++import nuvio.composeapp.generated.resources.home_genres_empty
 +import org.jetbrains.compose.resources.stringResource
 +
 +/**
@@ -10471,7 +10447,7 @@ index 0000000..69ca1c6
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsRepository.kt
 new file mode 100644
-index 0000000..b6aa9d2
+index 0000000..a9ca3dc
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsRepository.kt
 @@ -0,0 +1,274 @@
@@ -10576,7 +10552,7 @@ index 0000000..b6aa9d2
 +                    firstRun = false
 +                    val candidates = buildSmartHighlightCandidates(
 +                        homeItems = homeCandidates(),
-+                        libraryItems = library.items.sortedByDescending { it.savedAtEpochMs },
++                        libraryItems = LibraryRepository.uiState.value.items.sortedByDescending { it.savedAtEpochMs },
 +                        continueWatchingEntries = WatchProgressRepository.uiState.value.entries
 +                            .continueWatchingEntries(),
 +                    )
@@ -11846,10 +11822,10 @@ index 0000000..71e5188
 +internal expect fun platformIntroChimePlayer(seconds: Int): IntroChimePlayer?
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/intro/PlaybackIntroOverlay.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/intro/PlaybackIntroOverlay.kt
 new file mode 100644
-index 0000000..adb071d
+index 0000000..61f5c7b
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/intro/PlaybackIntroOverlay.kt
-@@ -0,0 +1,341 @@
+@@ -0,0 +1,342 @@
 +package com.nuvio.app.features.player.intro
 +
 +import androidx.compose.foundation.Canvas
@@ -11879,6 +11855,7 @@ index 0000000..adb071d
 +import androidx.compose.ui.graphics.drawscope.Stroke
 +import androidx.compose.ui.graphics.drawscope.clipRect
 +import androidx.compose.ui.unit.IntOffset
++import androidx.compose.ui.unit.IntSize
 +import androidx.compose.ui.unit.dp
 +import com.nuvio.app.core.ui.PlatformBackHandler
 +import kotlinx.coroutines.delay
@@ -13300,7 +13277,7 @@ index 45549f1..25ce3a5 100644
          val catalogOnlyItems = items.filter { !it.isCollection }
          if (heroEnabled && catalogOnlyItems.isNotEmpty()) {
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/IntegrationsSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/IntegrationsSettingsPage.kt
-index 83347cb..32abc13 100644
+index 83347cb..9d12694 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/IntegrationsSettingsPage.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/IntegrationsSettingsPage.kt
 @@ -8,6 +8,7 @@ import androidx.compose.material.icons.rounded.Forum
@@ -13311,7 +13288,16 @@ index 83347cb..32abc13 100644
  import com.nuvio.app.features.discord.DiscordRpcPlatform
  import nuvio.composeapp.generated.resources.compose_settings_page_debrid
  import nuvio.composeapp.generated.resources.Res
-@@ -35,6 +36,7 @@ internal fun LazyListScope.integrationsContent(
+@@ -26,6 +27,8 @@ import nuvio.composeapp.generated.resources.settings_integrations_debrid_descrip
+ import nuvio.composeapp.generated.resources.settings_integrations_discord_description
+ import nuvio.composeapp.generated.resources.settings_integrations_section_title
+ import nuvio.composeapp.generated.resources.settings_integrations_tmdb_description
++import nuvio.composeapp.generated.resources.compose_settings_page_tvdb_ordering
++import nuvio.composeapp.generated.resources.settings_integrations_tvdb_description
+ import org.jetbrains.compose.resources.stringResource
+ 
+ internal fun LazyListScope.integrationsContent(
+@@ -35,6 +38,7 @@ internal fun LazyListScope.integrationsContent(
      onDebridClick: () -> Unit,
      onTrackingClick: () -> Unit = {},
      onOmdbClick: () -> Unit = {},
@@ -13319,7 +13305,7 @@ index 83347cb..32abc13 100644
      onMediaServersClick: () -> Unit = {},
      onLiveTvClick: () -> Unit = {},
      onDiscordClick: () -> Unit = {},
-@@ -78,6 +80,14 @@ internal fun LazyListScope.integrationsContent(
+@@ -78,6 +82,14 @@ internal fun LazyListScope.integrationsContent(
                      onClick = onOmdbClick,
                  )
                  SettingsGroupDivider(isTablet = isTablet)
@@ -13572,10 +13558,18 @@ index e711ff4..5ea59a5 100644
                      title = stringResource(Res.string.settings_playback_auto_skip_segments),
                      description = autoSkipSelectionSummary(autoPlayPlayerSettings.autoSkipSegmentTypes),
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
-index f20a83e..0b9c9df 100644
+index f20a83e..18d2d02 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
-@@ -224,6 +224,11 @@ internal enum class SettingsPage(
+@@ -47,6 +47,7 @@ import nuvio.composeapp.generated.resources.compose_settings_page_tmdb_enrichmen
+ import nuvio.composeapp.generated.resources.compose_settings_page_trakt
+ import nuvio.composeapp.generated.resources.compose_settings_page_tracking
+ import nuvio.composeapp.generated.resources.settings_account
++import nuvio.composeapp.generated.resources.compose_settings_page_tvdb_ordering
+ import org.jetbrains.compose.resources.StringResource
+ 
+ internal enum class SettingsCategory(
+@@ -224,6 +225,11 @@ internal enum class SettingsPage(
          category = SettingsCategory.General,
          parentPage = Integrations,
      ),
@@ -15326,7 +15320,7 @@ index 0000000..62c5aba
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbSettingsPage.kt
 new file mode 100644
-index 0000000..c07c92b
+index 0000000..2aa0d41
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbSettingsPage.kt
 @@ -0,0 +1,136 @@
@@ -15360,7 +15354,7 @@ index 0000000..c07c92b
 +    item {
 +        val scope = rememberCoroutineScope()
 +        var apiKey by remember { mutableStateOf(TvdbCredentialStore.savedKey().orEmpty()) }
-+        var testState by remember { mutableStateOf(TvdbTestState.Idle) }
++        var testState by remember { mutableStateOf<TvdbTestState>(TvdbTestState.Idle) }
 +        SettingsSection(title = "TheTVDB Episode Ordering", isTablet = isTablet) {
 +            SettingsGroup(isTablet = isTablet) {
 +                SettingsSecretTextField(
