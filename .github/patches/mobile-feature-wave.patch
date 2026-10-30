@@ -11823,7 +11823,7 @@ index 0000000..71e5188
 +internal expect fun platformIntroChimePlayer(seconds: Int): IntroChimePlayer?
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/intro/PlaybackIntroOverlay.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/intro/PlaybackIntroOverlay.kt
 new file mode 100644
-index 0000000..a9a2663
+index 0000000..858fd40
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/intro/PlaybackIntroOverlay.kt
 @@ -0,0 +1,341 @@
@@ -11901,7 +11901,7 @@ index 0000000..a9a2663
 +    // Never left up: if the intro can't draw or finish for any reason, it goes shortly after its
 +    // own length and the player carries on (the loading screen follows, as usual).
 +    LaunchedEffect(Unit) {
-+        delay(timeline.totalMs + INTRO_WATCHDOG_EXTRA_MS)
++        delay(timeline.totalMs.toLong() + INTRO_WATCHDOG_EXTRA_MS)
 +        PlaybackIntroState.finish()
 +    }
 +    PlatformBackHandler(enabled = true) {
