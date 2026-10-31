@@ -259,6 +259,10 @@ jobs:
 
       - name: Build release APK (minified, arm64 split)
         if: steps.ver.outputs.should_build == 'true'
+        env:
+          # upstream gradle.properties asks for a 12G Gradle heap + 8G Kotlin daemon on a 7G
+          # runner; R8/resource-shrink peaks then OOM-kill the daemon (exit 143). Cap both.
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3840M -XX:MaxMetaspaceSize=768m -Dorg.gradle.workers.max=2 -Dkotlin.daemon.jvmargs=-Xmx1536M"
         run: |
           set -o pipefail
           ok=0
