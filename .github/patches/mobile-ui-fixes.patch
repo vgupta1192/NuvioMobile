@@ -1,0 +1,143 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
+index 11c96a1..b872ffb 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
+@@ -233,10 +233,10 @@ fun MetaDetailsScreen(
+         tvdbController.aliases(displayedMeta, id)
+     }
+     LaunchedEffect(tvdbAliases, tvdbProfileId) {
+-        tvdbController.observeSelection(tvdbAliases)
++        runCatching { tvdbController.observeSelection(tvdbAliases) }
+     }
+     LaunchedEffect(tvdbAliases, tvdbState.selection, displayedMeta?.videos) {
+-        tvdbController.loadProjection(tvdbAliases, displayedMeta)
++        runCatching { tvdbController.loadProjection(tvdbAliases, displayedMeta) }
+     }
+     val tvdbOrderControlActions = TvdbOrderControlActions(
+         visible = tvdbState.hasCredential && displayedMeta?.type?.let(::isTvdbSeriesLike) == true,
+@@ -588,7 +588,7 @@ fun MetaDetailsScreen(
+ 
+             displayedMeta != null -> {
+                 val providerMeta = displayedMeta
+-                val meta = tvdbState.projection?.provider ?: providerMeta
++                val meta = tvdbState.projection?.display ?: providerMeta
+                 val metaPreview = remember(meta) { meta.toMetaPreview() }
+                 val todayIsoDate = CurrentDateProvider.todayIsoDate()
+                 val isSaved = remember(
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SmartHighlightsSettingsSection.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SmartHighlightsSettingsSection.kt
+index 7dc09b8..9008448 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SmartHighlightsSettingsSection.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SmartHighlightsSettingsSection.kt
+@@ -3,6 +3,8 @@ package com.nuvio.app.features.settings
+ import androidx.compose.foundation.clickable
+ import androidx.compose.foundation.layout.Arrangement
+ import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.ExperimentalLayoutApi
++import androidx.compose.foundation.layout.FlowRow
+ import androidx.compose.foundation.layout.Row
+ import androidx.compose.foundation.layout.fillMaxWidth
+ import androidx.compose.foundation.layout.padding
+@@ -49,6 +51,7 @@ import org.jetbrains.compose.resources.stringResource
+  * home layout switches. The key is never displayed back and never logged; only its presence is
+  * reflected in the UI.
+  */
++@OptIn(ExperimentalLayoutApi::class)
+ @Composable
+ internal fun SmartHighlightsSettingsSection(isTablet: Boolean) {
+     val enabled by SmartHighlightsPreferences.enabled.collectAsStateWithLifecycle()
+@@ -117,7 +120,11 @@ private fun GeminiApiKeyRow(
+             modifier = Modifier.fillMaxWidth(),
+             label = stringResource(Res.string.settings_highlights_gemini_key_label),
+         )
+-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
++        FlowRow(
++            modifier = Modifier.fillMaxWidth(),
++            horizontalArrangement = Arrangement.spacedBy(10.dp),
++            verticalArrangement = Arrangement.spacedBy(10.dp),
++        ) {
+             Button(
+                 onClick = {
+                     SmartHighlightsPreferences.setApiKey(draft.trim())
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeOrderController.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeOrderController.kt
+index 446efe0..90594db 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeOrderController.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeOrderController.kt
+@@ -5,6 +5,7 @@ import com.nuvio.app.features.details.MetaVideo
+ import com.nuvio.app.features.profiles.ProfileRepository
+ import com.nuvio.app.features.tmdb.TmdbService
+ import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.CoroutineExceptionHandler
+ import kotlinx.coroutines.CoroutineScope
+ import kotlinx.coroutines.Job
+ import kotlinx.coroutines.flow.MutableStateFlow
+@@ -53,6 +54,14 @@ class TvdbEpisodeOrderController(
+     private val client = TvdbClient(TvdbCredentialStore)
+     private val repository = TvdbOrderRepository(client)
+ 
++    /**
++     * Last-resort net: anything that escapes the per-flow try/catch degrades the busy
++     * flags instead of killing the app with an unhandled coroutine exception.
++     */
++    private val crashGuard = CoroutineExceptionHandler { _, _ ->
++        _state.value = _state.value.copy(loading = false, pickerBusy = false)
++    }
++
+     private val _state = MutableStateFlow(TvdbEpisodeOrderUiState())
+     val state: StateFlow<TvdbEpisodeOrderUiState> = _state.asStateFlow()
+ 
+@@ -119,7 +128,7 @@ class TvdbEpisodeOrderController(
+         loadedProjectionKey = key
+         val request = ++generation
+         job?.cancel()
+-        job = scope.launch {
++        job = scope.launch(crashGuard) {
+             _state.value = _state.value.copy(loading = true)
+             try {
+                 val projection = withTimeoutOrNull(LOAD_TIMEOUT_MS) {
+@@ -161,7 +170,7 @@ class TvdbEpisodeOrderController(
+         val aliases = lastAliases.ifEmpty { aliases(meta, meta.id) }
+         val request = ++generation
+         job?.cancel()
+-        job = scope.launch {
++        job = scope.launch(crashGuard) {
+             _state.value = _state.value.copy(pickerOpen = true, pickerBusy = true, pickerError = null)
+             try {
+                 val profile = ProfileRepository.activeProfileId
+@@ -211,7 +220,7 @@ class TvdbEpisodeOrderController(
+         val profile = ProfileRepository.activeProfileId
+         val request = ++generation
+         job?.cancel()
+-        job = scope.launch {
++        job = scope.launch(crashGuard) {
+             _state.value = _state.value.copy(pickerBusy = true, pickerError = null)
+             try {
+                 TvdbOrderStore.save(seriesId, type, lastAliases)
+@@ -224,6 +233,9 @@ class TvdbEpisodeOrderController(
+                     observedKey = null
+                     loadedProjectionKey = null
+                     observedAliases?.let(::observeSelection)
++                    // Detach from the running select job first, so loadProjection's
++                    // job?.cancel() cannot cancel this very coroutine mid-flight.
++                    job = null
+                     lastMeta?.let { loadProjection(lastAliases, it) }
+                 }
+             } catch (cancelled: CancellationException) {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeProjection.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeProjection.kt
+index 6e74959..0a8b154 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeProjection.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeProjection.kt
+@@ -73,6 +73,14 @@ class TvdbEpisodeProjection(
+         }
+         .sortedWith(compareBy({ it.season ?: Int.MAX_VALUE }, { it.episode ?: Int.MAX_VALUE }))
+ 
++    /**
++     * The provider meta with its videos re-keyed to the projected rows — what the
++     * detail screen renders while this order is active (mirrors the TV fork's
++     * projection semantics). Playback and history translate back via [resolvePlayback],
++     * [toProviderEpisode] and [providerSeasonOf].
++     */
++    val display: MetaDetails = provider.copy(videos = rows)
++
+     val unmatchedCount: Int = rows.count { it.tvdbOrder?.matched != true }
+ 
+     val statusMessage: String? = listOfNotNull(
