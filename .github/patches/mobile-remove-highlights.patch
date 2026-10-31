@@ -1,0 +1,603 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
+index 53eabbc..a4085db 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
+@@ -162,7 +162,6 @@ open class MainActivity : AppCompatActivity() {
+         PlatformLocalAccountDataCleaner.initialize(applicationContext)
+         EpisodeReleaseNotificationPlatform.initialize(applicationContext)
+         EpisodeReleaseNotificationPlatform.bindActivity(this)
+-        com.nuvio.app.features.highlights.SmartHighlightsStorage.initialize(applicationContext) // Nuvio fork: smart highlights
+         com.nuvio.app.features.reminders.ReleaseRemindersStorage.initialize(applicationContext) // Nuvio fork: release reminders
+         com.nuvio.app.features.reminders.ReleaseReminderNotificationPlatform.initialize(applicationContext) // Nuvio fork: release reminders
+         handleIncomingAppIntent(intent)
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsStorage.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsStorage.android.kt
+deleted file mode 100644
+index cef604c..0000000
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsStorage.android.kt
++++ /dev/null
+@@ -1,33 +0,0 @@
+-package com.nuvio.app.features.highlights
+-
+-import android.content.Context
+-import android.content.SharedPreferences
+-import com.nuvio.app.core.storage.ProfileScopedKey
+-
+-internal actual object SmartHighlightsStorage {
+-    private const val preferencesName = "nuvio_smart_highlights"
+-    private const val enabledKey = "smart_highlights_enabled"
+-
+-    private var preferences: SharedPreferences? = null
+-
+-    fun initialize(context: Context) {
+-        preferences = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
+-    }
+-
+-    actual fun loadEnabled(): Boolean? =
+-        preferences?.let { sharedPreferences ->
+-            val key = ProfileScopedKey.of(enabledKey)
+-            if (sharedPreferences.contains(key)) {
+-                sharedPreferences.getBoolean(key, true)
+-            } else {
+-                null
+-            }
+-        }
+-
+-    actual fun saveEnabled(enabled: Boolean) {
+-        preferences
+-            ?.edit()
+-            ?.putBoolean(ProfileScopedKey.of(enabledKey), enabled)
+-            ?.apply()
+-    }
+-}
+diff --git a/composeApp/src/commonMain/composeResources/values/strings.xml b/composeApp/src/commonMain/composeResources/values/strings.xml
+index 093aa9a..d30edce 100644
+--- a/composeApp/src/commonMain/composeResources/values/strings.xml
++++ b/composeApp/src/commonMain/composeResources/values/strings.xml
+@@ -2872,10 +2872,6 @@
+     <string name="settings_playback_playback_intro_description">Play a short animated intro with chime while the player starts. Back skips it.</string>
+     <string name="settings_playback_playback_intro_length">Intro length</string>
+     <string name="settings_playback_playback_intro_length_description">How long the intro runs before it gives way to the video. Tap to cycle 3, 4, 5, 6 seconds.</string>
+-    <string name="home_smart_highlights_title">Smart Highlights</string>
+-    <string name="settings_highlights_section">Smart Highlights</string>
+-    <string name="settings_highlights_toggle">Smart Highlights</string>
+-    <string name="settings_highlights_toggle_description">Show a top-picks rail from your library and progress on home. Add a Gemini API key below to have it ranked with reasons.</string>
+     <string name="home_genres_title">Genres</string>
+     <string name="home_genres_item_count">%1$d titles</string>
+     <string name="home_genres_empty">No genres yet. Browse some catalogs first.</string>
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/storage/LocalAccountDataCleaner.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/storage/LocalAccountDataCleaner.kt
+index 35073d6..e361320 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/core/storage/LocalAccountDataCleaner.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/core/storage/LocalAccountDataCleaner.kt
+@@ -68,7 +68,6 @@ internal object LocalAccountDataCleaner {
+         }
+         HomeRepository.clear()
+         HomeCatalogSettingsRepository.clearLocalState()
+-        com.nuvio.app.features.highlights.SmartHighlightsRepository.clearLocalState() // Nuvio fork: smart highlights
+         com.nuvio.app.features.genres.GenreIndex.onProfileChanged() // Nuvio fork: genres browse
+         com.nuvio.app.features.reminders.ReleaseRemindersRepository.clearLocalState() // Nuvio fork: release reminders
+         MetaScreenSettingsRepository.clearLocalState()
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsModels.kt
+deleted file mode 100644
+index 8be75f5..0000000
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsModels.kt
++++ /dev/null
+@@ -1,81 +0,0 @@
+-package com.nuvio.app.features.highlights
+-
+-import com.nuvio.app.features.home.MetaPreview
+-import kotlinx.coroutines.flow.MutableStateFlow
+-import kotlinx.coroutines.flow.StateFlow
+-import kotlinx.coroutines.flow.asStateFlow
+-import kotlinx.serialization.Serializable
+-
+-/** How many picks the Smart Highlights rail shows. */
+-internal const val SMART_HIGHLIGHTS_MAX_PICKS = 6
+-
+-/** How many candidates at most the rail considers. */
+-internal const val SMART_HIGHLIGHTS_MAX_CANDIDATES = 12
+-
+-/** In-progress and library candidates considered before the overall cap. */
+-internal const val SMART_HIGHLIGHTS_MAX_PROGRESS_CANDIDATES = 8
+-internal const val SMART_HIGHLIGHTS_MAX_LIBRARY_CANDIDATES = 8
+-
+-/** How long home waits after startup before the first ranking pass. */
+-internal const val SMART_HIGHLIGHTS_STARTUP_DELAY_MS = 5_000L
+-
+-/** Reason chips are one short line; anything longer is clipped. */
+-internal const val SMART_HIGHLIGHTS_MAX_REASON_LENGTH = 48
+-
+-/** One featured title with the short reason its chip shows. */
+-data class SmartHighlightPick(
+-    val item: MetaPreview,
+-    val reason: String,
+-    /** Retained for chip styling; the fallback pipeline always renders false. */
+-    val ranked: Boolean,
+-)
+-
+-/** A title eligible for the rail, before ranking. */
+-internal data class SmartHighlightCandidate(
+-    val item: MetaPreview,
+-    /** 0..100 when the viewer is part way through, else null. */
+-    val progressPercent: Int?,
+-    /** True when the title comes from the saved library rather than playback progress. */
+-    val fromLibrary: Boolean,
+-)
+-
+-/**
+- * Nuvio fork: preferences for the Smart Highlights rail.
+- * Defaults keep the behavior identical for anyone who never opens the new settings section.
+- */
+-object SmartHighlightsPreferences {
+-    private val _enabled = MutableStateFlow(true)
+-    val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
+-
+-    private var enabledLoaded = false
+-
+-    fun ensureLoaded() {
+-        if (!enabledLoaded) {
+-            enabledLoaded = true
+-            _enabled.value = SmartHighlightsStorage.loadEnabled() ?: true
+-        }
+-    }
+-
+-    fun isEnabled(): Boolean {
+-        ensureLoaded()
+-        return _enabled.value
+-    }
+-
+-    fun setEnabled(value: Boolean) {
+-        ensureLoaded()
+-        _enabled.value = value
+-        SmartHighlightsStorage.saveEnabled(value)
+-    }
+-
+-    fun onProfileChanged() {
+-        enabledLoaded = false
+-        _enabled.value = true
+-        ensureLoaded()
+-    }
+-
+-    fun clearLocalState() {
+-        enabledLoaded = false
+-        _enabled.value = true
+-        SmartHighlightsStorage.saveEnabled(true)
+-    }
+-}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsRepository.kt
+deleted file mode 100644
+index b23d018..0000000
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsRepository.kt
++++ /dev/null
+@@ -1,192 +0,0 @@
+-package com.nuvio.app.features.highlights
+-
+-import com.nuvio.app.core.time.EpisodeReleaseDatePlatform
+-import com.nuvio.app.features.home.HomeRepository
+-import com.nuvio.app.features.home.MetaPreview
+-import com.nuvio.app.features.home.PosterShape
+-import com.nuvio.app.features.home.isUnreleased
+-import com.nuvio.app.features.home.stableKey
+-import com.nuvio.app.features.library.LibraryItem
+-import com.nuvio.app.features.library.LibraryRepository
+-import com.nuvio.app.features.library.toMetaPreview
+-import com.nuvio.app.features.watchprogress.CurrentDateProvider
+-import com.nuvio.app.features.watchprogress.WatchProgressRepository
+-import com.nuvio.app.features.watchprogress.continueWatchingEntries
+-import kotlinx.coroutines.CoroutineScope
+-import kotlinx.coroutines.Dispatchers
+-import kotlinx.coroutines.SupervisorJob
+-import kotlinx.coroutines.delay
+-import kotlinx.coroutines.flow.MutableStateFlow
+-import kotlinx.coroutines.flow.StateFlow
+-import kotlinx.coroutines.flow.asStateFlow
+-import kotlinx.coroutines.flow.collectLatest
+-import kotlinx.coroutines.flow.combine
+-import kotlinx.coroutines.flow.distinctUntilChanged
+-import kotlinx.coroutines.launch
+-import kotlin.concurrent.Volatile
+-
+-private data class SmartHighlightsInput(
+-    val enabled: Boolean,
+-    val homeRevision: Int,
+-    val libraryRevision: Int,
+-    val progressRevision: Int,
+-)
+-
+-/**
+- * Nuvio fork: the Smart Highlights home rail pipeline.
+- *
+- * Candidates are a blend of the profile's in-progress continue-watching titles (most recently
+- * watched first), the saved library (most recently listed first) and the already-fetched home
+- * catalog items, deduplicated and capped. The rail renders the fallback order straight away:
+- * a blend of continue-watching, library and home picks, each with a short reason.
+- */
+-object SmartHighlightsRepository {
+-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+-
+-    private val _picks = MutableStateFlow<List<SmartHighlightPick>>(emptyList())
+-    val picks: StateFlow<List<SmartHighlightPick>> = _picks.asStateFlow()
+-
+-    @Volatile private var started = false
+-    @Volatile private var generation = 0
+-
+-    /** Starts the pipeline once; safe to call from every home render. */
+-    fun ensureStarted() {
+-        if (started) return
+-        started = true
+-        SmartHighlightsPreferences.ensureLoaded()
+-        scope.launch {
+-            var firstRun = true
+-            combine(
+-                SmartHighlightsPreferences.enabled,
+-                HomeRepository.uiState,
+-                LibraryRepository.uiState,
+-                WatchProgressRepository.uiState,
+-            ) { enabled, home, library, progress ->
+-                SmartHighlightsInput(
+-                    enabled = enabled,
+-                    homeRevision = home.sections.sumOf { section ->
+-                        section.items.size * 31 + section.key.hashCode()
+-                    } + home.heroItems.size,
+-                    libraryRevision = library.items.size * 31 +
+-                        library.items.fold(0) { acc, item -> acc + item.id.hashCode() },
+-                    progressRevision = progress.entries.size * 31 +
+-                        progress.entries.fold(0) { acc, entry -> acc + entry.videoId.hashCode() },
+-                )
+-            }
+-                .distinctUntilChanged()
+-                .collectLatest { input ->
+-                    if (!input.enabled) {
+-                        _picks.value = emptyList()
+-                        firstRun = false
+-                        return@collectLatest
+-                    }
+-                    if (firstRun) {
+-                        // Let home's catalogs and continue watching load before spending work on the rail.
+-                        delay(SMART_HIGHLIGHTS_STARTUP_DELAY_MS)
+-                    }
+-                    firstRun = false
+-                    val candidates = buildSmartHighlightCandidates(
+-                        homeItems = homeCandidates(),
+-                        libraryItems = LibraryRepository.uiState.value.items.sortedByDescending { it.savedAtEpochMs },
+-                        continueWatchingEntries = WatchProgressRepository.uiState.value.entries
+-                            .continueWatchingEntries(),
+-                    )
+-                    _picks.value = if (candidates.isEmpty()) {
+-                        emptyList()
+-                    } else {
+-                        computeSmartHighlightPicks(candidates)
+-                    }
+-                }
+-        }
+-    }
+-
+-    fun onProfileChanged() {
+-        generation++
+-        SmartHighlightsPreferences.onProfileChanged()
+-        _picks.value = emptyList()
+-    }
+-
+-    fun clearLocalState() {
+-        generation++
+-        SmartHighlightsPreferences.clearLocalState()
+-        _picks.value = emptyList()
+-    }
+-
+-    private fun homeCandidates(): List<MetaPreview> =
+-        buildList {
+-            addAll(HomeRepository.uiState.value.heroItems)
+-            HomeRepository.uiState.value.sections.forEach { section -> addAll(section.items) }
+-        }
+-
+-    private fun computeSmartHighlightPicks(
+-        candidates: List<SmartHighlightCandidate>,
+-    ): List<SmartHighlightPick> = candidates
+-        .take(SMART_HIGHLIGHTS_MAX_PICKS)
+-        .map { it.toPick(fallbackReason(it)) }
+-}
+-
+-internal fun buildSmartHighlightCandidates(
+-    homeItems: List<MetaPreview>,
+-    libraryItems: List<LibraryItem>,
+-    continueWatchingEntries: List<com.nuvio.app.features.watchprogress.WatchProgressEntry>,
+-): List<SmartHighlightCandidate> {
+-    val nowEpochMs = EpisodeReleaseDatePlatform.nowEpochMs()
+-    val todayIsoDate = CurrentDateProvider.todayIsoDate()
+-    val seen = HashSet<String>()
+-    val candidates = ArrayList<SmartHighlightCandidate>()
+-
+-    fun addCandidate(item: MetaPreview, progressPercent: Int?, fromLibrary: Boolean) {
+-        if (item.name.isBlank()) return
+-        // A card without art would render as an empty frame on the home screen.
+-        if (item.poster.isNullOrBlank() && item.banner.isNullOrBlank() && item.landscapePoster.isNullOrBlank()) return
+-        if (item.isUnreleased(todayIsoDate, nowEpochMs)) return
+-        if (!seen.add(item.stableKey())) return
+-        candidates += SmartHighlightCandidate(item, progressPercent, fromLibrary)
+-    }
+-
+-    continueWatchingEntries.asSequence()
+-        .filter { entry -> entry.title.isNotBlank() }
+-        .take(SMART_HIGHLIGHTS_MAX_PROGRESS_CANDIDATES)
+-        .forEach { entry ->
+-            val percent = entry.normalizedProgressPercent
+-                ?.toInt()
+-                ?.takeIf { it in 1..99 }
+-            addCandidate(
+-                item = MetaPreview(
+-                    id = entry.parentMetaId,
+-                    type = entry.parentMetaType,
+-                    name = entry.title,
+-                    poster = entry.poster,
+-                    banner = entry.background,
+-                    logo = entry.logo,
+-                    posterShape = PosterShape.Poster,
+-                ),
+-                progressPercent = percent,
+-                fromLibrary = false,
+-            )
+-        }
+-
+-    libraryItems.asSequence()
+-        .take(SMART_HIGHLIGHTS_MAX_LIBRARY_CANDIDATES)
+-        .forEach { libraryItem ->
+-            addCandidate(libraryItem.toMetaPreview(), progressPercent = null, fromLibrary = true)
+-        }
+-
+-    homeItems.asSequence()
+-        .take(SMART_HIGHLIGHTS_MAX_LIBRARY_CANDIDATES)
+-        .forEach { preview ->
+-            addCandidate(preview, progressPercent = null, fromLibrary = true)
+-        }
+-
+-    return candidates.take(SMART_HIGHLIGHTS_MAX_CANDIDATES)
+-}
+-
+-private fun SmartHighlightCandidate.toPick(reason: String) =
+-    SmartHighlightPick(item = item, reason = reason, ranked = false)
+-
+-private fun fallbackReason(candidate: SmartHighlightCandidate): String =
+-    if (candidate.progressPercent != null) {
+-        "Continue watching"
+-    } else {
+-        "Saved recently"
+-    }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsStorage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsStorage.kt
+deleted file mode 100644
+index 1336df2..0000000
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsStorage.kt
++++ /dev/null
+@@ -1,10 +0,0 @@
+-package com.nuvio.app.features.highlights
+-
+-/**
+- * Nuvio fork: per-profile persistence for the Smart Highlights rail. Values are stored under a
+- * profile-scoped key so switching profiles never leaks one profile's rail settings into another.
+- */
+-internal expect object SmartHighlightsStorage {
+-    fun loadEnabled(): Boolean?
+-    fun saveEnabled(enabled: Boolean)
+-}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt
+index 4f3c784..40b036f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/HomeScreen.kt
+@@ -189,10 +189,6 @@ fun HomeScreen(
+     val watchProgressUiState by WatchProgressRepository.uiState.collectAsStateWithLifecycle()
+     val effectiveWatchProgressSource = watchProgressUiState.source
+     val cloudLibraryUiState by CloudLibraryRepository.uiState.collectAsStateWithLifecycle()
+-    // Nuvio fork: Smart Highlights picks (top picks from the profile's own library and progress).
+-    LaunchedEffect(Unit) { com.nuvio.app.features.highlights.SmartHighlightsRepository.ensureStarted() }
+-    val smartHighlightPicks by com.nuvio.app.features.highlights.SmartHighlightsRepository.picks
+-        .collectAsStateWithLifecycle()
+     // Nuvio fork: genres derived locally from the already-fetched home/library metadata.
+     val homeGenres by com.nuvio.app.features.genres.GenreIndex.genres.collectAsStateWithLifecycle()
+     LaunchedEffect(Unit) { com.nuvio.app.features.genres.GenreIndex.ensureStarted() }
+@@ -1220,19 +1216,6 @@ fun HomeScreen(
+                         onItemLongPress = onContinueWatchingLongPress,
+                         disintegrationRequest = continueWatchingDisintegrationRequest,
+                     )
+-                    // Nuvio fork: Smart Highlights — top picks from the profile's library and progress.
+-                    if (smartHighlightPicks.isNotEmpty()) {
+-                        item(key = "fork_home_smart_highlights", contentType = "smart_highlights") {
+-                            com.nuvio.app.features.home.components.SmartHighlightsRailSection(
+-                                title = stringResource(Res.string.home_smart_highlights_title),
+-                                picks = smartHighlightPicks,
+-                                sectionPadding = homeSectionPadding,
+-                                modifier = Modifier.padding(bottom = 12.dp),
+-                                onPosterClick = onPosterClick,
+-                                onPosterLongClick = onPosterLongClick,
+-                            )
+-                        }
+-                    }
+                     // Nuvio fork: genres browse entry, derived locally from fetched metadata.
+                     item(key = "fork_home_genres", contentType = "genres") {
+                         com.nuvio.app.features.genres.ForkHomeGenresRow(
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/components/SmartHighlightsSection.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/components/SmartHighlightsSection.kt
+deleted file mode 100644
+index 433309c..0000000
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/components/SmartHighlightsSection.kt
++++ /dev/null
+@@ -1,95 +0,0 @@
+-package com.nuvio.app.features.home.components
+-
+-import androidx.compose.foundation.background
+-import androidx.compose.foundation.layout.Box
+-import androidx.compose.foundation.layout.PaddingValues
+-import androidx.compose.foundation.layout.padding
+-import androidx.compose.foundation.shape.RoundedCornerShape
+-import androidx.compose.material3.MaterialTheme
+-import androidx.compose.material3.Text
+-import androidx.compose.runtime.Composable
+-import androidx.compose.ui.Alignment
+-import androidx.compose.ui.Modifier
+-import androidx.compose.ui.draw.clip
+-import androidx.compose.ui.graphics.Color
+-import androidx.compose.ui.text.style.TextOverflow
+-import androidx.compose.ui.unit.dp
+-import com.nuvio.app.core.ui.NuvioShelfSection
+-import com.nuvio.app.features.highlights.SmartHighlightPick
+-import com.nuvio.app.features.home.MetaPreview
+-import com.nuvio.app.features.home.stableKey
+-
+-/**
+- * Nuvio fork: the short "why" badge the Smart Highlights rail draws on each featured poster.
+- * Dark scrim with white label text so it stays legible over any artwork.
+- */
+-@Composable
+-internal fun SmartHighlightReasonChip(
+-    text: String,
+-    modifier: Modifier = Modifier,
+-) {
+-    Text(
+-        text = text,
+-        style = MaterialTheme.typography.labelMedium,
+-        color = Color.White,
+-        maxLines = 1,
+-        overflow = TextOverflow.Ellipsis,
+-        modifier = modifier
+-            .clip(RoundedCornerShape(6.dp))
+-            .background(Color.Black.copy(alpha = 0.72f))
+-            .padding(horizontal = 8.dp, vertical = 3.dp),
+-    )
+-}
+-
+-/**
+- * Nuvio fork: the Smart Highlights rail — top picks from the profile's own library and progress,
+- * with a reason chip drawn onto each poster. Clicks navigate to the detail screen like any
+- * catalog card. Hidden entirely when [picks] is empty.
+- */
+-@Composable
+-internal fun SmartHighlightsRailSection(
+-    title: String,
+-    picks: List<SmartHighlightPick>,
+-    sectionPadding: androidx.compose.ui.unit.Dp,
+-    modifier: Modifier = Modifier,
+-    onPosterClick: ((MetaPreview) -> Unit)? = null,
+-    onPosterLongClick: ((MetaPreview) -> Unit)? = null,
+-) {
+-    if (picks.isEmpty()) return
+-    NuvioShelfSection(
+-        title = title,
+-        entries = picks,
+-        modifier = modifier,
+-        headerHorizontalPadding = sectionPadding,
+-        rowContentPadding = PaddingValues(horizontal = sectionPadding),
+-        key = { pick -> "${pick.item.stableKey()}|highlight" },
+-    ) { pick ->
+-        SmartHighlightPosterCard(
+-            pick = pick,
+-            onClick = onPosterClick?.let { { it(pick.item) } },
+-            onLongClick = onPosterLongClick?.let { { it(pick.item) } },
+-        )
+-    }
+-}
+-
+-@Composable
+-private fun SmartHighlightPosterCard(
+-    pick: SmartHighlightPick,
+-    onClick: (() -> Unit)?,
+-    onLongClick: (() -> Unit)?,
+-    modifier: Modifier = Modifier,
+-) {
+-    Box(modifier = modifier) {
+-        HomePosterCard(
+-            item = pick.item,
+-            onClick = onClick,
+-            onLongClick = onLongClick,
+-        )
+-        SmartHighlightReasonChip(
+-            text = pick.reason,
+-            modifier = Modifier
+-                .align(Alignment.BottomStart)
+-                .padding(8.dp),
+-        )
+-    }
+-}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileRepository.kt
+index ea3d8e3..c4abdf6 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/profiles/ProfileRepository.kt
+@@ -178,7 +178,6 @@ object ProfileRepository {
+         P2pSettingsRepository.onProfileChanged()
+         HomeCatalogSettingsRepository.onProfileChanged()
+         HomeRepository.clear()
+-        com.nuvio.app.features.highlights.SmartHighlightsRepository.onProfileChanged() // Nuvio fork: smart highlights
+         com.nuvio.app.features.genres.GenreIndex.onProfileChanged() // Nuvio fork: genres browse
+         com.nuvio.app.features.reminders.ReleaseRemindersRepository.onProfileChanged() // Nuvio fork: release reminders
+         MetaScreenSettingsRepository.onProfileChanged()
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/HomescreenSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/HomescreenSettingsPage.kt
+index 5608fb6..deddf8d 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/HomescreenSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/HomescreenSettingsPage.kt
+@@ -124,7 +124,6 @@ internal fun LazyListScope.homescreenSettingsContent(
+         }
+     }
+     item { ForkHomeRowsSettingsSection(isTablet = isTablet) } // fork home rows hook
+-    item { SmartHighlightsSettingsSection(isTablet = isTablet) } // Nuvio fork: smart highlights
+     item { ForkAboutSettingsSection(isTablet = isTablet) } // fork about hook
+     item {
+         val catalogOnlyItems = items.filter { !it.isCollection }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SmartHighlightsSettingsSection.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SmartHighlightsSettingsSection.kt
+deleted file mode 100644
+index 5492cb8..0000000
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SmartHighlightsSettingsSection.kt
++++ /dev/null
+@@ -1,35 +0,0 @@
+-package com.nuvio.app.features.settings
+-
+-import androidx.compose.runtime.Composable
+-import androidx.compose.runtime.getValue
+-import androidx.lifecycle.compose.collectAsStateWithLifecycle
+-import com.nuvio.app.features.highlights.SmartHighlightsPreferences
+-import nuvio.composeapp.generated.resources.Res
+-import nuvio.composeapp.generated.resources.settings_highlights_section
+-import nuvio.composeapp.generated.resources.settings_highlights_toggle
+-import nuvio.composeapp.generated.resources.settings_highlights_toggle_description
+-import org.jetbrains.compose.resources.stringResource
+-
+-/**
+- * Nuvio fork: Smart Highlights settings — the rail toggle. Placed in Home screen settings,
+- * next to the other home layout switches.
+- */
+-@Composable
+-internal fun SmartHighlightsSettingsSection(isTablet: Boolean) {
+-    val enabled by SmartHighlightsPreferences.enabled.collectAsStateWithLifecycle()
+-
+-    SettingsSection(
+-        title = stringResource(Res.string.settings_highlights_section),
+-        isTablet = isTablet,
+-    ) {
+-        SettingsGroup(isTablet = isTablet) {
+-            SettingsSwitchRow(
+-                title = stringResource(Res.string.settings_highlights_toggle),
+-                description = stringResource(Res.string.settings_highlights_toggle_description),
+-                checked = enabled,
+-                isTablet = isTablet,
+-                onCheckedChange = SmartHighlightsPreferences::setEnabled,
+-            )
+-        }
+-    }
+-}
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsStorage.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsStorage.ios.kt
+deleted file mode 100644
+index 0fe8fe3..0000000
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsStorage.ios.kt
++++ /dev/null
+@@ -1,17 +0,0 @@
+-package com.nuvio.app.features.highlights
+-
+-import com.nuvio.app.core.storage.ProfileScopedKey
+-import platform.Foundation.NSUserDefaults
+-
+-internal actual object SmartHighlightsStorage {
+-    private const val enabledKey = "smart_highlights_enabled"
+-
+-    actual fun loadEnabled(): Boolean? =
+-        NSUserDefaults.standardUserDefaults.objectForKey(ProfileScopedKey.of(enabledKey))?.let {
+-            NSUserDefaults.standardUserDefaults.boolForKey(ProfileScopedKey.of(enabledKey))
+-        }
+-
+-    actual fun saveEnabled(enabled: Boolean) {
+-        NSUserDefaults.standardUserDefaults.setBool(enabled, forKey = ProfileScopedKey.of(enabledKey))
+-    }
+-}
