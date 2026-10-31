@@ -21,7 +21,7 @@ index 291dbd9..53eabbc 100644
          handleIncomingAppIntent(intent)
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.android.kt
 deleted file mode 100644
-index 7c6167a..0000000
+index 2ccfaee..0000000
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.android.kt
 +++ /dev/null
 @@ -1,23 +0,0 @@
@@ -35,16 +35,16 @@ index 7c6167a..0000000
 -internal actual fun createGeminiHttpClient(): HttpClient = HttpClient(OkHttp) {
 -    expectSuccess = false
 -    install(HttpTimeout) {
--        connectTimeoutMillis = 5_000
--        socketTimeoutMillis = 10_000
--        requestTimeoutMillis = 10_000
+-        connectTimeoutMillis = 10_000
+-        socketTimeoutMillis = 45_000
+-        requestTimeoutMillis = 60_000
 -    }
 -    engine {
 -        config {
 -            retryOnConnectionFailure(false)
--            connectTimeout(5, TimeUnit.SECONDS)
--            readTimeout(10, TimeUnit.SECONDS)
--            callTimeout(10, TimeUnit.SECONDS)
+-            connectTimeout(10, TimeUnit.SECONDS)
+-            readTimeout(45, TimeUnit.SECONDS)
+-            callTimeout(60, TimeUnit.SECONDS)
 -        }
 -    }
 -}
@@ -247,7 +247,7 @@ index 3088ee5..87845af 100644
  data class MetaDetailsUiState(
      val isLoading: Boolean = false,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
-index 11c96a1..2c3ef56 100644
+index b872ffb..2c3ef56 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt
 @@ -160,12 +160,6 @@ import com.nuvio.app.features.tracking.TrackingSettingsRepository
@@ -277,10 +277,10 @@ index 11c96a1..2c3ef56 100644
 -        tvdbController.aliases(displayedMeta, id)
 -    }
 -    LaunchedEffect(tvdbAliases, tvdbProfileId) {
--        tvdbController.observeSelection(tvdbAliases)
+-        runCatching { tvdbController.observeSelection(tvdbAliases) }
 -    }
 -    LaunchedEffect(tvdbAliases, tvdbState.selection, displayedMeta?.videos) {
--        tvdbController.loadProjection(tvdbAliases, displayedMeta)
+-        runCatching { tvdbController.loadProjection(tvdbAliases, displayedMeta) }
 -    }
 -    val tvdbOrderControlActions = TvdbOrderControlActions(
 -        visible = tvdbState.hasCredential && displayedMeta?.type?.let(::isTvdbSeriesLike) == true,
@@ -349,7 +349,7 @@ index 11c96a1..2c3ef56 100644
  
              displayedMeta != null -> {
                  val providerMeta = displayedMeta
--                val meta = tvdbState.projection?.provider ?: providerMeta
+-                val meta = tvdbState.projection?.display ?: providerMeta
 +                val meta = providerMeta
                  val metaPreview = remember(meta) { meta.toMetaPreview() }
                  val todayIsoDate = CurrentDateProvider.todayIsoDate()
@@ -476,10 +476,10 @@ index 1f9255f..0000000
 -internal expect fun createGeminiHttpClient(): HttpClient
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/GeminiRankingClient.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/GeminiRankingClient.kt
 deleted file mode 100644
-index a73616b..0000000
+index acadb37..0000000
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/GeminiRankingClient.kt
 +++ /dev/null
-@@ -1,173 +0,0 @@
+@@ -1,172 +0,0 @@
 -package com.nuvio.app.features.highlights
 -
 -import co.touchlab.kermit.Logger
@@ -516,7 +516,7 @@ index a73616b..0000000
 -}
 -
 -/**
-- * Nuvio fork: REST call to Gemini `generateContent` (v1beta, gemini-2.0-flash) that orders a
+- * Nuvio fork: REST call to Gemini `generateContent` (v1beta, gemini-flash-latest) that orders a
 - * compact candidate list and returns a short reason per pick. The key travels in the
 - * `x-goog-api-key` header only — never in a URL, a log line, or storage outside the scoped
 - * preference store. The response is shape-enforced with a responseSchema, and the parser is
@@ -594,8 +594,7 @@ index a73616b..0000000
 -        val apiKey = SmartHighlightsPreferences.readApiKey()
 -            ?: throw GeminiRankingException(GeminiRankingException.Reason.NO_KEY)
 -        val response = runCatching {
--            client.post("$BASE_URL/models/$MODEL:generateContent") {
--                header("x-goog-api-key", apiKey)
+-            client.post("$BASE_URL/models/$MODEL:generateContent?key=$apiKey") {
 -                contentType(ContentType.Application.Json)
 -                setBody(body.toString())
 -            }
@@ -650,7 +649,7 @@ index a73616b..0000000
 -        private val log = Logger.withTag("GeminiRanking")
 -        private val json = Json { ignoreUnknownKeys = true }
 -        private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
--        private const val MODEL = "gemini-2.0-flash"
+-        private const val MODEL = "gemini-flash-latest"
 -    }
 -}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsModels.kt
@@ -1145,15 +1144,17 @@ index 1cf8e91..25af5c5 100644
                          isTablet = true,
                          settings = tmdbSettings,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SmartHighlightsSettingsSection.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SmartHighlightsSettingsSection.kt
-index 7dc09b8..5492cb8 100644
+index 9008448..5492cb8 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SmartHighlightsSettingsSection.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SmartHighlightsSettingsSection.kt
-@@ -1,58 +1,22 @@
+@@ -1,61 +1,22 @@
  package com.nuvio.app.features.settings
  
 -import androidx.compose.foundation.clickable
 -import androidx.compose.foundation.layout.Arrangement
 -import androidx.compose.foundation.layout.Column
+-import androidx.compose.foundation.layout.ExperimentalLayoutApi
+-import androidx.compose.foundation.layout.FlowRow
 -import androidx.compose.foundation.layout.Row
 -import androidx.compose.foundation.layout.fillMaxWidth
 -import androidx.compose.foundation.layout.padding
@@ -1202,6 +1203,7 @@ index 7dc09b8..5492cb8 100644
 + * Nuvio fork: Smart Highlights settings — the rail toggle. Placed in Home screen settings,
 + * next to the other home layout switches.
   */
+-@OptIn(ExperimentalLayoutApi::class)
  @Composable
  internal fun SmartHighlightsSettingsSection(isTablet: Boolean) {
      val enabled by SmartHighlightsPreferences.enabled.collectAsStateWithLifecycle()
@@ -1209,7 +1211,7 @@ index 7dc09b8..5492cb8 100644
  
      SettingsSection(
          title = stringResource(Res.string.settings_highlights_section),
-@@ -66,118 +30,6 @@ internal fun SmartHighlightsSettingsSection(isTablet: Boolean) {
+@@ -69,122 +30,6 @@ internal fun SmartHighlightsSettingsSection(isTablet: Boolean) {
                  isTablet = isTablet,
                  onCheckedChange = SmartHighlightsPreferences::setEnabled,
              )
@@ -1264,7 +1266,11 @@ index 7dc09b8..5492cb8 100644
 -            modifier = Modifier.fillMaxWidth(),
 -            label = stringResource(Res.string.settings_highlights_gemini_key_label),
 -        )
--        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+-        FlowRow(
+-            modifier = Modifier.fillMaxWidth(),
+-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+-            verticalArrangement = Arrangement.spacedBy(10.dp),
+-        ) {
 -            Button(
 -                onClick = {
 -                    SmartHighlightsPreferences.setApiKey(draft.trim())
@@ -1330,15 +1336,16 @@ index 7dc09b8..5492cb8 100644
  }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbClient.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbClient.kt
 deleted file mode 100644
-index f070c94..0000000
+index f001fe8..0000000
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbClient.kt
 +++ /dev/null
-@@ -1,274 +0,0 @@
+@@ -1,284 +0,0 @@
 -package com.nuvio.app.features.tvdb
 -
 -import com.nuvio.app.core.network.createApiHttpClient
 -import com.nuvio.app.core.network.readBoundedResponseBody
 -import io.ktor.client.HttpClient
+-import io.ktor.client.plugins.HttpTimeout
 -import io.ktor.client.request.get
 -import io.ktor.client.request.header
 -import io.ktor.client.request.post
@@ -1374,7 +1381,16 @@ index f070c94..0000000
 -) {
 -    private class Token(val revision: Long, val value: String, val expiresAt: Long)
 -
--    private val http: HttpClient by lazy { createApiHttpClient() }
+-    private val http: HttpClient by lazy {
+-        // The shared app client carries no timeouts; a stalled TheTVDB connection would hang
+-        // the episode-order picker forever. Bound every request here.
+-        createApiHttpClient().config {
+-            install(HttpTimeout) {
+-                connectTimeoutMillis = 15_000
+-                requestTimeoutMillis = 30_000
+-            }
+-        }
+-    }
 -    private val mutex = Mutex()
 -    private val tokens = mutableMapOf<Int, Token>()
 -    private val json = Json { ignoreUnknownKeys = true }
@@ -1843,10 +1859,10 @@ index f5fdedb..0000000
 -private val episodePunctuation = Regex("[^\\p{L}\\p{N}]+")
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeOrderController.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeOrderController.kt
 deleted file mode 100644
-index 446efe0..0000000
+index 90594db..0000000
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeOrderController.kt
 +++ /dev/null
-@@ -1,263 +0,0 @@
+@@ -1,275 +0,0 @@
 -package com.nuvio.app.features.tvdb
 -
 -import com.nuvio.app.features.details.MetaDetails
@@ -1854,6 +1870,7 @@ index 446efe0..0000000
 -import com.nuvio.app.features.profiles.ProfileRepository
 -import com.nuvio.app.features.tmdb.TmdbService
 -import kotlinx.coroutines.CancellationException
+-import kotlinx.coroutines.CoroutineExceptionHandler
 -import kotlinx.coroutines.CoroutineScope
 -import kotlinx.coroutines.Job
 -import kotlinx.coroutines.flow.MutableStateFlow
@@ -1901,6 +1918,14 @@ index 446efe0..0000000
 -) {
 -    private val client = TvdbClient(TvdbCredentialStore)
 -    private val repository = TvdbOrderRepository(client)
+-
+-    /**
+-     * Last-resort net: anything that escapes the per-flow try/catch degrades the busy
+-     * flags instead of killing the app with an unhandled coroutine exception.
+-     */
+-    private val crashGuard = CoroutineExceptionHandler { _, _ ->
+-        _state.value = _state.value.copy(loading = false, pickerBusy = false)
+-    }
 -
 -    private val _state = MutableStateFlow(TvdbEpisodeOrderUiState())
 -    val state: StateFlow<TvdbEpisodeOrderUiState> = _state.asStateFlow()
@@ -1968,7 +1993,7 @@ index 446efe0..0000000
 -        loadedProjectionKey = key
 -        val request = ++generation
 -        job?.cancel()
--        job = scope.launch {
+-        job = scope.launch(crashGuard) {
 -            _state.value = _state.value.copy(loading = true)
 -            try {
 -                val projection = withTimeoutOrNull(LOAD_TIMEOUT_MS) {
@@ -2010,7 +2035,7 @@ index 446efe0..0000000
 -        val aliases = lastAliases.ifEmpty { aliases(meta, meta.id) }
 -        val request = ++generation
 -        job?.cancel()
--        job = scope.launch {
+-        job = scope.launch(crashGuard) {
 -            _state.value = _state.value.copy(pickerOpen = true, pickerBusy = true, pickerError = null)
 -            try {
 -                val profile = ProfileRepository.activeProfileId
@@ -2060,7 +2085,7 @@ index 446efe0..0000000
 -        val profile = ProfileRepository.activeProfileId
 -        val request = ++generation
 -        job?.cancel()
--        job = scope.launch {
+-        job = scope.launch(crashGuard) {
 -            _state.value = _state.value.copy(pickerBusy = true, pickerError = null)
 -            try {
 -                TvdbOrderStore.save(seriesId, type, lastAliases)
@@ -2073,6 +2098,9 @@ index 446efe0..0000000
 -                    observedKey = null
 -                    loadedProjectionKey = null
 -                    observedAliases?.let(::observeSelection)
+-                    // Detach from the running select job first, so loadProjection's
+-                    // job?.cancel() cannot cancel this very coroutine mid-flight.
+-                    job = null
 -                    lastMeta?.let { loadProjection(lastAliases, it) }
 -                }
 -            } catch (cancelled: CancellationException) {
@@ -2112,10 +2140,10 @@ index 446efe0..0000000
 -}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeProjection.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeProjection.kt
 deleted file mode 100644
-index 6e74959..0000000
+index 0a8b154..0000000
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbEpisodeProjection.kt
 +++ /dev/null
-@@ -1,176 +0,0 @@
+@@ -1,184 +0,0 @@
 -package com.nuvio.app.features.tvdb
 -
 -import com.nuvio.app.features.details.MetaDetails
@@ -2190,6 +2218,14 @@ index 6e74959..0000000
 -            )
 -        }
 -        .sortedWith(compareBy({ it.season ?: Int.MAX_VALUE }, { it.episode ?: Int.MAX_VALUE }))
+-
+-    /**
+-     * The provider meta with its videos re-keyed to the projected rows — what the
+-     * detail screen renders while this order is active (mirrors the TV fork's
+-     * projection semantics). Playback and history translate back via [resolvePlayback],
+-     * [toProviderEpisode] and [providerSeasonOf].
+-     */
+-    val display: MetaDetails = provider.copy(videos = rows)
 -
 -    val unmatchedCount: Int = rows.count { it.tvdbOrder?.matched != true }
 -
@@ -2902,7 +2938,7 @@ index 39ba886..0000000
 -}
 diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.ios.kt
 deleted file mode 100644
-index 9500fab..0000000
+index bcec398..0000000
 --- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.ios.kt
 +++ /dev/null
 @@ -1,13 +0,0 @@
@@ -2915,8 +2951,8 @@ index 9500fab..0000000
 -internal actual fun createGeminiHttpClient(): HttpClient = HttpClient(Darwin) {
 -    expectSuccess = false
 -    install(HttpTimeout) {
--        connectTimeoutMillis = 5_000
--        requestTimeoutMillis = 10_000
+-        connectTimeoutMillis = 10_000
+-        requestTimeoutMillis = 60_000
 -    }
 -}
 diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsStorage.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsStorage.ios.kt
