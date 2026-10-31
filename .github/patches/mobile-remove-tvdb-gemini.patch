@@ -653,7 +653,7 @@ index acadb37..0000000
 -    }
 -}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsModels.kt
-index 5507abf..678dd23 100644
+index 5507abf..8be75f5 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsModels.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/SmartHighlightsModels.kt
 @@ -9,7 +9,7 @@ import kotlinx.serialization.Serializable
@@ -682,7 +682,8 @@ index 5507abf..678dd23 100644
 -    /** Stable identity of the candidate set membership; drives the ranking cache key. */
 -    val cacheToken: String
 -        get() = "${item.type}:${item.id}"
- }
+-}
++)
  
  /**
 - * Nuvio fork: preferences for the Smart Highlights rail plus the per-profile Gemini API key.
