@@ -1,17 +1,16 @@
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbClient.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbClient.kt
-index f070c94..5f490d5 100644
+index f070c94..f001fe8 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbClient.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/tvdb/TvdbClient.kt
-@@ -3,6 +3,8 @@ package com.nuvio.app.features.tvdb
+@@ -3,6 +3,7 @@ package com.nuvio.app.features.tvdb
  import com.nuvio.app.core.network.createApiHttpClient
  import com.nuvio.app.core.network.readBoundedResponseBody
  import io.ktor.client.HttpClient
 +import io.ktor.client.plugins.HttpTimeout
-+import io.ktor.client.plugins.install
  import io.ktor.client.request.get
  import io.ktor.client.request.header
  import io.ktor.client.request.post
-@@ -38,7 +40,16 @@ class TvdbClient(
+@@ -38,7 +39,16 @@ class TvdbClient(
  ) {
      private class Token(val revision: Long, val value: String, val expiresAt: Long)
  
