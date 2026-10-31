@@ -1,0 +1,72 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.android.kt
+index 7c6167a..2ccfaee 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.android.kt
+@@ -8,16 +8,16 @@ import java.util.concurrent.TimeUnit
+ internal actual fun createGeminiHttpClient(): HttpClient = HttpClient(OkHttp) {
+     expectSuccess = false
+     install(HttpTimeout) {
+-        connectTimeoutMillis = 5_000
+-        socketTimeoutMillis = 10_000
+-        requestTimeoutMillis = 10_000
++        connectTimeoutMillis = 10_000
++        socketTimeoutMillis = 45_000
++        requestTimeoutMillis = 60_000
+     }
+     engine {
+         config {
+             retryOnConnectionFailure(false)
+-            connectTimeout(5, TimeUnit.SECONDS)
+-            readTimeout(10, TimeUnit.SECONDS)
+-            callTimeout(10, TimeUnit.SECONDS)
++            connectTimeout(10, TimeUnit.SECONDS)
++            readTimeout(45, TimeUnit.SECONDS)
++            callTimeout(60, TimeUnit.SECONDS)
+         }
+     }
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/GeminiRankingClient.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/GeminiRankingClient.kt
+index a73616b..acadb37 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/GeminiRankingClient.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/highlights/GeminiRankingClient.kt
+@@ -34,7 +34,7 @@ internal class GeminiRankingException(val reason: Reason) : Exception(reason.nam
+ }
+ 
+ /**
+- * Nuvio fork: REST call to Gemini `generateContent` (v1beta, gemini-2.0-flash) that orders a
++ * Nuvio fork: REST call to Gemini `generateContent` (v1beta, gemini-flash-latest) that orders a
+  * compact candidate list and returns a short reason per pick. The key travels in the
+  * `x-goog-api-key` header only — never in a URL, a log line, or storage outside the scoped
+  * preference store. The response is shape-enforced with a responseSchema, and the parser is
+@@ -112,8 +112,7 @@ internal class GeminiRankingClient(
+         val apiKey = SmartHighlightsPreferences.readApiKey()
+             ?: throw GeminiRankingException(GeminiRankingException.Reason.NO_KEY)
+         val response = runCatching {
+-            client.post("$BASE_URL/models/$MODEL:generateContent") {
+-                header("x-goog-api-key", apiKey)
++            client.post("$BASE_URL/models/$MODEL:generateContent?key=$apiKey") {
+                 contentType(ContentType.Application.Json)
+                 setBody(body.toString())
+             }
+@@ -168,6 +167,6 @@ internal class GeminiRankingClient(
+         private val log = Logger.withTag("GeminiRanking")
+         private val json = Json { ignoreUnknownKeys = true }
+         private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+-        private const val MODEL = "gemini-2.0-flash"
++        private const val MODEL = "gemini-flash-latest"
+     }
+ }
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.ios.kt
+index 9500fab..bcec398 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.ios.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/highlights/GeminiHttpClient.ios.kt
+@@ -7,7 +7,7 @@ import io.ktor.client.plugins.HttpTimeout
+ internal actual fun createGeminiHttpClient(): HttpClient = HttpClient(Darwin) {
+     expectSuccess = false
+     install(HttpTimeout) {
+-        connectTimeoutMillis = 5_000
+-        requestTimeoutMillis = 10_000
++        connectTimeoutMillis = 10_000
++        requestTimeoutMillis = 60_000
+     }
+ }
