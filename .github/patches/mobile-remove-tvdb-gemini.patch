@@ -1087,10 +1087,18 @@ index 9d12694..3370b4a 100644
                      title = stringResource(Res.string.compose_settings_page_debrid),
                      description = stringResource(Res.string.settings_integrations_debrid_description),
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
-index 18d2d02..e95b83a 100644
+index 18d2d02..f20a83e 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsModels.kt
-@@ -225,11 +225,6 @@ internal enum class SettingsPage(
+@@ -47,7 +47,6 @@ import nuvio.composeapp.generated.resources.compose_settings_page_tmdb_enrichmen
+ import nuvio.composeapp.generated.resources.compose_settings_page_trakt
+ import nuvio.composeapp.generated.resources.compose_settings_page_tracking
+ import nuvio.composeapp.generated.resources.settings_account
+-import nuvio.composeapp.generated.resources.compose_settings_page_tvdb_ordering
+ import org.jetbrains.compose.resources.StringResource
+ 
+ internal enum class SettingsCategory(
+@@ -225,11 +224,6 @@ internal enum class SettingsPage(
          category = SettingsCategory.General,
          parentPage = Integrations,
      ),
