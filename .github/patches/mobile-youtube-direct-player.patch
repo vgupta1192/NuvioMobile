@@ -260,10 +260,19 @@ index 82df34dbd..0d5823099 100644
              flushWatchProgress(TrackingScrobbleAction.STOP)
              previousIsPlaying = false
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index bb470fdf6..211ff412b 100644
+index bb470fdf6..8777f2abc 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -649,7 +649,9 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
+@@ -210,6 +210,8 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+                     sourceResponseHeaders = activeSourceResponseHeaders,
+                     externalSubtitles = externalSubtitles,
+                     streamType = activeStreamType,
++                    // googlevideo throttles long open-ended requests; chunked ranges keep 4K at full speed.
++                    useYoutubeChunkedPlayback = activeProviderName == "YouTube",
+                     modifier = videoModifier,
+                     playWhenReady = shouldPlay,
+                     initialPositionMs = activeInitialPositionMs.takeIf { it > 0L },
+@@ -649,7 +651,9 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
              onQualityClick = if (!isIos) {
                  {
                      refreshTracks()
