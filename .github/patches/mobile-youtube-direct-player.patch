@@ -1286,7 +1286,7 @@ index 000000000..fb9f4dcf1
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
 new file mode 100644
-index 000000000..443d46fb6
+index 000000000..9bb3e3352
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
 @@ -0,0 +1,242 @@
@@ -1393,7 +1393,7 @@ index 000000000..443d46fb6
 +}
 +
 +@Composable
-+internal fun InlinePreviewOverlay(item: YtItem, modifier: Modifier = Modifier, onOpen: () -> Unit) {
++internal fun InlinePreviewOverlay(item: YtItem, modifier: Modifier = Modifier, onOpen: (positionMs: Long) -> Unit) {
 +    val session by YouTubePlayerSession.state.collectAsState()
 +    if (session.active) return
 +    var source by remember(item.id) { mutableStateOf<TrailerPlaybackSource?>(null) }
@@ -1445,7 +1445,7 @@ index 000000000..443d46fb6
 +            Box(
 +                Modifier
 +                    .fillMaxSize()
-+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onOpen() },
++                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onOpen(snapshot.positionMs) },
 +            )
 +            val cue = if (captions) cues.firstOrNull { snapshot.positionMs >= it.startTimeMs && snapshot.positionMs < it.endTimeMs } else null
 +            if (cue != null) {
@@ -1792,7 +1792,7 @@ index 000000000..8f687ac06
 +    private const val MAX_ENTRIES = 8
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
-index 206bbcbdb..e60f07756 100644
+index 206bbcbdb..bf2c45d17 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
 @@ -2,6 +2,9 @@ package com.nuvio.app.features.youtube
@@ -1826,15 +1826,16 @@ index 206bbcbdb..e60f07756 100644
  /** Opens a video in the app's full player: item and the position to start from. */
  private val LocalFullPlayer = staticCompositionLocalOf<(YtItem, Long) -> Unit> { { _, _ -> } }
  
+-private fun openItem(item: YtItem, siblings: List<YtItem>) {
 +/** Set by [YouTubeScreen] so a tapped video goes straight to the full-screen player. */
 +private var directPlayer: ((YtItem, Long) -> Unit)? = null
 +
- private fun openItem(item: YtItem, siblings: List<YtItem>) {
++private fun openItem(item: YtItem, siblings: List<YtItem>, startMs: Long = 0L) {
      if (item.kind == YtKind.VIDEO && item.isShort) {
          YouTubeRepository.openShortsAt(item, siblings)
          YouTubeRepository.push(YtPage.Shorts)
 +    } else if (item.kind == YtKind.VIDEO && directPlayer != null) {
-+        directPlayer?.invoke(item, 0L)
++        directPlayer?.invoke(item, startMs)
      } else {
          YouTubeRepository.play(item)
      }
@@ -2240,7 +2241,7 @@ index 206bbcbdb..e60f07756 100644
                  modifier = Modifier.fillMaxSize(),
              )
 +            val previewKey by InlinePreview.activeKey
-+            if (previewKey == item.key) InlinePreviewOverlay(item) { openItem(item, siblings) }
++            if (previewKey == item.key) InlinePreviewOverlay(item) { positionMs -> openItem(item, siblings, positionMs) }
              val badge = when {
                  item.kind == YtKind.PLAYLIST -> "PLAYLIST"
                  item.isLive -> "LIVE"
