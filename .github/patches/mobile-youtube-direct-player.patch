@@ -152,10 +152,10 @@ index 79335c171..0bf566708 100644
          }
 diff --git a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeFirstChunkCache.kt b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeFirstChunkCache.kt
 new file mode 100644
-index 000000000..9c9f8f46c
+index 000000000..50cec222a
 --- /dev/null
 +++ b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeFirstChunkCache.kt
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,82 @@
 +package com.nuvio.app.features.trailer
 +
 +import androidx.media3.common.util.UnstableApi
@@ -203,6 +203,7 @@ index 000000000..9c9f8f46c
 +            try {
 +                val data = download(url, bytes)
 +                if (data != null) synchronized(entries) { entries[url] = Entry(data, bytes) }
++                android.util.Log.i("YouTubeStart", "first-bytes prefetch ${data?.size ?: 0} of $bytes")
 +            } finally {
 +                synchronized(entries) { inFlight.remove(url) }
 +            }
@@ -214,6 +215,7 @@ index 000000000..9c9f8f46c
 +            .setConnectTimeoutMs(8_000)
 +            .setReadTimeoutMs(8_000)
 +            .setAllowCrossProtocolRedirects(true)
++            .setDefaultRequestProperties(TrailerExtractionPlatform.defaultHeaders)
 +            .createDataSource()
 +        return try {
 +            val rangedUri = android.net.Uri.parse(url).buildUpon()
@@ -228,7 +230,8 @@ index 000000000..9c9f8f46c
 +                out.write(buffer, 0, read)
 +            }
 +            out.toByteArray().takeIf { it.isNotEmpty() }
-+        } catch (_: Exception) {
++        } catch (e: Exception) {
++            android.util.Log.w("YouTubeStart", "first-bytes prefetch failed: ${e.message}")
 +            null
 +        } finally {
 +            runCatching { upstream.close() }
@@ -323,7 +326,7 @@ index 5a549e170..867c2303e 100644
          scope.launch { send("ready", url, null) }
      }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index 218394f06..632f724d9 100644
+index 218394f06..753faf5ad 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 @@ -950,11 +950,21 @@ internal fun MainAppContent(
@@ -359,7 +362,29 @@ index 218394f06..632f724d9 100644
              }
          }
  
-@@ -1403,8 +1414,13 @@ internal fun MainAppContent(
+@@ -988,6 +999,21 @@ internal fun MainAppContent(
+             }
+         }
+ 
++        // Channel button of the YouTube player: keep the video playing in the mini player and show the channel.
++        androidx.compose.runtime.SideEffect {
++            com.nuvio.app.features.youtube.YouTubePlayerHooks.openChannel = { channelId, name ->
++                if (MiniPlayerSetting.isEnabled()) MiniPlayerController.requestMinimize()
++                navController.popBackStack()
++                com.nuvio.app.features.youtube.YouTubeRepository.resetPages()
++                com.nuvio.app.features.youtube.YouTubeRepository.push(
++                    com.nuvio.app.features.youtube.YtPage.Channel(channelId, name),
++                )
++                if (navBackStack.lastOrNull() !is YouTubeRoute) {
++                    navController.navigate(YouTubeRoute())
++                }
++            }
++        }
++
+         // Jellyfin fork feature: nav entry opens the Jellyfin route
+         LaunchedEffect(navController) {
+             if (!ownsAppRuntime) return@LaunchedEffect
+@@ -1403,8 +1429,13 @@ internal fun MainAppContent(
              )
          }
  
@@ -374,7 +399,7 @@ index 218394f06..632f724d9 100644
                  type = item.parentMetaType,
                  videoId = item.videoId,
                  parentMetaId = item.parentMetaId,
-@@ -1418,7 +1434,17 @@ internal fun MainAppContent(
+@@ -1418,7 +1449,17 @@ internal fun MainAppContent(
  
          val openContinueWatching: (ContinueWatchingItem, Boolean, Boolean) -> Unit = { item, manualSelection, startFromBeginning ->
              resumePromptItem = null
@@ -457,8 +482,23 @@ index 08b120323..f18af2200 100644
              }
          }
      }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/FoldControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/FoldControls.kt
+index e5a4e66b2..679cad68b 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/FoldControls.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/FoldControls.kt
+@@ -407,7 +407,9 @@ private fun NowPlayingTile(
+ private fun ActionTile(action: PlayerControlAction, onClick: () -> Unit) {
+     Tile(onClick = onClick, modifier = Modifier.width(92.dp).height(76.dp)) {
+         Column(horizontalAlignment = Alignment.CenterHorizontally) {
+-            if (action.painter != null) {
++            if (!action.imageUrl.isNullOrBlank()) {
++                ChannelAvatar(action.imageUrl, NuvioTokens.Icon.md)
++            } else if (action.painter != null) {
+                 Icon(action.painter, null, tint = Color.White, modifier = Modifier.size(NuvioTokens.Icon.md))
+             } else if (action.icon != null) {
+                 Icon(action.icon, null, tint = Color.White, modifier = Modifier.size(NuvioTokens.Icon.md))
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
-index c061ea657..d7d0c5e34 100644
+index c061ea657..582090602 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
 @@ -219,12 +219,23 @@ internal fun PlayerControlActions(
@@ -488,13 +528,67 @@ index c061ea657..d7d0c5e34 100644
      CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
          Row(
              modifier = Modifier.fillMaxWidth().padding(horizontal = PlayerTimelineContentInset),
-@@ -440,3 +451,6 @@ internal data class PlayerControlAction(
+@@ -246,6 +257,7 @@ internal fun PlayerControlActions(
+                         painter = action.painter,
+                         iconSize = action.iconSize,
+                         tint = action.tint,
++                        imageUrl = action.imageUrl,
+                     )
+                 }
+                 if (hasOverflow) {
+@@ -293,9 +305,12 @@ private fun PlayerAction(
+     painter: Painter? = null,
+     iconSize: Dp = 24.dp,
+     tint: Color = Color.White,
++    imageUrl: String? = null,
+ ) {
+     IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
+-        if (painter != null) {
++        if (!imageUrl.isNullOrBlank()) {
++            ChannelAvatar(imageUrl, iconSize)
++        } else if (painter != null) {
+             Icon(painter, description, tint = tint, modifier = Modifier.size(iconSize))
+         } else if (icon != null) {
+             Icon(icon, description, tint = tint, modifier = Modifier.size(iconSize))
+@@ -439,4 +454,9 @@ internal data class PlayerControlAction(
+     val iconSize: Dp = 24.dp,
      val id: String = "",
      val tint: Color = Color.White,
++    /** Picture drawn in place of the icon, such as a YouTube channel avatar. */
++    val imageUrl: String? = null,
  )
 +
 +private var toolbarExpandedMemory = false
 +private var toolbarScrollMemory = 0
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+index 99fec5b33..a80cd52da 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+@@ -933,6 +933,7 @@ private fun ProgressControls(
+                                     PlayerActionPillButton(
+                                         label = action.description,
+                                         icon = actionIcon,
++                                        imageUrl = action.imageUrl,
+                                         onClick = action.onClick,
+                                     )
+                                 }
+@@ -1206,6 +1207,7 @@ private fun PlayerActionPillButton(
+     onClick: () -> Unit,
+     icon: ImageVector? = null,
+     painter: Painter? = null,
++    imageUrl: String? = null,
+ ) {
+     Row(
+         modifier = Modifier
+@@ -1216,6 +1218,8 @@ private fun PlayerActionPillButton(
+         verticalAlignment = Alignment.CenterVertically,
+     ) {
+         when {
++            !imageUrl.isNullOrBlank() -> ChannelAvatar(imageUrl, 22.dp)
++
+             painter != null -> Icon(
+                 painter = painter,
+                 contentDescription = label,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerQualityModal.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerQualityModal.kt
 index 6ebd4c61f..55a8b83d4 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerQualityModal.kt
@@ -598,14 +692,15 @@ index bb470fdf6..8777f2abc 100644
              } else {
                  null
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerYouTubeActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerYouTubeActions.kt
-index 419d10cb6..b204c4e07 100644
+index 419d10cb6..e159228ac 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerYouTubeActions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerYouTubeActions.kt
-@@ -2,15 +2,12 @@ package com.nuvio.app.features.player
+@@ -2,20 +2,27 @@ package com.nuvio.app.features.player
  
  import androidx.compose.material.icons.Icons
  import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
 -import androidx.compose.material.icons.rounded.FastForward
++import androidx.compose.material.icons.rounded.AccountCircle
  import androidx.compose.material.icons.rounded.HowToReg
 -import androidx.compose.material.icons.rounded.Info
 +import androidx.compose.material.icons.rounded.Description
@@ -618,19 +713,48 @@ index 419d10cb6..b204c4e07 100644
  import androidx.compose.material3.MaterialTheme
  import androidx.compose.runtime.Composable
  import androidx.compose.runtime.collectAsState
-@@ -24,11 +21,7 @@ import com.nuvio.app.features.youtube.YouTubeRepository
+ import androidx.compose.runtime.getValue
+ import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.unit.dp
++import androidx.compose.foundation.shape.CircleShape
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.layout.ContentScale
++import androidx.compose.ui.unit.Dp
++import androidx.compose.foundation.layout.size
++import coil3.compose.AsyncImage
++import com.nuvio.app.features.youtube.YouTubePlayerHooks
+ import com.nuvio.app.features.youtube.YouTubePlayerPrefs
+ import com.nuvio.app.features.youtube.YouTubePlayerSession
+ import com.nuvio.app.features.youtube.YouTubePrefs
+@@ -24,27 +31,32 @@ import com.nuvio.app.features.youtube.YouTubeRepository
  /** Toolbar ids of the YouTube-only buttons. They exist only while a YouTube video plays. */
  internal val YouTubeToolbarButtons = listOf(
      ForkToolbarButton("yt_subscribe", "YouTube: Subscribe"),
 -    ForkToolbarButton("yt_like", "YouTube: Like"),
 -    ForkToolbarButton("yt_watch_later", "YouTube: Watch later"),
++    ForkToolbarButton("yt_channel", "YouTube: Channel"),
      ForkToolbarButton("yt_loop", "YouTube: Loop video"),
 -    ForkToolbarButton("yt_sponsor", "YouTube: Skip sponsors"),
 -    ForkToolbarButton("yt_autoplay", "YouTube: Autoplay next"),
      ForkToolbarButton("yt_upnext", "YouTube: Up next"),
      ForkToolbarButton("yt_info", "YouTube: Video info and quality"),
  )
-@@ -39,12 +32,9 @@ internal fun youTubeControlActions(): List<PlayerControlAction> {
+ 
++/** Round channel picture used as a player button icon. */
++@Composable
++internal fun ChannelAvatar(url: String, size: Dp) {
++    AsyncImage(
++        model = url,
++        contentDescription = null,
++        contentScale = ContentScale.Crop,
++        modifier = Modifier.size(size).clip(CircleShape),
++    )
++}
++
+ /** YouTube-only player buttons; empty for every normal video. */
+ @Composable
+ internal fun youTubeControlActions(): List<PlayerControlAction> {
      val session by YouTubePlayerSession.state.collectAsState()
      val saved by YouTubeRepository.saved.collectAsState()
      val loop by YouTubePlayerPrefs.loop.value.collectAsState()
@@ -643,7 +767,7 @@ index 419d10cb6..b204c4e07 100644
      return listOfNotNull(
          if (session.channelId.isNotBlank()) {
              PlayerControlAction(
-@@ -54,34 +44,18 @@ internal fun youTubeControlActions(): List<PlayerControlAction> {
+@@ -54,34 +66,26 @@ internal fun youTubeControlActions(): List<PlayerControlAction> {
                  tint = if (subscribed) on else Color.White,
              )
          } else null,
@@ -655,6 +779,14 @@ index 419d10cb6..b204c4e07 100644
 -            if (watchLater) "Saved to Watch later" else "Watch later", { YouTubePlayerSession.toggleWatchLater() },
 -            icon = Icons.Rounded.WatchLater, id = "yt_watch_later", tint = if (watchLater) on else Color.White,
 -        ),
++        if (session.channelId.isNotBlank()) {
++            PlayerControlAction(
++                session.channel.ifBlank { "Channel" },
++                { YouTubePlayerHooks.openChannel?.invoke(session.channelId, session.channel) },
++                icon = Icons.Rounded.AccountCircle, id = "yt_channel",
++                iconSize = 32.dp, imageUrl = session.channelThumb.takeIf { it.isNotBlank() },
++            )
++        } else null,
          PlayerControlAction(
              if (loop) "Loop on" else "Loop video", { YouTubePlayerPrefs.loop.set(!loop) },
              icon = if (loop) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat, id = "yt_loop",
@@ -901,8 +1033,26 @@ index 000000000..fb9f4dcf1
 +    return (if (titlesOn) branding?.title else null).orEmpty().ifBlank { item.title } to
 +        (if (wantThumb) branding?.thumb else null).orEmpty().ifBlank { item.thumb }
 +}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInnertube.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInnertube.kt
+index 9c3d732b9..e344c070a 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInnertube.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInnertube.kt
+@@ -424,6 +424,13 @@ internal object YtInnertube {
+         return id to text(renderer["title"])
+     }
+ 
++    /** Picture of the video's uploader channel, read from the watch-page data. */
++    suspend fun ownerAvatar(videoId: String): String? {
++        val root = post("next") { put("videoId", videoId) } ?: return null
++        val renderer = findObject(root, "videoOwnerRenderer") ?: return null
++        return bestThumb(renderer["thumbnail"] as? JsonObject)?.let { if (it.startsWith("//")) "https:$it" else it }
++    }
++
+     suspend fun continuation(token: String): YtPageResult? {
+         val authed = token.startsWith("auth:")
+         val plain = token.removePrefix("auth:")
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
-index e2c97bbf8..369b7a597 100644
+index e2c97bbf8..4c65b94ca 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
 @@ -4,6 +4,8 @@ import androidx.compose.foundation.background
@@ -914,7 +1064,33 @@ index e2c97bbf8..369b7a597 100644
  import androidx.compose.foundation.layout.Column
  import androidx.compose.foundation.layout.Row
  import androidx.compose.foundation.layout.fillMaxSize
-@@ -284,7 +286,7 @@ fun YouTubePlayerOptions(
+@@ -58,6 +60,8 @@ object YouTubePlayerPrefs {
+ /** Set by the app shell: opens another YouTube video in the player. */
+ object YouTubePlayerHooks {
+     var playVideo: ((YtItem) -> Unit)? = null
++    /** Opens a channel page and turns the full player into the mini player. */
++    var openChannel: ((channelId: String, name: String) -> Unit)? = null
+ }
+ 
+ private data class SponsorSegment(val startMs: Long, val endMs: Long, val category: String)
+@@ -105,6 +109,7 @@ data class YouTubeSessionState(
+     val channel: String = "",
+     val thumb: String = "",
+     val channelId: String = "",
++    val channelThumb: String = "",
+     val related: List<YtItem> = emptyList(),
+     val liked: Boolean = false,
+     val disliked: Boolean = false,
+@@ -206,6 +211,8 @@ fun YouTubePlayerOptions(
+         YouTubePlayerPrefs.loop.ensureLoaded()
+         YouTubeRepository.ensureLoaded()
+         segments = YouTubeSponsorBlock.segments(videoId)
++        val avatar = runCatching { YtInnertube.ownerAvatar(videoId) }.getOrNull().orEmpty()
++        if (avatar.isNotBlank()) YouTubePlayerSession.update { it.copy(channelThumb = avatar) }
+         val owner = YouTubeRepository.ownerOf(videoId)
+         YouTubePlayerSession.update { it.copy(channelId = owner?.first.orEmpty(), channel = owner?.second?.ifBlank { channel } ?: channel) }
+         val subs = runCatching { YtInnertube.subscriberText(videoId) }.getOrNull().orEmpty()
+@@ -284,7 +291,7 @@ fun YouTubePlayerOptions(
  
      if (session.showInfo) {
          val saved by YouTubeRepository.saved.collectAsState()
@@ -923,7 +1099,7 @@ index e2c97bbf8..369b7a597 100644
          val cap = YouTubeStreamQuality.capFor(videoId)
          val subscribed = session.channelId.isNotBlank() && saved.subscriptions.any { it.id == session.channelId }
          val later = saved.watchLater.any { it.id == videoId }
-@@ -310,13 +312,27 @@ fun YouTubePlayerOptions(
+@@ -310,13 +317,27 @@ fun YouTubePlayerOptions(
                  busy = false
              }
          }
@@ -956,7 +1132,7 @@ index e2c97bbf8..369b7a597 100644
                      .verticalScroll(rememberScrollState()),
                  verticalArrangement = Arrangement.spacedBy(10.dp),
              ) {
-@@ -385,7 +401,18 @@ fun YouTubePlayerOptions(
+@@ -385,7 +406,18 @@ fun YouTubePlayerOptions(
                          Text(if (later) "Saved" else "Watch later", color = if (later) accent else Color.White)
                      }
                  }
@@ -976,7 +1152,7 @@ index e2c97bbf8..369b7a597 100644
                  if (heights.isEmpty()) {
                      Text("Resolutions load with the video.", color = Color(0xFFB0B0B0), style = MaterialTheme.typography.bodySmall)
                  } else {
-@@ -418,6 +445,7 @@ fun YouTubePlayerOptions(
+@@ -418,6 +450,7 @@ fun YouTubePlayerOptions(
                  TextButton(onClick = { close(); YouTubePlayerSession.update { it.copy(showUpNext = true) } }) { Text("Up next") }
                  }
              }
