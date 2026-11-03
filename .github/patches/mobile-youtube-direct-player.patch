@@ -1286,7 +1286,7 @@ index 000000000..fb9f4dcf1
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
 new file mode 100644
-index 000000000..c7c0bf3c5
+index 000000000..6c6eee342
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
 @@ -0,0 +1,259 @@
@@ -1438,7 +1438,7 @@ index 000000000..c7c0bf3c5
 +                text = note.orEmpty(),
 +                color = Color.White,
 +                fontSize = 9.sp,
-+                maxLines = 4,
++                maxLines = 8,
 +                modifier = Modifier.align(Alignment.BottomStart).background(Color.Black.copy(alpha = 0.6f)).padding(4.dp),
 +            )
 +        }
@@ -1721,10 +1721,10 @@ index e2c97bbf8..08cb1fe73 100644
  
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt
 new file mode 100644
-index 000000000..1ba4ec2c2
+index 000000000..0e268ffa7
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt
-@@ -0,0 +1,135 @@
+@@ -0,0 +1,137 @@
 +package com.nuvio.app.features.youtube
 +
 +import com.nuvio.app.features.streams.YouTubeStreamResolver
@@ -1850,8 +1850,10 @@ index 000000000..1ba4ec2c2
 +            synchronized(lock) { previews.remove(item.id) }
 +            // The capped resolve found nothing: fall back to the stream the full player would use.
 +            source = take(item.id)
-+                ?: runCatching { YouTubeRepository.resolve(item.id) }.getOrNull()
-+            lastError = "$lastError; fallback ${if (source == null) "null" else "ok"}"
++                ?: runCatching { YouTubeRepository.resolve(item.id) }
++                    .onFailure { lastError = "$lastError; fallback ${it::class.simpleName}: ${it.message?.take(80)}" }
++                    .getOrNull()
++            lastError = "$lastError; fallback ${if (source == null) "null: ${YouTubeWarmupHooks.lastExtractFailure}" else "ok"}"
 +        }
 +        return source
 +    }
@@ -2749,10 +2751,10 @@ index 000000000..915850c15
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeWarmupHooks.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeWarmupHooks.kt
 new file mode 100644
-index 000000000..c1bc61dcd
+index 000000000..0d06be8b4
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeWarmupHooks.kt
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,17 @@
 +package com.nuvio.app.features.youtube
 +
 +import com.nuvio.app.features.trailer.TrailerPlaybackSource
@@ -2765,9 +2767,13 @@ index 000000000..c1bc61dcd
 +    /** Codecs ("avc", "vp9", "av1") this device decodes in hardware; null when unknown. */
 +    @Volatile
 +    var hardwareCodecs: (() -> Set<String>)? = null
++
++    /** Last reason the extractor returned nothing; shown by the preview debug label. */
++    @Volatile
++    var lastExtractFailure: String? = null
 +}
 diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
-index 3ff0cebd2..d7df5863d 100644
+index 3ff0cebd2..6676c05b6 100644
 --- a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
 +++ b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
 @@ -1,7 +1,12 @@
@@ -2827,7 +2833,15 @@ index 3ff0cebd2..d7df5863d 100644
  )
  
  private data class ManifestBestVariant(
-@@ -167,19 +202,25 @@ class InAppYouTubeExtractor {
+@@ -158,6 +193,7 @@ class InAppYouTubeExtractor {
+             }
+         }.onFailure {
+             log.w { "Trailer extractor failed for $youtubeUrl: ${it.message}" }
++            com.nuvio.app.features.youtube.YouTubeWarmupHooks.lastExtractFailure = "${it::class.simpleName}: ${it.message?.take(100)}"
+         }.getOrNull()
+     }
+ 
+@@ -167,19 +203,25 @@ class InAppYouTubeExtractor {
      ): TrailerPlaybackSource? {
          val videoId = extractVideoId(youtubeUrl) ?: return null
  
@@ -2865,12 +2879,13 @@ index 3ff0cebd2..d7df5863d 100644
          val apiKey = watchConfig.apiKey
              ?: throw IllegalStateException("Unable to extract INNERTUBE_API_KEY")
  
-@@ -188,7 +229,11 @@ class InAppYouTubeExtractor {
+@@ -188,7 +230,12 @@ class InAppYouTubeExtractor {
          val adaptiveAudio = mutableListOf<StreamCandidate>()
          val manifestUrls = mutableListOf<Triple<String, Int, String>>()
  
 -        for (client in CLIENTS) {
 +        val lock = kotlinx.coroutines.sync.Mutex()
++        val clientNotes = mutableListOf<String>()
 +        // Player API calls are independent: run them together instead of one after another.
 +        var earlyExit = false
 +        kotlinx.coroutines.coroutineScope {
@@ -2878,16 +2893,23 @@ index 3ff0cebd2..d7df5863d 100644
              runCatching {
                  val playerResponse = fetchPlayerResponse(
                      apiKey = apiKey,
-@@ -196,7 +241,7 @@ class InAppYouTubeExtractor {
+@@ -196,8 +243,13 @@ class InAppYouTubeExtractor {
                      client = client,
                      visitorData = watchConfig.visitorData,
                  )
 -
+-                val streamingData = playerResponse.objectValue("streamingData") ?: return@runCatching
 +                lock.withLock {
-                 val streamingData = playerResponse.objectValue("streamingData") ?: return@runCatching
++                val streamingData = playerResponse.objectValue("streamingData")
++                if (streamingData == null) {
++                    val status = playerResponse.objectValue("playabilityStatus")
++                    clientNotes += "${client.key}: no streamingData ${status?.stringValue("status")} ${status?.stringValue("reason")?.take(60)}"
++                    return@runCatching
++                }
                  val hlsManifestUrl = streamingData.stringValue("hlsManifestUrl")
                  if (!hlsManifestUrl.isNullOrBlank()) {
-@@ -256,6 +301,7 @@ class InAppYouTubeExtractor {
+                     manifestUrls += Triple(client.key, client.priority, hlsManifestUrl)
+@@ -256,6 +308,7 @@ class InAppYouTubeExtractor {
                              height = height,
                              fps = fps,
                              ext = if (mimeType.contains("webm")) "webm" else "mp4",
@@ -2895,13 +2917,13 @@ index 3ff0cebd2..d7df5863d 100644
                          )
                      } else if (hasAudio) {
                          val bitrate = format.numberValue("bitrate")
-@@ -282,32 +328,48 @@ class InAppYouTubeExtractor {
+@@ -282,32 +335,49 @@ class InAppYouTubeExtractor {
                          )
                      }
                  }
 +
 +                }
-+            }
++            }.onFailure { clientNotes += "${client.key}: ${it::class.simpleName} ${it.message?.take(80)}" }
 +            } }
 +            // The preferred client alone gives a separate video and audio pair: do not wait for the rest.
 +            calls.firstOrNull { it.first == PREFERRED_SEPARATE_CLIENT }?.second?.await()
@@ -2915,6 +2937,7 @@ index 3ff0cebd2..d7df5863d 100644
  
 +        com.nuvio.app.features.youtube.YouTubeStartTrace.mark(if (earlyExit) "clients done (early)" else "clients done (all)")
          if (manifestUrls.isEmpty() && progressive.isEmpty() && adaptiveVideo.isEmpty() && adaptiveAudio.isEmpty()) {
++            com.nuvio.app.features.youtube.YouTubeWarmupHooks.lastExtractFailure = "no streams: ${clientNotes.joinToString(" | ").take(300)}"
              return null
          }
  
@@ -2962,7 +2985,7 @@ index 3ff0cebd2..d7df5863d 100644
              }
          }
  
-@@ -319,15 +381,16 @@ class InAppYouTubeExtractor {
+@@ -319,15 +389,16 @@ class InAppYouTubeExtractor {
          if (heights.isNotEmpty()) com.nuvio.app.features.youtube.YouTubeStreamQuality.publish(videoId, heights)
          val cap = com.nuvio.app.features.youtube.YouTubeStreamQuality.capFor(videoId)
          val pool = if (cap != null) adaptiveVideo.filter { it.height in 1..cap }.ifEmpty { adaptiveVideo } else adaptiveVideo
@@ -2981,7 +3004,7 @@ index 3ff0cebd2..d7df5863d 100644
      }
  
      private suspend fun singleUrlSource(
-@@ -551,6 +614,30 @@ class InAppYouTubeExtractor {
+@@ -551,6 +622,30 @@ class InAppYouTubeExtractor {
          return parseUrl(url)?.query?.get("n")?.firstOrNull()?.isNotBlank() == true
      }
  
