@@ -1,0 +1,1157 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+index f9f954f7a..87cdb32ea 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+@@ -967,7 +967,9 @@ internal fun MainAppContent(
+                     videoId = item.id,
+                     parentMetaId = item.id,
+                     parentMetaType = "other",
+-                    initialPositionMs = positionMs,
++                    // 0 means "no position given": pick up where either player left this video.
++                    initialPositionMs = positionMs.takeIf { it > 0L }
++                        ?: com.nuvio.app.features.youtube.YouTubeRepository.savedPositionMs(item.id),
+                 )
+                 if (source == null || playerSettingsUiState.externalPlayerEnabled) {
+                     openExternalPlayback(playerLaunch)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt
+index 4a0167d94..92144eecc 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt
+@@ -1,12 +1,16 @@
+ package com.nuvio.app.features.settings
+ 
++import androidx.compose.foundation.layout.padding
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.LaunchedEffect
+ import androidx.compose.runtime.collectAsState
+ import androidx.compose.runtime.getValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.unit.dp
++import com.nuvio.app.features.youtube.YouTubeAccountPanel
+ import com.nuvio.app.features.youtube.YouTubePrefs
+ 
+-/** Fork settings: YouTube tab (Extra menu entry, autoplay, Shorts filter). */
++/** Fork settings: YouTube tab (Extra menu entry, autoplay, Shorts filter, Google sign-in). */
+ @Composable
+ internal fun ExtraYouTubeSection(isTablet: Boolean) {
+     LaunchedEffect(Unit) {
+@@ -42,6 +46,9 @@ internal fun ExtraYouTubeSection(isTablet: Boolean) {
+                 isTablet = isTablet,
+                 onCheckedChange = { YouTubePrefs.hideShorts.set(it) },
+             )
++            SettingsGroupDivider(isTablet = isTablet)
++            // Google account: personal Home, Subscriptions, history and Watch later (kept on this device only).
++            YouTubeAccountPanel(Modifier.padding(12.dp))
+         }
+     }
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt
+index bc82adfc3..25f6c1216 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt
+@@ -1263,6 +1263,18 @@ object WatchProgressRepository {
+         if (session.videoId.startsWith("jf:") || session.parentMetaId.startsWith("jf:")) {
+             return
+         }
++        // YouTube fork feature: videos opened with "Full player" also feed the YouTube tab's own Continue watching.
++        if (session.providerName == "YouTube" && session.parentMetaId == session.videoId) {
++            com.nuvio.app.features.youtube.YouTubeRepository.recordFullPlayerProgress(
++                videoId = session.videoId,
++                title = session.title,
++                channel = session.lastStreamTitle.orEmpty().takeIf { it != "YouTube" }.orEmpty(),
++                thumb = session.poster.orEmpty(),
++                positionMs = snapshot.positionMs.coerceAtLeast(0L),
++                durationMs = snapshot.durationMs.coerceAtLeast(0L),
++                ended = snapshot.isEnded,
++            )
++        }
+         val targetProfileId = session.profileId
+         val positionMs = snapshot.positionMs.coerceAtLeast(0L)
+         val durationMs = snapshot.durationMs.coerceAtLeast(0L)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeAccount.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeAccount.kt
+new file mode 100644
+index 000000000..7ecad7e85
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeAccount.kt
+@@ -0,0 +1,354 @@
++package com.nuvio.app.features.youtube
++
++import com.nuvio.app.core.storage.AppFileCache
++import com.nuvio.app.features.addons.httpRequestRaw
++import com.nuvio.app.features.watchprogress.WatchProgressClock
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.Job
++import kotlinx.coroutines.SupervisorJob
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import kotlinx.coroutines.flow.update
++import kotlinx.coroutines.launch
++import kotlinx.coroutines.sync.Mutex
++import kotlinx.coroutines.sync.withLock
++import kotlinx.serialization.Serializable
++import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.JsonObject
++import kotlinx.serialization.json.JsonPrimitive
++import kotlinx.serialization.json.buildJsonObject
++import kotlinx.serialization.json.contentOrNull
++import kotlinx.serialization.json.put
++import kotlin.random.Random
++
++/** What the sign-in UI shows: signed in (with a label), a pending device code, or an error. */
++data class YtAccountState(
++    val signedIn: Boolean = false,
++    val label: String = "",
++    val busy: Boolean = false,
++    val userCode: String = "",
++    val verificationUrl: String = "",
++    val error: String? = null,
++)
++
++@Serializable
++private data class StoredAccount(
++    val refreshToken: String = "",
++    val accessToken: String = "",
++    val expiresAtMs: Long = 0L,
++    val label: String = "",
++    val deviceId: String = "",
++)
++
++/**
++ * Google sign-in for the YouTube tab: the OAuth2 device-code flow of the YouTube-on-TV client.
++ * The user types a short code at youtube.com/activate; this object polls until Google hands out tokens,
++ * keeps them in the app file cache (this device only, never synced) and refreshes the access token on demand.
++ */
++object YouTubeAccount {
++    private const val CLIENT_ID = "861556708454-d6dlm3lh05idd8npek18k6be8ba3oc68.apps.googleusercontent.com"
++    private const val CLIENT_SECRET = "SboVhoG9s0rNafixCSGGKXAT"
++    private const val SCOPE = "https://www.googleapis.com/auth/youtube-paid-content"
++    private const val DEVICE_CODE_URL = "https://www.youtube.com/o/oauth2/device/code"
++    private const val TOKEN_URL = "https://www.youtube.com/o/oauth2/token"
++    private const val REVOKE_URL = "https://oauth2.googleapis.com/revoke"
++    private const val DEFAULT_ACTIVATE_URL = "https://www.youtube.com/activate"
++    private const val STORE_PATH = "youtube/account.json"
++
++    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
++    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; isLenient = true }
++    private val refreshMutex = Mutex()
++
++    private val _state = MutableStateFlow(YtAccountState())
++    val state: StateFlow<YtAccountState> = _state.asStateFlow()
++    private var stored = StoredAccount()
++    private var loaded = false
++    private var signInJob: Job? = null
++
++    fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        val raw = runCatching { AppFileCache.read(STORE_PATH) }.getOrNull() ?: return
++        val account = runCatching { json.decodeFromString(StoredAccount.serializer(), raw) }.getOrNull() ?: return
++        stored = account
++        if (account.refreshToken.isNotBlank()) {
++            _state.update { it.copy(signedIn = true, label = account.label) }
++        }
++    }
++
++    val isSignedIn: Boolean
++        get() {
++            ensureLoaded()
++            return _state.value.signedIn
++        }
++
++    private fun persist() {
++        runCatching { AppFileCache.write(STORE_PATH, json.encodeToString(StoredAccount.serializer(), stored)) }
++    }
++
++    fun reportError(message: String) {
++        _state.update { it.copy(error = message) }
++    }
++
++    fun clearError() {
++        _state.update { it.copy(error = null) }
++    }
++
++    // --- sign in ---
++
++    fun startSignIn() {
++        ensureLoaded()
++        if (signInJob?.isActive == true || _state.value.signedIn) return
++        _state.update { it.copy(busy = true, error = null, userCode = "", verificationUrl = "") }
++        signInJob = scope.launch {
++            try {
++                runSignIn()
++            } catch (cancelled: CancellationException) {
++                throw cancelled
++            } catch (_: Exception) {
++                fail("Sign-in failed. Check the connection and try again.")
++            }
++        }
++    }
++
++    fun cancelSignIn() {
++        signInJob?.cancel()
++        signInJob = null
++        _state.update { it.copy(busy = false, userCode = "", verificationUrl = "") }
++    }
++
++    private fun fail(message: String) {
++        _state.update { it.copy(busy = false, userCode = "", verificationUrl = "", error = message) }
++    }
++
++    private suspend fun runSignIn() {
++        if (stored.deviceId.isBlank()) stored = stored.copy(deviceId = newDeviceId())
++        val (codeStatus, codeBody) = oauthPost(
++            DEVICE_CODE_URL,
++            mapOf(
++                "client_id" to CLIENT_ID,
++                "scope" to SCOPE,
++                "device_id" to stored.deviceId,
++                "model_name" to "Nuvio Mobile",
++            ),
++        )
++        val deviceCode = codeBody?.str("device_code")
++        val userCode = codeBody?.str("user_code")
++        if (codeBody == null || deviceCode == null || userCode == null) {
++            fail(
++                if (codeStatus == 0) "Could not reach Google. Check the connection and try again."
++                else "Google did not give a sign-in code (HTTP $codeStatus). Try again later.",
++            )
++            return
++        }
++        var intervalSeconds = (codeBody.str("interval")?.toIntOrNull() ?: 5).coerceIn(2, 30)
++        val lifetimeSeconds = codeBody.str("expires_in")?.toLongOrNull() ?: 1800L
++        val expiresAtMs = WatchProgressClock.nowEpochMs() + lifetimeSeconds * 1000L
++        _state.update {
++            it.copy(
++                busy = true,
++                userCode = userCode,
++                verificationUrl = codeBody.str("verification_url") ?: DEFAULT_ACTIVATE_URL,
++            )
++        }
++        var networkFailures = 0
++        while (true) {
++            delay(intervalSeconds * 1000L)
++            if (WatchProgressClock.nowEpochMs() > expiresAtMs) {
++                fail("The code expired. Start the sign-in again.")
++                return
++            }
++            val (status, body) = oauthPost(
++                TOKEN_URL,
++                mapOf(
++                    "client_id" to CLIENT_ID,
++                    "client_secret" to CLIENT_SECRET,
++                    "code" to deviceCode,
++                    "grant_type" to "http://oauth.net/grant_type/device/1.0",
++                ),
++            )
++            val accessToken = body?.str("access_token")
++            val refreshToken = body?.str("refresh_token")
++            if (body != null && accessToken != null && refreshToken != null) {
++                val lifetime = body.str("expires_in")?.toLongOrNull() ?: 3600L
++                stored = stored.copy(
++                    refreshToken = refreshToken,
++                    accessToken = accessToken,
++                    expiresAtMs = WatchProgressClock.nowEpochMs() + lifetime * 1000L,
++                )
++                persist()
++                _state.update {
++                    it.copy(signedIn = true, label = stored.label, busy = false, userCode = "", verificationUrl = "", error = null)
++                }
++                YouTubeRepository.onAccountChanged()
++                scope.launch { refreshLabel() }
++                return
++            }
++            when (body?.str("error")) {
++                "authorization_pending" -> networkFailures = 0
++                "slow_down" -> intervalSeconds = (intervalSeconds + 5).coerceAtMost(30)
++                "access_denied" -> {
++                    fail("Sign-in was denied.")
++                    return
++                }
++                "expired_token" -> {
++                    fail("The code expired. Start the sign-in again.")
++                    return
++                }
++                null -> {
++                    networkFailures++
++                    if (networkFailures >= 6) {
++                        fail(
++                            if (status == 0) "Lost the connection while waiting for sign-in. Try again."
++                            else "Google returned an unexpected answer (HTTP $status). Try again later.",
++                        )
++                        return
++                    }
++                }
++                else -> {
++                    fail("Sign-in failed: ${body?.str("error")}.")
++                    return
++                }
++            }
++        }
++    }
++
++    private suspend fun refreshLabel() {
++        val name = runCatching { YtInnertube.accountName() }.getOrNull()
++        stored = stored.copy(label = name?.takeIf { it.isNotBlank() } ?: stored.label.ifBlank { "YouTube account" })
++        persist()
++        _state.update { it.copy(label = stored.label) }
++    }
++
++    fun signOut() {
++        ensureLoaded()
++        cancelSignIn()
++        val token = stored.refreshToken
++        if (token.isNotBlank()) {
++            scope.launch {
++                runCatching {
++                    httpRequestRaw(
++                        method = "POST",
++                        url = REVOKE_URL,
++                        headers = mapOf("Content-Type" to "application/x-www-form-urlencoded"),
++                        body = "token=${urlEncode(token)}",
++                    )
++                }
++            }
++        }
++        stored = StoredAccount(deviceId = stored.deviceId)
++        persist()
++        _state.value = YtAccountState()
++        YouTubeRepository.onAccountChanged()
++    }
++
++    // --- tokens ---
++
++    /** A valid access token, refreshed first when it expires within a minute; null when signed out or offline. */
++    suspend fun accessToken(): String? {
++        ensureLoaded()
++        if (!_state.value.signedIn) return null
++        fun valid() = stored.accessToken.isNotBlank() && stored.expiresAtMs - WatchProgressClock.nowEpochMs() > 60_000L
++        if (valid()) return stored.accessToken
++        return refreshMutex.withLock {
++            if (valid()) return@withLock stored.accessToken
++            refreshAccessToken()
++        }
++    }
++
++    /** Forces the next [accessToken] call to refresh (used after YouTube answered 401). */
++    fun invalidateAccess() {
++        stored = stored.copy(expiresAtMs = 0L)
++    }
++
++    private suspend fun refreshAccessToken(): String? {
++        val (status, body) = oauthPost(
++            TOKEN_URL,
++            mapOf(
++                "client_id" to CLIENT_ID,
++                "client_secret" to CLIENT_SECRET,
++                "refresh_token" to stored.refreshToken,
++                "grant_type" to "refresh_token",
++            ),
++        )
++        val accessToken = body?.str("access_token")
++        if (body != null && accessToken != null) {
++            val lifetime = body.str("expires_in")?.toLongOrNull() ?: 3600L
++            stored = stored.copy(
++                accessToken = accessToken,
++                expiresAtMs = WatchProgressClock.nowEpochMs() + lifetime * 1000L,
++                refreshToken = body.str("refresh_token") ?: stored.refreshToken,
++            )
++            persist()
++            return accessToken
++        }
++        val error = body?.str("error")
++        if (error == "invalid_grant" || error == "unauthorized_client") {
++            // The user revoked access or the token aged out: drop the session instead of retrying forever.
++            stored = StoredAccount(deviceId = stored.deviceId)
++            persist()
++            _state.value = YtAccountState(error = "Your YouTube session expired. Sign in again.")
++            YouTubeRepository.onAccountChanged()
++        } else if (status == 0) {
++            reportError("Could not reach Google to refresh the YouTube sign-in.")
++        }
++        return null
++    }
++
++    // --- http ---
++
++    /** Posts [fields] as JSON first and as a form when Google rejects that; status 0 means no answer. */
++    private suspend fun oauthPost(url: String, fields: Map<String, String>): Pair<Int, JsonObject?> {
++        val jsonBody = buildJsonObject { fields.forEach { (k, v) -> put(k, v) } }.toString()
++        val first = runCatching {
++            httpRequestRaw(
++                method = "POST",
++                url = url,
++                headers = mapOf("Content-Type" to "application/json", "User-Agent" to "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version"),
++                body = jsonBody,
++            )
++        }.getOrNull() ?: return 0 to null
++        val firstBody = parseObject(first.body)
++        if (firstBody != null && (first.status in 200..299 || firstBody.str("error") != null)) return first.status to firstBody
++        val form = fields.entries.joinToString("&") { "${urlEncode(it.key)}=${urlEncode(it.value)}" }
++        val second = runCatching {
++            httpRequestRaw(
++                method = "POST",
++                url = url,
++                headers = mapOf("Content-Type" to "application/x-www-form-urlencoded", "User-Agent" to "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version"),
++                body = form,
++            )
++        }.getOrNull() ?: return first.status to firstBody
++        return second.status to parseObject(second.body)
++    }
++
++    private fun parseObject(text: String): JsonObject? =
++        runCatching { json.parseToJsonElement(text) as? JsonObject }.getOrNull()
++
++    private fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
++
++    private fun newDeviceId(): String {
++        val chars = "0123456789abcdef"
++        return buildString { repeat(16) { append(chars[Random.nextInt(chars.length)]) } }
++    }
++
++    private fun urlEncode(value: String): String {
++        val unreserved = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
++        val out = StringBuilder()
++        for (byte in value.encodeToByteArray()) {
++            val c = (byte.toInt() and 0xFF).toChar()
++            if (unreserved.indexOf(c) >= 0) {
++                out.append(c)
++            } else {
++                out.append('%')
++                out.append("0123456789ABCDEF"[(byte.toInt() shr 4) and 0xF])
++                out.append("0123456789ABCDEF"[byte.toInt() and 0xF])
++            }
++        }
++        return out.toString()
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeAccountUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeAccountUi.kt
+new file mode 100644
+index 000000000..d2e4c1dfd
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeAccountUi.kt
+@@ -0,0 +1,117 @@
++package com.nuvio.app.features.youtube
++
++import androidx.compose.foundation.background
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material3.Button
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.OutlinedButton
++import androidx.compose.material3.Text
++import androidx.compose.material3.TextButton
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.collectAsState
++import androidx.compose.runtime.getValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.platform.LocalClipboardManager
++import androidx.compose.ui.platform.LocalUriHandler
++import androidx.compose.ui.text.AnnotatedString
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.dp
++import com.nuvio.app.core.ui.nuvio
++
++/**
++ * Google sign-in card shared by the YouTube tab and Settings > Extra > YouTube: the prompt when signed out,
++ * the activation code while waiting, and the account name with Sign out when signed in.
++ */
++@Composable
++internal fun YouTubeAccountPanel(modifier: Modifier = Modifier) {
++    val tokens = MaterialTheme.nuvio
++    val state by YouTubeAccount.state.collectAsState()
++    val uriHandler = LocalUriHandler.current
++    val clipboard = LocalClipboardManager.current
++    LaunchedEffect(Unit) { YouTubeAccount.ensureLoaded() }
++    Column(
++        modifier = modifier
++            .fillMaxWidth()
++            .clip(RoundedCornerShape(12.dp))
++            .background(tokens.colors.surfaceCard)
++            .padding(14.dp),
++        verticalArrangement = Arrangement.spacedBy(8.dp),
++    ) {
++        when {
++            state.signedIn -> {
++                Row(verticalAlignment = Alignment.CenterVertically) {
++                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
++                        Text(
++                            text = "Signed in",
++                            color = tokens.colors.textMuted,
++                            style = MaterialTheme.typography.labelMedium,
++                        )
++                        Text(
++                            text = state.label.ifBlank { "YouTube account" },
++                            color = tokens.colors.textPrimary,
++                            style = MaterialTheme.typography.titleSmall,
++                            fontWeight = FontWeight.SemiBold,
++                            maxLines = 1,
++                            overflow = TextOverflow.Ellipsis,
++                        )
++                    }
++                    TextButton(onClick = { YouTubeAccount.signOut() }) { Text("Sign out") }
++                }
++            }
++            state.userCode.isNotBlank() -> {
++                val url = state.verificationUrl.ifBlank { "https://www.youtube.com/activate" }
++                Text(
++                    text = "On any device open ${url.removePrefix("https://").removePrefix("www.")} and enter this code:",
++                    color = tokens.colors.textPrimary,
++                    style = MaterialTheme.typography.bodyMedium,
++                )
++                Text(
++                    text = state.userCode,
++                    color = tokens.colors.accent,
++                    style = MaterialTheme.typography.headlineSmall,
++                    fontWeight = FontWeight.Bold,
++                )
++                Text(
++                    text = "Waiting for you to approve the sign-in...",
++                    color = tokens.colors.textMuted,
++                    style = MaterialTheme.typography.bodySmall,
++                )
++                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
++                    Button(onClick = { runCatching { uriHandler.openUri(url) } }) { Text("Open youtube.com/activate") }
++                    OutlinedButton(onClick = { clipboard.setText(AnnotatedString(state.userCode)) }) { Text("Copy code") }
++                }
++                TextButton(onClick = { YouTubeAccount.cancelSignIn() }) { Text("Cancel") }
++            }
++            else -> {
++                Text(
++                    text = "Sign in for your subscriptions, history and recommendations",
++                    color = tokens.colors.textPrimary,
++                    style = MaterialTheme.typography.bodyMedium,
++                )
++                Button(onClick = { YouTubeAccount.startSignIn() }, enabled = !state.busy) {
++                    Text(if (state.busy) "Getting a code..." else "Sign in with Google")
++                }
++            }
++        }
++        state.error?.let { message ->
++            Row(verticalAlignment = Alignment.CenterVertically) {
++                Text(
++                    text = message,
++                    color = tokens.colors.danger,
++                    style = MaterialTheme.typography.bodySmall,
++                    modifier = Modifier.weight(1f),
++                )
++                TextButton(onClick = { YouTubeAccount.clearError() }) { Text("Dismiss") }
++            }
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInnertube.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInnertube.kt
+index d4ffcff5d..ecff88f00 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInnertube.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInnertube.kt
+@@ -10,8 +10,10 @@ import kotlinx.serialization.json.JsonElement
+ import kotlinx.serialization.json.JsonObject
+ import kotlinx.serialization.json.JsonPrimitive
+ import kotlinx.serialization.json.buildJsonObject
++import kotlinx.serialization.json.add
+ import kotlinx.serialization.json.contentOrNull
+ import kotlinx.serialization.json.put
++import kotlinx.serialization.json.putJsonArray
+ import kotlinx.serialization.json.putJsonObject
+ 
+ @Serializable
+@@ -62,10 +64,13 @@ internal fun ageMinutes(meta: String): Int {
+  * Small anonymous YouTube "innertube" client (web client, no account). It reads the page version and
+  * visitor id from youtube.com once, then calls search/browse/next and turns the renderer JSON into [YtItem]s.
+  * Playback is not done here: videos are played through the app's existing YouTube resolver.
++ * When the user is signed in ([YouTubeAccount]) the account calls use the TV client with a Bearer token.
+  */
+ internal object YtInnertube {
+     private const val API_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
+     private const val UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
++    private const val TV_UA = "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version"
++    private const val TV_CLIENT_VERSION = "7.20250219.14.00"
+     private const val BASE = "https://www.youtube.com"
+     const val VIDEOS_ONLY = "EgIQAQ=="
+     const val LIVE_ONLY = "EgJAAQ=="
+@@ -102,14 +107,40 @@ internal object YtInnertube {
+         }
+     }
+ 
+-    private suspend fun post(endpoint: String, fill: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit): JsonObject? {
++    private suspend fun post(
++        endpoint: String,
++        authed: Boolean = false,
++        fill: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit,
++    ): JsonObject? {
+         ensureInit()
++        var token: String? = null
++        if (authed) token = YouTubeAccount.accessToken() ?: return null
++        var response = send(endpoint, token, fill) ?: return null
++        if (authed && response.status == 401) {
++            // The access token was refused: refresh once and try again before giving up.
++            YouTubeAccount.invalidateAccess()
++            token = YouTubeAccount.accessToken() ?: return null
++            response = send(endpoint, token, fill) ?: return null
++            if (response.status == 401) {
++                YouTubeAccount.reportError("YouTube refused the sign-in. Sign out and sign in again.")
++            }
++        }
++        if (response.status !in 200..299) return null
++        return runCatching { json.parseToJsonElement(response.body) as? JsonObject }.getOrNull()
++    }
++
++    private suspend fun send(
++        endpoint: String,
++        token: String?,
++        fill: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit,
++    ): com.nuvio.app.features.addons.RawHttpResponse? {
+         val visitor = visitorData
++        val tv = token != null
+         val body = buildJsonObject {
+             putJsonObject("context") {
+                 putJsonObject("client") {
+-                    put("clientName", "WEB")
+-                    put("clientVersion", clientVersion)
++                    put("clientName", if (tv) "TVHTML5" else "WEB")
++                    put("clientVersion", if (tv) TV_CLIENT_VERSION else clientVersion)
+                     put("hl", "en")
+                     put("gl", "US")
+                     if (visitor != null) put("visitorData", visitor)
+@@ -119,21 +150,23 @@ internal object YtInnertube {
+         }.toString()
+         val headers = buildMap {
+             put("Content-Type", "application/json")
+-            put("User-Agent", UA)
++            put("User-Agent", if (tv) TV_UA else UA)
+             put("Origin", BASE)
+             put("Accept-Language", "en-US,en;q=0.9")
+-            put("Cookie", "SOCS=CAI")
++            if (token != null) put("Authorization", "Bearer $token") else put("Cookie", "SOCS=CAI")
+             if (visitor != null) put("X-Goog-Visitor-Id", visitor)
+         }
+-        val response = httpRequestRaw(
+-            method = "POST",
+-            url = "$BASE/youtubei/v1/$endpoint?key=$API_KEY&prettyPrint=false",
+-            headers = headers,
+-            body = body,
+-            maxResponseBodyBytes = 12_000_000,
+-        )
+-        if (response.status !in 200..299) return null
+-        return runCatching { json.parseToJsonElement(response.body) as? JsonObject }.getOrNull()
++        // The anonymous web call keeps its API key; account calls authenticate with the Bearer token only.
++        val query = if (tv) "prettyPrint=false" else "key=$API_KEY&prettyPrint=false"
++        return runCatching {
++            httpRequestRaw(
++                method = "POST",
++                url = "$BASE/youtubei/v1/$endpoint?$query",
++                headers = headers,
++                body = body,
++                maxResponseBodyBytes = 12_000_000,
++            )
++        }.getOrNull()
+     }
+ 
+     suspend fun search(query: String, params: String? = null): YtPageResult? {
+@@ -160,11 +193,63 @@ internal object YtInnertube {
+ 
+     suspend fun playlist(playlistId: String): YtPageResult? {
+         val browseId = if (playlistId.startsWith("VL")) playlistId else "VL$playlistId"
+-        val root = post("browse") { put("browseId", browseId) } ?: return null
++        // Signed in, playlists are read with the account so private ones and Watch later (WL) open too.
++        val authed = YouTubeAccount.isSignedIn
++        val root = post("browse", authed) { put("browseId", browseId) } ?: return null
+         val title = path(root, "header", "pageHeaderRenderer")?.asObj()?.str("pageTitle") ?: ""
+-        return parse(root, "browse").copy(title = title)
++        return parse(root, "browse", authed).copy(title = title)
+     }
+ 
++    // --- account (signed in, TV client) ---
++
++    /** A personal feed such as FEwhat_to_watch, FEsubscriptions, FEhistory or FElibrary. */
++    suspend fun accountFeed(browseId: String): YtPageResult? {
++        val root = post("browse", authed = true) { put("browseId", browseId) } ?: return null
++        return parse(root, "browse", authed = true)
++    }
++
++    /** The signed-in user's Watch later list. */
++    suspend fun accountWatchLater(): YtPageResult? {
++        val root = post("browse", authed = true) { put("browseId", "VLWL") } ?: return null
++        return parse(root, "browse", authed = true)
++    }
++
++    suspend fun accountName(): String? {
++        val root = post("account/accounts_list", authed = true) { } ?: return null
++        return text(findObject(root, "accountName")).takeIf { it.isNotBlank() }
++    }
++
++    suspend fun subscribe(channelId: String): Boolean =
++        post("subscription/subscribe", authed = true) {
++            putJsonArray("channelIds") { add(channelId) }
++            put("params", "EgIIAhgA")
++        } != null
++
++    suspend fun unsubscribe(channelId: String): Boolean =
++        post("subscription/unsubscribe", authed = true) {
++            putJsonArray("channelIds") { add(channelId) }
++            put("params", "CgIIAhgA")
++        } != null
++
++    /** Adds or removes [videoId] on the Watch later playlist of the account. */
++    suspend fun editWatchLater(videoId: String, adding: Boolean): Boolean =
++        post("browse/edit_playlist", authed = true) {
++            put("playlistId", "WL")
++            putJsonArray("actions") {
++                add(
++                    buildJsonObject {
++                        if (adding) {
++                            put("action", "ACTION_ADD_VIDEO")
++                            put("addedVideoId", videoId)
++                        } else {
++                            put("action", "ACTION_REMOVE_VIDEO_BY_VIDEO_ID")
++                            put("removedVideoId", videoId)
++                        }
++                    },
++                )
++            }
++        } != null
++
+     /** Videos YouTube suggests after [videoId] (the "Up next" list). */
+     suspend fun related(videoId: String): List<YtItem> {
+         val root = post("next") { put("videoId", videoId) } ?: return emptyList()
+@@ -180,16 +265,19 @@ internal object YtInnertube {
+     }
+ 
+     suspend fun continuation(token: String): YtPageResult? {
+-        val endpoint = token.substringBefore(':')
+-        val value = token.substringAfter(':')
++        val authed = token.startsWith("auth:")
++        val plain = token.removePrefix("auth:")
++        val endpoint = plain.substringBefore(':')
++        val value = plain.substringAfter(':')
+         if (endpoint !in setOf("search", "browse", "next")) return null
+-        val root = post(endpoint) { put("continuation", value) } ?: return null
+-        return parse(root, endpoint)
++        val root = post(endpoint, authed) { put("continuation", value) } ?: return null
++        return parse(root, endpoint, authed)
+     }
+ 
+     // --- parsing ---
+ 
+-    private fun parse(root: JsonObject, endpoint: String): YtPageResult {
++    private fun parse(root: JsonObject, endpoint: String, authed: Boolean = false): YtPageResult {
++        val tokenPrefix = if (authed) "auth:" else ""
+         val items = LinkedHashMap<String, YtItem>()
+         var continuation: String? = null
+         fun walk(element: JsonElement?) {
+@@ -199,6 +287,7 @@ internal object YtInnertube {
+                     when (key) {
+                         "videoRenderer", "gridVideoRenderer", "compactVideoRenderer", "playlistVideoRenderer" ->
+                             obj?.let(::videoRenderer)?.let { items.putIfAbsent(it.key, it) }
++                        "tileRenderer" -> obj?.let(::tile)?.let { items.putIfAbsent(it.key, it) }
+                         "lockupViewModel" -> obj?.let(::lockup)?.let { items.putIfAbsent(it.key, it) }
+                         "shortsLockupViewModel" -> obj?.let(::shortsLockup)?.let { items.putIfAbsent(it.key, it) }
+                         "playlistRenderer", "gridPlaylistRenderer" ->
+@@ -209,7 +298,12 @@ internal object YtInnertube {
+                             if (continuation == null && endpoint != "next") {
+                                 val token = path(obj, "continuationEndpoint", "continuationCommand")?.asObj()?.str("token")
+                                     ?: findString(obj, "token")
+-                                if (token != null) continuation = "$endpoint:$token"
++                                if (token != null) continuation = "$tokenPrefix$endpoint:$token"
++                            }
++                        }
++                        "nextContinuationData" -> {
++                            if (continuation == null && endpoint != "next") {
++                                obj?.str("continuation")?.let { continuation = "$tokenPrefix$endpoint:$it" }
+                             }
+                         }
+                         else -> walk(value)
+@@ -322,6 +416,51 @@ internal object YtInnertube {
+         )
+     }
+ 
++    /** TV client card (tileRenderer): a video, playlist or channel with lines of text under the title. */
++    private fun tile(t: JsonObject): YtItem? {
++        val rawId = t.str("contentId") ?: return null
++        val type = t.str("contentType").orEmpty()
++        val kind = when {
++            type.contains("VIDEO") -> YtKind.VIDEO
++            type.contains("PLAYLIST") -> YtKind.PLAYLIST
++            type.contains("CHANNEL") -> YtKind.CHANNEL
++            else -> return null
++        }
++        if (kind == YtKind.PLAYLIST && rawId.startsWith("RD")) return null
++        val id = if (kind == YtKind.PLAYLIST) rawId.removePrefix("VL") else rawId
++        val meta = path(t, "metadata", "tileMetadataRenderer")?.asObj()
++        val title = text(meta?.get("title")).ifBlank { return null }
++        val lines = (meta?.get("lines") as? JsonArray).orEmpty().mapNotNull { line ->
++            findArray(line, "items")
++                ?.map { text(path(it, "lineItemRenderer", "text")) }
++                ?.filter { it.isNotBlank() && it.trim() != "\u2022" }
++                ?.joinToString(" \u2022 ")
++                ?.takeIf { it.isNotBlank() }
++        }
++        val overlay = findObject(t["header"], "thumbnailOverlayTimeStatusRenderer")
++        val style = overlay?.str("style").orEmpty()
++        val live = style == "LIVE"
++        val short = style == "SHORTS"
++        val duration = if (live || short) "" else text(overlay?.get("text"))
++        val thumb = findArray(t["header"], "thumbnails")?.lastOrNull()?.asObj()?.str("url")
++            ?.let { if (it.startsWith("//")) "https:$it" else it }
++            ?: if (kind == YtKind.VIDEO) "https://i.ytimg.com/vi/$id/hqdefault.jpg" else ""
++        val channelId = if (kind == YtKind.CHANNEL) id
++        else findString(t["onLongPressCommand"], "browseId")?.takeIf { it.startsWith("UC") }.orEmpty()
++        return YtItem(
++            kind = kind,
++            id = id,
++            title = title,
++            channel = if (kind == YtKind.CHANNEL) "" else lines.getOrNull(0).orEmpty(),
++            channelId = channelId,
++            thumb = thumb,
++            meta = if (kind == YtKind.CHANNEL) lines.joinToString(" \u2022 ") else lines.drop(1).joinToString(" \u2022 "),
++            duration = duration,
++            isShort = short,
++            isLive = live,
++        )
++    }
++
+     private fun playlistRenderer(p: JsonObject): YtItem? {
+         val id = p.str("playlistId") ?: return null
+         if (id.startsWith("RD")) return null
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeRepository.kt
+index 733a29756..12314b4c1 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeRepository.kt
+@@ -50,6 +50,15 @@ data class YtSaved(
+     val searches: List<String> = emptyList(),
+ )
+ 
++/** Lists read from the signed-in account: watch history, library playlists and Watch later. */
++data class YtAccountLists(
++    val history: List<YtItem> = emptyList(),
++    val playlists: List<YtItem> = emptyList(),
++    val watchLater: List<YtItem> = emptyList(),
++    val loading: Boolean = false,
++    val loaded: Boolean = false,
++)
++
+ data class YtRow(val order: Int, val title: String, val items: List<YtItem>)
+ 
+ sealed interface YtPage {
+@@ -89,6 +98,9 @@ object YouTubeRepository {
+     val subsLoading: StateFlow<Boolean> = _subsLoading.asStateFlow()
+     private var subsKey = ""
+ 
++    private val _accountLists = MutableStateFlow(YtAccountLists())
++    val accountLists: StateFlow<YtAccountLists> = _accountLists.asStateFlow()
++
+     private val _shorts = MutableStateFlow<List<YtItem>>(emptyList())
+     val shorts: StateFlow<List<YtItem>> = _shorts.asStateFlow()
+     private val _shortsLoading = MutableStateFlow(false)
+@@ -126,6 +138,7 @@ object YouTubeRepository {
+         YouTubePrefs.tabEnabled.ensureLoaded()
+         YouTubePrefs.autoplay.ensureLoaded()
+         YouTubePrefs.hideShorts.ensureLoaded()
++        YouTubeAccount.ensureLoaded()
+         val raw = runCatching { AppFileCache.read(STORE_PATH) }.getOrNull() ?: return
+         runCatching { json.decodeFromString(YtSaved.serializer(), raw) }.getOrNull()?.let { _saved.value = it }
+     }
+@@ -141,6 +154,26 @@ object YouTubeRepository {
+ 
+     fun toggleWatchLater(item: YtItem) {
+         if (item.kind != YtKind.VIDEO) return
++        if (YouTubeAccount.isSignedIn) {
++            // Signed in: Watch later lives on the account; the local list is kept in step once YouTube accepts it.
++            val adding = !isWatchLater(item.id)
++            scope.launch {
++                val ok = runCatching { YtInnertube.editWatchLater(item.id, adding) }.getOrDefault(false)
++                if (ok) {
++                    toggleWatchLaterLocal(item)
++                    _accountLists.update { lists ->
++                        lists.copy(watchLater = if (adding) listOf(item) + lists.watchLater.filterNot { it.id == item.id } else lists.watchLater.filterNot { it.id == item.id })
++                    }
++                } else {
++                    YouTubeAccount.reportError("Could not update Watch later on your YouTube account.")
++                }
++            }
++            return
++        }
++        toggleWatchLaterLocal(item)
++    }
++
++    private fun toggleWatchLaterLocal(item: YtItem) {
+         updateSaved { s ->
+             if (s.watchLater.any { it.id == item.id }) s.copy(watchLater = s.watchLater.filterNot { it.id == item.id })
+             else s.copy(watchLater = listOf(item) + s.watchLater)
+@@ -151,6 +184,25 @@ object YouTubeRepository {
+ 
+     fun toggleSubscription(channelId: String, name: String, thumb: String = "") {
+         if (channelId.isBlank()) return
++        if (YouTubeAccount.isSignedIn) {
++            val unsubscribing = isSubscribed(channelId)
++            scope.launch {
++                val ok = runCatching {
++                    if (unsubscribing) YtInnertube.unsubscribe(channelId) else YtInnertube.subscribe(channelId)
++                }.getOrDefault(false)
++                if (ok) {
++                    toggleSubscriptionLocal(channelId, name, thumb)
++                    subsKey = ""
++                } else {
++                    YouTubeAccount.reportError("Could not ${if (unsubscribing) "unsubscribe" else "subscribe"} on your YouTube account.")
++                }
++            }
++            return
++        }
++        toggleSubscriptionLocal(channelId, name, thumb)
++    }
++
++    private fun toggleSubscriptionLocal(channelId: String, name: String, thumb: String) {
+         updateSaved { s ->
+             if (s.subscriptions.any { it.id == channelId }) {
+                 s.copy(subscriptions = s.subscriptions.filterNot { it.id == channelId })
+@@ -186,6 +238,67 @@ object YouTubeRepository {
+         }
+     }
+ 
++    /** Position saved for [videoId] by either player, 0 when there is none. */
++    fun savedPositionMs(videoId: String): Long {
++        ensureLoaded()
++        return _saved.value.continueWatching.firstOrNull { it.item.id == videoId }?.positionMs ?: 0L
++    }
++
++    /**
++     * Progress reported by the app's normal player for a YouTube video opened with "Full player".
++     * It lands in the same Continue watching list the inline player writes to.
++     */
++    fun recordFullPlayerProgress(
++        videoId: String,
++        title: String,
++        channel: String,
++        thumb: String,
++        positionMs: Long,
++        durationMs: Long,
++        ended: Boolean,
++    ) {
++        if (videoId.isBlank() || durationMs <= 0L) return
++        ensureLoaded()
++        val known = _saved.value.continueWatching.firstOrNull { it.item.id == videoId }?.item
++        val item = known ?: YtItem(id = videoId, title = title, channel = channel, thumb = thumb)
++        saveProgress(item, if (ended) durationMs else positionMs, durationMs, force = true)
++    }
++
++    // --- account ---
++
++    /** Sign-in state changed: drop everything that came from the previous state so the tabs reload. */
++    fun onAccountChanged() {
++        _homeRows.value = emptyList()
++        _subsFeed.value = emptyList()
++        subsKey = ""
++        _accountLists.value = YtAccountLists()
++    }
++
++    fun loadAccountLists(force: Boolean = false) {
++        if (!YouTubeAccount.isSignedIn) {
++            if (_accountLists.value.loaded) _accountLists.value = YtAccountLists()
++            return
++        }
++        val current = _accountLists.value
++        if (current.loading || (!force && current.loaded)) return
++        _accountLists.update { it.copy(loading = true) }
++        scope.launch {
++            val history = async { runCatching { YtInnertube.accountFeed("FEhistory") }.getOrNull() }
++            val library = async { runCatching { YtInnertube.accountFeed("FElibrary") }.getOrNull() }
++            val later = async { runCatching { YtInnertube.accountWatchLater() }.getOrNull() }
++            val historyPage = history.await()
++            val libraryPage = library.await()
++            val laterPage = later.await()
++            _accountLists.value = YtAccountLists(
++                history = historyPage?.items.orEmpty().filter { it.kind == YtKind.VIDEO },
++                playlists = libraryPage?.items.orEmpty().filter { it.kind == YtKind.PLAYLIST },
++                watchLater = laterPage?.items.orEmpty().filter { it.kind == YtKind.VIDEO },
++                loading = false,
++                loaded = true,
++            )
++        }
++    }
++
+     // --- feeds ---
+ 
+     fun loadHome(force: Boolean = false) {
+@@ -194,6 +307,17 @@ object YouTubeRepository {
+         _homeLoading.value = true
+         if (force) _homeRows.value = emptyList()
+         scope.launch {
++            if (YouTubeAccount.isSignedIn) {
++                val page = runCatching { YtInnertube.accountFeed("FEwhat_to_watch") }.getOrNull()
++                val videos = page?.items.orEmpty().filter { it.kind == YtKind.VIDEO }
++                if (videos.isNotEmpty()) {
++                    _homeRows.value = videos.chunked(12).take(8).mapIndexed { index, chunk ->
++                        YtRow(index, if (index == 0) "Recommended for you" else "More for you", chunk)
++                    }
++                    _homeLoading.value = false
++                    return@launch
++                }
++            }
+             val gate = Semaphore(3)
+             homeTopics.mapIndexed { index, (title, query) ->
+                 async {
+@@ -212,10 +336,20 @@ object YouTubeRepository {
+ 
+     fun loadSubscriptions(force: Boolean = false) {
+         ensureLoaded()
++        val signedIn = YouTubeAccount.isSignedIn
+         val subs = _saved.value.subscriptions.take(24)
+-        val key = subs.joinToString(",") { it.id }
++        val key = if (signedIn) "account" else subs.joinToString(",") { it.id }
+         if (_subsLoading.value || (!force && key == subsKey)) return
+         subsKey = key
++        if (signedIn) {
++            _subsLoading.value = true
++            scope.launch {
++                val page = runCatching { YtInnertube.accountFeed("FEsubscriptions") }.getOrNull()
++                _subsFeed.value = page?.items.orEmpty().filter { it.kind == YtKind.VIDEO }
++                _subsLoading.value = false
++            }
++            return
++        }
+         if (subs.isEmpty()) {
+             _subsFeed.value = emptyList()
+             return
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
+index 1e4776fc8..bd1a55880 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
+@@ -170,7 +170,33 @@ fun YouTubeScreen(
+ private fun RootContent(tab: Int, onTab: (Int) -> Unit) {
+     val tokens = MaterialTheme.nuvio
+     val horizontal = tokens.spacing.screenHorizontal
++    val account by YouTubeAccount.state.collectAsState()
++    LaunchedEffect(Unit) { YouTubeAccount.ensureLoaded() }
+     Column(Modifier.fillMaxSize()) {
++        if (account.signedIn) {
++            Row(
++                modifier = Modifier.fillMaxWidth().padding(horizontal = horizontal),
++                verticalAlignment = Alignment.CenterVertically,
++            ) {
++                Text(
++                    text = account.label.ifBlank { "YouTube account" },
++                    color = tokens.colors.textMuted,
++                    style = MaterialTheme.typography.labelLarge,
++                    maxLines = 1,
++                    overflow = TextOverflow.Ellipsis,
++                    modifier = Modifier.weight(1f),
++                )
++                TextButton(onClick = { YouTubeAccount.signOut() }) { Text("Sign out") }
++            }
++            account.error?.let { message ->
++                Text(
++                    text = message,
++                    color = tokens.colors.danger,
++                    style = MaterialTheme.typography.bodySmall,
++                    modifier = Modifier.padding(horizontal = horizontal).clickable { YouTubeAccount.clearError() },
++                )
++            }
++        }
+         if (tab != 2) {
+             SearchField(Modifier.padding(horizontal = horizontal))
+             Spacer(Modifier.height(10.dp))
+@@ -242,12 +268,16 @@ private fun HomeTab() {
+     val loading by YouTubeRepository.homeLoading.collectAsState()
+     val saved by YouTubeRepository.saved.collectAsState()
+     val hideShorts by YouTubePrefs.hideShorts.value.collectAsState()
+-    LaunchedEffect(Unit) { YouTubeRepository.loadHome() }
++    val account by YouTubeAccount.state.collectAsState()
++    LaunchedEffect(account.signedIn) { YouTubeRepository.loadHome() }
+     LazyColumn(
+         modifier = Modifier.fillMaxSize(),
+         contentPadding = PaddingValues(bottom = 24.dp),
+         verticalArrangement = Arrangement.spacedBy(20.dp),
+     ) {
++        if (!account.signedIn) {
++            item(key = "sign-in") { YouTubeAccountPanel(Modifier.padding(horizontal = horizontal)) }
++        }
+         if (saved.continueWatching.isNotEmpty()) {
+             item(key = "continue") {
+                 Column {
+@@ -296,9 +326,13 @@ private fun SubscriptionsTab() {
+     val saved by YouTubeRepository.saved.collectAsState()
+     val feed by YouTubeRepository.subsFeed.collectAsState()
+     val loading by YouTubeRepository.subsLoading.collectAsState()
+-    LaunchedEffect(saved.subscriptions) { YouTubeRepository.loadSubscriptions() }
+-    if (saved.subscriptions.isEmpty()) {
+-        EmptyState("No subscriptions yet. Open a channel and tap Subscribe. They are kept on this device.", null) {}
++    val account by YouTubeAccount.state.collectAsState()
++    LaunchedEffect(saved.subscriptions, account.signedIn) { YouTubeRepository.loadSubscriptions() }
++    if (!account.signedIn && saved.subscriptions.isEmpty()) {
++        Column(Modifier.fillMaxWidth().padding(horizontal = horizontal), verticalArrangement = Arrangement.spacedBy(12.dp)) {
++            YouTubeAccountPanel()
++            EmptyState("No subscriptions yet. Open a channel and tap Subscribe. They are kept on this device.", null) {}
++        }
+         return
+     }
+     LazyColumn(
+@@ -309,7 +343,7 @@ private fun SubscriptionsTab() {
+         item(key = "refresh") {
+             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                 Text(
+-                    text = "${saved.subscriptions.size} channels",
++                    text = if (account.signedIn) "Your subscriptions" else "${saved.subscriptions.size} channels",
+                     color = tokens.colors.textMuted,
+                     style = MaterialTheme.typography.bodySmall,
+                     modifier = Modifier.weight(1f),
+@@ -341,11 +375,49 @@ private fun SavedTab() {
+     val tokens = MaterialTheme.nuvio
+     val horizontal = tokens.spacing.screenHorizontal
+     val saved by YouTubeRepository.saved.collectAsState()
++    val account by YouTubeAccount.state.collectAsState()
++    val lists by YouTubeRepository.accountLists.collectAsState()
++    LaunchedEffect(account.signedIn) { YouTubeRepository.loadAccountLists() }
+     LazyColumn(
+         modifier = Modifier.fillMaxSize(),
+         contentPadding = PaddingValues(start = horizontal, end = horizontal, bottom = 24.dp),
+         verticalArrangement = Arrangement.spacedBy(16.dp),
+     ) {
++        if (account.signedIn) {
++            item(key = "acct-title") {
++                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
++                    Box(Modifier.weight(1f)) { SectionTitle("History", 0.dp) }
++                    TextButton(onClick = { YouTubeRepository.loadAccountLists(force = true) }, enabled = !lists.loading) { Text("Refresh") }
++                }
++            }
++            if (lists.loading && !lists.loaded) item(key = "acct-loading") { CenteredLoader() }
++            if (lists.loaded && lists.history.isEmpty()) {
++                item(key = "acct-history-empty") {
++                    Text("No watch history on your account.", color = tokens.colors.textMuted, style = MaterialTheme.typography.bodyMedium)
++                }
++            }
++            if (lists.history.isNotEmpty()) {
++                item(key = "acct-history") {
++                    LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
++                        items(lists.history.take(30), key = { it.key }) { item -> ItemCard(item, Modifier.width(240.dp), siblings = emptyList()) }
++                    }
++                }
++            }
++            if (lists.playlists.isNotEmpty()) {
++                item(key = "acct-playlists-title") { SectionTitle("Library playlists", 0.dp) }
++                item(key = "acct-playlists") {
++                    LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
++                        items(lists.playlists, key = { it.key }) { item -> ItemCard(item, Modifier.width(240.dp), siblings = emptyList()) }
++                    }
++                }
++            }
++            if (lists.watchLater.isNotEmpty()) {
++                item(key = "acct-later-title") { SectionTitle("Watch later (account)", 0.dp) }
++                items(lists.watchLater, key = { "wl-" + it.key }) { item -> ItemCard(item, Modifier.fillMaxWidth(), siblings = emptyList()) }
++            }
++        } else {
++            item(key = "acct-sign-in") { YouTubeAccountPanel() }
++        }
+         if (saved.subscriptions.isNotEmpty()) {
+             item(key = "subs") {
+                 Column {
