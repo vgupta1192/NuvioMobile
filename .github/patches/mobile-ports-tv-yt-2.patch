@@ -70,7 +70,7 @@ index bc82adfc3..25f6c1216 100644
          val durationMs = snapshot.durationMs.coerceAtLeast(0L)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeAccount.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeAccount.kt
 new file mode 100644
-index 000000000..7ecad7e85
+index 000000000..71f69879a
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeAccount.kt
 @@ -0,0 +1,354 @@
@@ -128,7 +128,7 @@ index 000000000..7ecad7e85
 +object YouTubeAccount {
 +    private const val CLIENT_ID = "861556708454-d6dlm3lh05idd8npek18k6be8ba3oc68.apps.googleusercontent.com"
 +    private const val CLIENT_SECRET = "SboVhoG9s0rNafixCSGGKXAT"
-+    private const val SCOPE = "https://www.googleapis.com/auth/youtube-paid-content"
++    private const val SCOPE = "https://www.googleapis.com/auth/youtube"
 +    private const val DEVICE_CODE_URL = "https://www.youtube.com/o/oauth2/device/code"
 +    private const val TOKEN_URL = "https://www.youtube.com/o/oauth2/token"
 +    private const val REVOKE_URL = "https://oauth2.googleapis.com/revoke"
@@ -430,10 +430,10 @@ index 000000000..7ecad7e85
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeAccountUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeAccountUi.kt
 new file mode 100644
-index 000000000..d2e4c1dfd
+index 000000000..ac194f098
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeAccountUi.kt
-@@ -0,0 +1,117 @@
+@@ -0,0 +1,121 @@
 +package com.nuvio.app.features.youtube
 +
 +import androidx.compose.foundation.background
@@ -521,9 +521,13 @@ index 000000000..d2e4c1dfd
 +                    color = tokens.colors.textMuted,
 +                    style = MaterialTheme.typography.bodySmall,
 +                )
-+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-+                    Button(onClick = { runCatching { uriHandler.openUri(url) } }) { Text("Open youtube.com/activate") }
-+                    OutlinedButton(onClick = { clipboard.setText(AnnotatedString(state.userCode)) }) { Text("Copy code") }
++                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
++                    Button(onClick = { runCatching { uriHandler.openUri(url) } }, modifier = Modifier.fillMaxWidth()) {
++                        Text("Open sign-in page", maxLines = 1)
++                    }
++                    OutlinedButton(onClick = { clipboard.setText(AnnotatedString(state.userCode)) }, modifier = Modifier.fillMaxWidth()) {
++                        Text("Copy code", maxLines = 1)
++                    }
 +                }
 +                TextButton(onClick = { YouTubeAccount.cancelSignIn() }) { Text("Cancel") }
 +            }
@@ -552,7 +556,7 @@ index 000000000..d2e4c1dfd
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInnertube.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInnertube.kt
-index d4ffcff5d..ecff88f00 100644
+index d4ffcff5d..6fa9b0291 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInnertube.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInnertube.kt
 @@ -10,8 +10,10 @@ import kotlinx.serialization.json.JsonElement
@@ -580,7 +584,7 @@ index d4ffcff5d..ecff88f00 100644
      private const val BASE = "https://www.youtube.com"
      const val VIDEOS_ONLY = "EgIQAQ=="
      const val LIVE_ONLY = "EgJAAQ=="
-@@ -102,14 +107,40 @@ internal object YtInnertube {
+@@ -102,38 +107,69 @@ internal object YtInnertube {
          }
      }
  
@@ -603,7 +607,10 @@ index d4ffcff5d..ecff88f00 100644
 +                YouTubeAccount.reportError("YouTube refused the sign-in. Sign out and sign in again.")
 +            }
 +        }
-+        if (response.status !in 200..299) return null
++        if (response.status !in 200..299) {
++            if (authed) YouTubeAccount.reportError("YouTube account call $endpoint failed (HTTP ${response.status}). If this keeps happening, sign out and sign in again.")
++            return null
++        }
 +        return runCatching { json.parseToJsonElement(response.body) as? JsonObject }.getOrNull()
 +    }
 +
@@ -623,8 +630,11 @@ index d4ffcff5d..ecff88f00 100644
 +                    put("clientVersion", if (tv) TV_CLIENT_VERSION else clientVersion)
                      put("hl", "en")
                      put("gl", "US")
-                     if (visitor != null) put("visitorData", visitor)
-@@ -119,21 +150,23 @@ internal object YtInnertube {
+-                    if (visitor != null) put("visitorData", visitor)
++                    if (visitor != null && !tv) put("visitorData", visitor)
+                 }
+             }
+             fill()
          }.toString()
          val headers = buildMap {
              put("Content-Type", "application/json")
@@ -633,8 +643,9 @@ index d4ffcff5d..ecff88f00 100644
              put("Origin", BASE)
              put("Accept-Language", "en-US,en;q=0.9")
 -            put("Cookie", "SOCS=CAI")
+-            if (visitor != null) put("X-Goog-Visitor-Id", visitor)
 +            if (token != null) put("Authorization", "Bearer $token") else put("Cookie", "SOCS=CAI")
-             if (visitor != null) put("X-Goog-Visitor-Id", visitor)
++            if (visitor != null && !tv) put("X-Goog-Visitor-Id", visitor)
          }
 -        val response = httpRequestRaw(
 -            method = "POST",
@@ -659,7 +670,7 @@ index d4ffcff5d..ecff88f00 100644
      }
  
      suspend fun search(query: String, params: String? = null): YtPageResult? {
-@@ -160,11 +193,63 @@ internal object YtInnertube {
+@@ -160,11 +196,63 @@ internal object YtInnertube {
  
      suspend fun playlist(playlistId: String): YtPageResult? {
          val browseId = if (playlistId.startsWith("VL")) playlistId else "VL$playlistId"
@@ -670,8 +681,8 @@ index d4ffcff5d..ecff88f00 100644
          val title = path(root, "header", "pageHeaderRenderer")?.asObj()?.str("pageTitle") ?: ""
 -        return parse(root, "browse").copy(title = title)
 +        return parse(root, "browse", authed).copy(title = title)
-     }
- 
++    }
++
 +    // --- account (signed in, TV client) ---
 +
 +    /** A personal feed such as FEwhat_to_watch, FEsubscriptions, FEhistory or FElibrary. */
@@ -689,8 +700,8 @@ index d4ffcff5d..ecff88f00 100644
 +    suspend fun accountName(): String? {
 +        val root = post("account/accounts_list", authed = true) { } ?: return null
 +        return text(findObject(root, "accountName")).takeIf { it.isNotBlank() }
-+    }
-+
+     }
+ 
 +    suspend fun subscribe(channelId: String): Boolean =
 +        post("subscription/subscribe", authed = true) {
 +            putJsonArray("channelIds") { add(channelId) }
@@ -725,7 +736,7 @@ index d4ffcff5d..ecff88f00 100644
      /** Videos YouTube suggests after [videoId] (the "Up next" list). */
      suspend fun related(videoId: String): List<YtItem> {
          val root = post("next") { put("videoId", videoId) } ?: return emptyList()
-@@ -180,16 +265,19 @@ internal object YtInnertube {
+@@ -180,16 +268,19 @@ internal object YtInnertube {
      }
  
      suspend fun continuation(token: String): YtPageResult? {
@@ -750,7 +761,7 @@ index d4ffcff5d..ecff88f00 100644
          val items = LinkedHashMap<String, YtItem>()
          var continuation: String? = null
          fun walk(element: JsonElement?) {
-@@ -199,6 +287,7 @@ internal object YtInnertube {
+@@ -199,6 +290,7 @@ internal object YtInnertube {
                      when (key) {
                          "videoRenderer", "gridVideoRenderer", "compactVideoRenderer", "playlistVideoRenderer" ->
                              obj?.let(::videoRenderer)?.let { items.putIfAbsent(it.key, it) }
@@ -758,7 +769,7 @@ index d4ffcff5d..ecff88f00 100644
                          "lockupViewModel" -> obj?.let(::lockup)?.let { items.putIfAbsent(it.key, it) }
                          "shortsLockupViewModel" -> obj?.let(::shortsLockup)?.let { items.putIfAbsent(it.key, it) }
                          "playlistRenderer", "gridPlaylistRenderer" ->
-@@ -209,7 +298,12 @@ internal object YtInnertube {
+@@ -209,7 +301,12 @@ internal object YtInnertube {
                              if (continuation == null && endpoint != "next") {
                                  val token = path(obj, "continuationEndpoint", "continuationCommand")?.asObj()?.str("token")
                                      ?: findString(obj, "token")
@@ -772,7 +783,7 @@ index d4ffcff5d..ecff88f00 100644
                              }
                          }
                          else -> walk(value)
-@@ -322,6 +416,51 @@ internal object YtInnertube {
+@@ -322,6 +419,51 @@ internal object YtInnertube {
          )
      }
  
@@ -825,7 +836,7 @@ index d4ffcff5d..ecff88f00 100644
          val id = p.str("playlistId") ?: return null
          if (id.startsWith("RD")) return null
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeRepository.kt
-index 733a29756..12314b4c1 100644
+index 733a29756..c1a9acb3e 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeRepository.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeRepository.kt
 @@ -50,6 +50,15 @@ data class YtSaved(
@@ -983,7 +994,7 @@ index 733a29756..12314b4c1 100644
      // --- feeds ---
  
      fun loadHome(force: Boolean = false) {
-@@ -194,6 +307,17 @@ object YouTubeRepository {
+@@ -194,6 +307,18 @@ object YouTubeRepository {
          _homeLoading.value = true
          if (force) _homeRows.value = emptyList()
          scope.launch {
@@ -997,11 +1008,12 @@ index 733a29756..12314b4c1 100644
 +                    _homeLoading.value = false
 +                    return@launch
 +                }
++                if (page != null) YouTubeAccount.reportError("YouTube sent no recommendations for your account yet; showing topic rows.")
 +            }
              val gate = Semaphore(3)
              homeTopics.mapIndexed { index, (title, query) ->
                  async {
-@@ -212,10 +336,20 @@ object YouTubeRepository {
+@@ -212,10 +337,20 @@ object YouTubeRepository {
  
      fun loadSubscriptions(force: Boolean = false) {
          ensureLoaded()
