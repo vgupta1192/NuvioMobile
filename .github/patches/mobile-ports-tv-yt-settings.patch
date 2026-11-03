@@ -1,0 +1,1280 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt
+index 2aa5ec4ea..724f5b83a 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt
+@@ -96,7 +96,7 @@ object ForkPlayerToolbar : ForkButtonLayout(
+         ForkToolbarButton("playback_info", "Stream info"),
+         ForkToolbarButton("video_settings", "Video settings"),
+         ForkToolbarButton("submit_intro", "Submit intro"),
+-    ),
++    ) + YouTubeToolbarButtons,
+ )
+ 
+ /** Top-right icons of the legacy player layout. The close button always stays. */
+@@ -130,5 +130,5 @@ object ForkLegacyBottomButtons : ForkButtonLayout(
+         ForkToolbarButton("episodes", "Episodes"),
+         ForkToolbarButton("quality", "Quality"),
+         ForkToolbarButton("rate", "Rate"),
+-    ),
++    ) + YouTubeToolbarButtons,
+ )
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
+index 3549c86df..c061ea657 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
+@@ -428,7 +428,7 @@ internal fun playerControlActions(
+                 id = "submit_intro",
+             )
+         },
+-    )
++    ) + youTubeControlActions()
+ }
+ 
+ internal data class PlayerControlAction(
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+index b787ad7da..99fec5b33 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControls.kt
+@@ -860,6 +860,7 @@ private fun ProgressControls(
+                     horizontalArrangement = Arrangement.Center,
+                     verticalAlignment = Alignment.CenterVertically,
+                 ) {
++                    val ytActions = youTubeControlActions()
+                     val pills = ForkLegacyBottomButtons.arrange(
+                         buildList<Pair<String, @Composable () -> Unit>> {
+                             add("resize") {
+@@ -926,6 +927,16 @@ private fun ProgressControls(
+                                 onClick = onRateClick,
+                             )
+                             }
++                            ytActions.forEach { action ->
++                                val actionIcon = action.icon
++                                if (actionIcon != null) add(action.id) {
++                                    PlayerActionPillButton(
++                                        label = action.description,
++                                        icon = actionIcon,
++                                        onClick = action.onClick,
++                                    )
++                                }
++                            }
+                         },
+                         bottomLayout,
+                     ) { it.first }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+index a88de9085..d3b084e5a 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+@@ -372,7 +372,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+             folded = fold != null,
+             modifier = panelModifier,
+         )
+-        // YouTube-only options: shown when the video came from the YouTube tab, hidden for everything else.
++        // YouTube-only logic (SponsorBlock, loop, autoplay); its buttons sit in the normal toolbar and only exist for YouTube videos.
+         if (activeProviderName == "YouTube" && !activeVideoId.isNullOrBlank() && !isInPip) {
+             com.nuvio.app.features.youtube.YouTubePlayerOptions(
+                 videoId = activeVideoId.orEmpty(),
+@@ -381,11 +381,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+                 thumb = poster.orEmpty(),
+                 positionMs = playbackSnapshot.positionMs,
+                 isEnded = playbackSnapshot.isEnded,
+-                controlsVisible = controlsVisible && !playerControlsLocked,
+                 controller = playerController,
+-                modifier = Modifier
+-                    .align(Alignment.TopEnd)
+-                    .padding(top = 72.dp, end = horizontalSafePadding + 16.dp),
+             )
+         }
+         Box(modifier = videoModifier) {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerYouTubeActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerYouTubeActions.kt
+new file mode 100644
+index 000000000..b2a6fe8a3
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerYouTubeActions.kt
+@@ -0,0 +1,81 @@
++package com.nuvio.app.features.player
++
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
++import androidx.compose.material.icons.rounded.FastForward
++import androidx.compose.material.icons.rounded.HowToReg
++import androidx.compose.material.icons.rounded.PersonAdd
++import androidx.compose.material.icons.rounded.PlayCircle
++import androidx.compose.material.icons.rounded.Repeat
++import androidx.compose.material.icons.rounded.RepeatOne
++import androidx.compose.material.icons.rounded.ThumbUp
++import androidx.compose.material.icons.rounded.WatchLater
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.collectAsState
++import androidx.compose.runtime.getValue
++import androidx.compose.ui.graphics.Color
++import com.nuvio.app.features.youtube.YouTubePlayerPrefs
++import com.nuvio.app.features.youtube.YouTubePlayerSession
++import com.nuvio.app.features.youtube.YouTubePrefs
++import com.nuvio.app.features.youtube.YouTubeRepository
++
++/** Toolbar ids of the YouTube-only buttons. They exist only while a YouTube video plays. */
++internal val YouTubeToolbarButtons = listOf(
++    ForkToolbarButton("yt_subscribe", "YouTube: Subscribe"),
++    ForkToolbarButton("yt_like", "YouTube: Like"),
++    ForkToolbarButton("yt_watch_later", "YouTube: Watch later"),
++    ForkToolbarButton("yt_loop", "YouTube: Loop video"),
++    ForkToolbarButton("yt_sponsor", "YouTube: Skip sponsors"),
++    ForkToolbarButton("yt_autoplay", "YouTube: Autoplay next"),
++    ForkToolbarButton("yt_upnext", "YouTube: Up next"),
++)
++
++/** YouTube-only player buttons; empty for every normal video. */
++@Composable
++internal fun youTubeControlActions(): List<PlayerControlAction> {
++    val session by YouTubePlayerSession.state.collectAsState()
++    val saved by YouTubeRepository.saved.collectAsState()
++    val loop by YouTubePlayerPrefs.loop.value.collectAsState()
++    val sponsor by YouTubePlayerPrefs.sponsorSkip.value.collectAsState()
++    val autoplay by YouTubePrefs.autoplay.value.collectAsState()
++    if (!session.active) return emptyList()
++    val on = MaterialTheme.colorScheme.primary
++    val subscribed = session.channelId.isNotBlank() && saved.subscriptions.any { it.id == session.channelId }
++    val watchLater = saved.watchLater.any { it.id == session.videoId }
++    return listOfNotNull(
++        if (session.channelId.isNotBlank()) {
++            PlayerControlAction(
++                if (subscribed) "Subscribed" else "Subscribe", { YouTubePlayerSession.toggleSubscribe() },
++                icon = if (subscribed) Icons.Rounded.HowToReg else Icons.Rounded.PersonAdd,
++                id = "yt_subscribe",
++                tint = if (subscribed) on else Color.White,
++            )
++        } else null,
++        PlayerControlAction(
++            if (session.liked) "Liked" else "Like", { YouTubePlayerSession.toggleLike() },
++            icon = Icons.Rounded.ThumbUp, id = "yt_like", tint = if (session.liked) on else Color.White,
++        ),
++        PlayerControlAction(
++            if (watchLater) "Saved to Watch later" else "Watch later", { YouTubePlayerSession.toggleWatchLater() },
++            icon = Icons.Rounded.WatchLater, id = "yt_watch_later", tint = if (watchLater) on else Color.White,
++        ),
++        PlayerControlAction(
++            if (loop) "Loop on" else "Loop video", { YouTubePlayerPrefs.loop.set(!loop) },
++            icon = if (loop) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat, id = "yt_loop",
++            tint = if (loop) on else Color.White,
++        ),
++        PlayerControlAction(
++            if (sponsor) "Skip sponsors on" else "Skip sponsors", { YouTubePlayerPrefs.sponsorSkip.set(!sponsor) },
++            icon = Icons.Rounded.FastForward, id = "yt_sponsor", tint = if (sponsor) on else Color.White,
++        ),
++        PlayerControlAction(
++            if (autoplay) "Autoplay next on" else "Autoplay next", { YouTubePrefs.autoplay.set(!autoplay) },
++            icon = Icons.Rounded.PlayCircle, id = "yt_autoplay", tint = if (autoplay) on else Color.White,
++        ),
++        PlayerControlAction(
++            "Up next", { YouTubePlayerSession.update { it.copy(showUpNext = true) } },
++            icon = Icons.AutoMirrored.Rounded.PlaylistPlay, id = "yt_upnext",
++        ),
++    )
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt
+index 92144eecc..54d8e8c5a 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt
+@@ -1,26 +1,61 @@
+ package com.nuvio.app.features.settings
+ 
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.fillMaxWidth
+ import androidx.compose.foundation.layout.padding
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.rounded.KeyboardArrowDown
++import androidx.compose.material.icons.rounded.KeyboardArrowUp
++import androidx.compose.material3.AlertDialog
++import androidx.compose.material3.Icon
++import androidx.compose.material3.IconButton
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.OutlinedTextField
++import androidx.compose.material3.Switch
++import androidx.compose.material3.Text
++import androidx.compose.material3.TextButton
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.LaunchedEffect
+ import androidx.compose.runtime.collectAsState
+ import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
++import androidx.compose.ui.text.style.TextOverflow
+ import androidx.compose.ui.unit.dp
++import com.nuvio.app.features.youtube.ForkStringPref
++import com.nuvio.app.features.youtube.YouTubeAccount
+ import com.nuvio.app.features.youtube.YouTubeAccountPanel
++import com.nuvio.app.features.youtube.YouTubePlayerPrefs
+ import com.nuvio.app.features.youtube.YouTubePrefs
++import com.nuvio.app.features.youtube.YouTubeSettings
+ 
+-/** Fork settings: YouTube tab (Extra menu entry, autoplay, Shorts filter, Google sign-in). */
++/** Fork settings: YouTube tab. Same groups as the 1T reference app: Account, Playback, SponsorBlock, Feeds, Tabs, Hidden words. */
+ @Composable
+ internal fun ExtraYouTubeSection(isTablet: Boolean) {
+     LaunchedEffect(Unit) {
+-        YouTubePrefs.tabEnabled.ensureLoaded()
+-        YouTubePrefs.autoplay.ensureLoaded()
+-        YouTubePrefs.hideShorts.ensureLoaded()
++        YouTubeSettings.ensureLoaded()
++        YouTubePlayerPrefs.loop.ensureLoaded()
++        YouTubeAccount.ensureLoaded()
+     }
+     val tabEnabled by YouTubePrefs.tabEnabled.value.collectAsState()
+     val autoplay by YouTubePrefs.autoplay.value.collectAsState()
+     val hideShorts by YouTubePrefs.hideShorts.value.collectAsState()
++    val lastTabOn by YouTubeSettings.rememberLastTab.value.collectAsState()
++    val sponsorOn by YouTubePlayerPrefs.sponsorSkip.value.collectAsState()
++    val sponsorAsk by YouTubeSettings.sponsorAsk.value.collectAsState()
++    val sponsorNotice by YouTubeSettings.sponsorNotice.value.collectAsState()
++    val categories by YouTubeSettings.sponsorCategories.value.collectAsState()
++    val hideWatched by YouTubeSettings.hideWatched.value.collectAsState()
++    val hideUpcoming by YouTubeSettings.hideUpcoming.value.collectAsState()
++    val account by YouTubeAccount.state.collectAsState()
++    var showAccounts by remember { mutableStateOf(false) }
++
+     SettingsSection(title = "YouTube", isTablet = isTablet) {
+         SettingsGroup(isTablet = isTablet) {
+             SettingsSwitchRow(
+@@ -30,7 +65,27 @@ internal fun ExtraYouTubeSection(isTablet: Boolean) {
+                 isTablet = isTablet,
+                 onCheckedChange = { YouTubePrefs.tabEnabled.set(it) },
+             )
+-            SettingsGroupDivider(isTablet = isTablet)
++        }
++    }
++
++    SettingsSection(title = "Account", isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            if (account.signedIn) {
++                SettingsNavigationRow(
++                    title = account.label.ifBlank { "YouTube account" },
++                    description = "Switch or sign out",
++                    isTablet = isTablet,
++                    onClick = { showAccounts = true },
++                )
++            } else {
++                // Google account: personal Home, Subscriptions, history and Watch later (kept on this device only).
++                YouTubeAccountPanel(Modifier.padding(12.dp))
++            }
++        }
++    }
++
++    SettingsSection(title = "Playback", isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
+             SettingsSwitchRow(
+                 title = "Autoplay next video",
+                 description = "Start the first Up next video when one ends.",
+@@ -40,15 +95,217 @@ internal fun ExtraYouTubeSection(isTablet: Boolean) {
+             )
+             SettingsGroupDivider(isTablet = isTablet)
+             SettingsSwitchRow(
+-                title = "Hide Shorts in lists",
++                title = "Open on the last tab",
++                description = "Reopen the tab you used last instead of the first one.",
++                checked = lastTabOn,
++                isTablet = isTablet,
++                onCheckedChange = { YouTubeSettings.rememberLastTab.set(it) },
++            )
++        }
++    }
++
++    SettingsSection(title = "SponsorBlock", isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            SettingsSwitchRow(
++                title = "Skip marked parts",
++                description = "Jump over sponsor and other marked segments.",
++                checked = sponsorOn,
++                isTablet = isTablet,
++                onCheckedChange = { YouTubePlayerPrefs.sponsorSkip.set(it) },
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Ask before skipping",
++                description = "Show a question instead of skipping on its own.",
++                checked = sponsorAsk,
++                enabled = sponsorOn,
++                isTablet = isTablet,
++                onCheckedChange = { YouTubeSettings.sponsorAsk.set(it) },
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Show a notice when skipping",
++                checked = sponsorNotice,
++                enabled = sponsorOn,
++                isTablet = isTablet,
++                onCheckedChange = { YouTubeSettings.sponsorNotice.set(it) },
++            )
++            val chosen = YouTubeSettings.categoryIds(categories)
++            YouTubeSettings.categories.forEach { category ->
++                SettingsGroupDivider(isTablet = isTablet)
++                SettingsSwitchRow(
++                    title = category.label,
++                    checked = category.id in chosen,
++                    enabled = sponsorOn,
++                    isTablet = isTablet,
++                    onCheckedChange = { YouTubeSettings.toggleCategory(category.id) },
++                )
++            }
++        }
++    }
++
++    SettingsSection(title = "Feeds", isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            SettingsSwitchRow(
++                title = "Hide Shorts",
+                 description = "Remove Shorts from Home rows and search results. The Shorts tab stays.",
+                 checked = hideShorts,
+                 isTablet = isTablet,
+                 onCheckedChange = { YouTubePrefs.hideShorts.set(it) },
+             )
+             SettingsGroupDivider(isTablet = isTablet)
+-            // Google account: personal Home, Subscriptions, history and Watch later (kept on this device only).
+-            YouTubeAccountPanel(Modifier.padding(12.dp))
++            SettingsSwitchRow(
++                title = "Hide videos you've watched",
++                description = "Uses the watch progress kept on this device.",
++                checked = hideWatched,
++                isTablet = isTablet,
++                onCheckedChange = { YouTubeSettings.hideWatched.set(it) },
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Hide upcoming videos",
++                description = "Remove scheduled streams and premieres that have not started.",
++                checked = hideUpcoming,
++                isTablet = isTablet,
++                onCheckedChange = { YouTubeSettings.hideUpcoming.set(it) },
++            )
+         }
+     }
++
++    YouTubeTabsSection(isTablet)
++
++    YouTubeListSection(
++        title = "Hidden words",
++        hint = "Hide videos whose title has this word",
++        pref = YouTubeSettings.hiddenWords,
++        isTablet = isTablet,
++    )
++    YouTubeListSection(
++        title = "Hidden channels",
++        hint = "Hide videos from this channel name",
++        pref = YouTubeSettings.hiddenChannels,
++        isTablet = isTablet,
++    )
++
++    if (showAccounts) {
++        YouTubeAccountsDialog(onDismiss = { showAccounts = false })
++    }
++}
++
++@Composable
++private fun YouTubeTabsSection(isTablet: Boolean) {
++    val order by YouTubeSettings.tabOrder.value.collectAsState()
++    val hidden by YouTubeSettings.hiddenTabs.value.collectAsState()
++    val ordered = YouTubeSettings.orderedTabs(order)
++    val off = hidden.split(',').map { it.trim() }.toSet()
++    SettingsSection(title = "Tabs", isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            ordered.forEachIndexed { index, id ->
++                if (index > 0) SettingsGroupDivider(isTablet = isTablet)
++                Row(
++                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
++                    verticalAlignment = Alignment.CenterVertically,
++                ) {
++                    Text(
++                        text = YouTubeSettings.tabs.first { it.first == id }.second,
++                        color = MaterialTheme.colorScheme.onSurface,
++                        style = MaterialTheme.typography.bodyLarge,
++                        modifier = Modifier.weight(1f),
++                    )
++                    IconButton(onClick = { YouTubeSettings.moveTab(id, -1) }, enabled = index > 0) {
++                        Icon(Icons.Rounded.KeyboardArrowUp, contentDescription = "Move up")
++                    }
++                    IconButton(onClick = { YouTubeSettings.moveTab(id, 1) }, enabled = index < ordered.lastIndex) {
++                        Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Move down")
++                    }
++                    Switch(checked = id !in off, onCheckedChange = { YouTubeSettings.setTabVisible(id, it) })
++                }
++            }
++        }
++    }
++}
++
++@Composable
++private fun YouTubeListSection(title: String, hint: String, pref: ForkStringPref, isTablet: Boolean) {
++    val stored by pref.value.collectAsState()
++    var input by remember { mutableStateOf("") }
++    val lines = YouTubeSettings.lines(stored)
++    SettingsSection(title = title, isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            Row(
++                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
++                verticalAlignment = Alignment.CenterVertically,
++                horizontalArrangement = Arrangement.spacedBy(8.dp),
++            ) {
++                OutlinedTextField(
++                    value = input,
++                    onValueChange = { input = it },
++                    label = { Text(hint) },
++                    singleLine = true,
++                    modifier = Modifier.weight(1f),
++                )
++                TextButton(onClick = {
++                    YouTubeSettings.addLine(pref, input)
++                    input = ""
++                }) { Text("Add") }
++            }
++            lines.forEach { line ->
++                Row(
++                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
++                    verticalAlignment = Alignment.CenterVertically,
++                ) {
++                    Text(
++                        text = line,
++                        color = MaterialTheme.colorScheme.onSurface,
++                        style = MaterialTheme.typography.bodyMedium,
++                        maxLines = 1,
++                        overflow = TextOverflow.Ellipsis,
++                        modifier = Modifier.weight(1f),
++                    )
++                    TextButton(onClick = { YouTubeSettings.removeLine(pref, line) }) { Text("Remove") }
++                }
++            }
++        }
++    }
++}
++
++/** "Who's watching?": the signed-in accounts, add another, sign out of the current one. */
++@Composable
++private fun YouTubeAccountsDialog(onDismiss: () -> Unit) {
++    val account by YouTubeAccount.state.collectAsState()
++    AlertDialog(
++        onDismissRequest = onDismiss,
++        title = { Text("Who's watching?") },
++        text = {
++            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
++                Text(
++                    text = account.label.ifBlank { "YouTube account" } + "  (current)",
++                    style = MaterialTheme.typography.bodyLarge,
++                    modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
++                )
++                account.others.forEachIndexed { index, label ->
++                    Text(
++                        text = label.ifBlank { "YouTube account" },
++                        style = MaterialTheme.typography.bodyLarge,
++                        modifier = Modifier
++                            .fillMaxWidth()
++                            .clickable {
++                                YouTubeAccount.switchTo(index)
++                                onDismiss()
++                            }
++                            .padding(vertical = 10.dp),
++                    )
++                }
++                TextButton(onClick = {
++                    YouTubeAccount.addAccount()
++                    onDismiss()
++                }) { Text("Add another account") }
++                TextButton(onClick = {
++                    YouTubeAccount.signOut()
++                    onDismiss()
++                }) { Text("Sign out") }
++            }
++        },
++        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
++    )
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeAccount.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeAccount.kt
+index 71f69879a..d425f265a 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeAccount.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeAccount.kt
+@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
+ import kotlinx.coroutines.sync.Mutex
+ import kotlinx.coroutines.sync.withLock
+ import kotlinx.serialization.Serializable
++import kotlinx.serialization.builtins.ListSerializer
+ import kotlinx.serialization.json.Json
+ import kotlinx.serialization.json.JsonObject
+ import kotlinx.serialization.json.JsonPrimitive
+@@ -33,6 +34,8 @@ data class YtAccountState(
+     val userCode: String = "",
+     val verificationUrl: String = "",
+     val error: String? = null,
++    /** Labels of the other signed-in accounts, in switch order. */
++    val others: List<String> = emptyList(),
+ )
+ 
+ @Serializable
+@@ -58,6 +61,7 @@ object YouTubeAccount {
+     private const val REVOKE_URL = "https://oauth2.googleapis.com/revoke"
+     private const val DEFAULT_ACTIVATE_URL = "https://www.youtube.com/activate"
+     private const val STORE_PATH = "youtube/account.json"
++    private const val OTHERS_PATH = "youtube/accounts-other.json"
+ 
+     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; isLenient = true }
+@@ -66,17 +70,31 @@ object YouTubeAccount {
+     private val _state = MutableStateFlow(YtAccountState())
+     val state: StateFlow<YtAccountState> = _state.asStateFlow()
+     private var stored = StoredAccount()
++    private var others = listOf<StoredAccount>()
+     private var loaded = false
+     private var signInJob: Job? = null
+ 
+     fun ensureLoaded() {
+         if (loaded) return
+         loaded = true
+-        val raw = runCatching { AppFileCache.read(STORE_PATH) }.getOrNull() ?: return
+-        val account = runCatching { json.decodeFromString(StoredAccount.serializer(), raw) }.getOrNull() ?: return
+-        stored = account
+-        if (account.refreshToken.isNotBlank()) {
+-            _state.update { it.copy(signedIn = true, label = account.label) }
++        runCatching { AppFileCache.read(OTHERS_PATH) }.getOrNull()?.let { raw ->
++            others = runCatching { json.decodeFromString(ListSerializer(StoredAccount.serializer()), raw) }.getOrNull().orEmpty()
++        }
++        val raw = runCatching { AppFileCache.read(STORE_PATH) }.getOrNull()
++        val account = raw?.let { runCatching { json.decodeFromString(StoredAccount.serializer(), it) }.getOrNull() }
++        if (account != null) stored = account
++        publish()
++    }
++
++    /** Pushes [stored] and [others] to the UI state. */
++    private fun publish(error: String? = null) {
++        _state.update {
++            it.copy(
++                signedIn = stored.refreshToken.isNotBlank(),
++                label = stored.label,
++                others = others.map { account -> account.label.ifBlank { "YouTube account" } },
++                error = error ?: it.error,
++            )
+         }
+     }
+ 
+@@ -88,6 +106,7 @@ object YouTubeAccount {
+ 
+     private fun persist() {
+         runCatching { AppFileCache.write(STORE_PATH, json.encodeToString(StoredAccount.serializer(), stored)) }
++        runCatching { AppFileCache.write(OTHERS_PATH, json.encodeToString(ListSerializer(StoredAccount.serializer()), others)) }
+     }
+ 
+     fun reportError(message: String) {
+@@ -102,7 +121,7 @@ object YouTubeAccount {
+ 
+     fun startSignIn() {
+         ensureLoaded()
+-        if (signInJob?.isActive == true || _state.value.signedIn) return
++        if (signInJob?.isActive == true || stored.refreshToken.isNotBlank()) return
+         _state.update { it.copy(busy = true, error = null, userCode = "", verificationUrl = "") }
+         signInJob = scope.launch {
+             try {
+@@ -119,10 +138,48 @@ object YouTubeAccount {
+         signInJob?.cancel()
+         signInJob = null
+         _state.update { it.copy(busy = false, userCode = "", verificationUrl = "") }
++        restoreAfterFailedAdd()
+     }
+ 
+     private fun fail(message: String) {
+         _state.update { it.copy(busy = false, userCode = "", verificationUrl = "", error = message) }
++        restoreAfterFailedAdd()
++    }
++
++    /** "Add another account" parks the active one; if the sign-in does not finish, bring it back. */
++    private fun restoreAfterFailedAdd() {
++        if (stored.refreshToken.isNotBlank() || others.isEmpty()) return
++        val back = others.last()
++        others = others.dropLast(1)
++        stored = back
++        persist()
++        publish()
++    }
++
++    /** Starts a sign-in for one more account; the active account stays in the list. */
++    fun addAccount() {
++        ensureLoaded()
++        if (signInJob?.isActive == true) return
++        if (stored.refreshToken.isNotBlank()) {
++            others = others + stored
++            stored = StoredAccount(deviceId = stored.deviceId)
++            persist()
++            publish()
++            YouTubeRepository.onAccountChanged()
++        }
++        startSignIn()
++    }
++
++    /** Makes the [index]th other account the active one; the current one moves into the list. */
++    fun switchTo(index: Int) {
++        ensureLoaded()
++        if (index !in others.indices) return
++        val next = others[index]
++        others = others.toMutableList().also { it[index] = stored }
++        stored = next
++        persist()
++        publish()
++        YouTubeRepository.onAccountChanged()
+     }
+ 
+     private suspend fun runSignIn() {
+@@ -240,9 +297,11 @@ object YouTubeAccount {
+                 }
+             }
+         }
+-        stored = StoredAccount(deviceId = stored.deviceId)
++        stored = others.firstOrNull() ?: StoredAccount(deviceId = stored.deviceId)
++        others = others.drop(1)
+         persist()
+-        _state.value = YtAccountState()
++        _state.update { it.copy(signedIn = false, label = "", busy = false, userCode = "", verificationUrl = "", error = null) }
++        publish()
+         YouTubeRepository.onAccountChanged()
+     }
+ 
+@@ -291,7 +350,7 @@ object YouTubeAccount {
+             // The user revoked access or the token aged out: drop the session instead of retrying forever.
+             stored = StoredAccount(deviceId = stored.deviceId)
+             persist()
+-            _state.value = YtAccountState(error = "Your YouTube session expired. Sign in again.")
++            publish("Your YouTube session expired. Sign in again.")
+             YouTubeRepository.onAccountChanged()
+         } else if (status == 0) {
+             reportError("Could not reach Google to refresh the YouTube sign-in.")
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
+index b8067f635..51b2c9a2c 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
+@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
+ import androidx.compose.foundation.layout.Box
+ import androidx.compose.foundation.layout.Column
+ import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.fillMaxSize
+ import androidx.compose.foundation.layout.fillMaxWidth
+ import androidx.compose.foundation.layout.heightIn
+ import androidx.compose.foundation.layout.padding
+@@ -13,10 +14,10 @@ import androidx.compose.foundation.rememberScrollState
+ import androidx.compose.foundation.shape.RoundedCornerShape
+ import androidx.compose.foundation.verticalScroll
+ import androidx.compose.material3.MaterialTheme
+-import androidx.compose.material3.Switch
+ import androidx.compose.material3.Text
+ import androidx.compose.material3.TextButton
+ import androidx.compose.runtime.Composable
++import androidx.compose.runtime.DisposableEffect
+ import androidx.compose.runtime.LaunchedEffect
+ import androidx.compose.runtime.collectAsState
+ import androidx.compose.runtime.getValue
+@@ -32,6 +33,10 @@ import androidx.compose.ui.window.Dialog
+ import com.nuvio.app.features.addons.httpRequestRaw
+ import com.nuvio.app.features.player.PlayerEngineController
+ import com.nuvio.app.features.settings.ForkBoolPref
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import kotlinx.coroutines.flow.update
+ import kotlinx.coroutines.launch
+ import kotlinx.serialization.json.Json
+ import kotlinx.serialization.json.JsonArray
+@@ -48,7 +53,6 @@ import kotlinx.serialization.json.doubleOrNull
+ object YouTubePlayerPrefs {
+     val sponsorSkip = ForkBoolPref("settings/youtube_player_sponsorblock", true)
+     val loop = ForkBoolPref("settings/youtube_player_loop", false)
+-    val autoplayNext = ForkBoolPref("settings/youtube_player_autoplay_next", true)
+ }
+ 
+ /** Set by the app shell: opens another YouTube video in the player. */
+@@ -63,8 +67,11 @@ private object YouTubeSponsorBlock {
+     private val cache = mutableMapOf<String, List<SponsorSegment>>()
+ 
+     suspend fun segments(videoId: String): List<SponsorSegment> {
+-        cache[videoId]?.let { return it }
+-        val categories = "%5B%22sponsor%22%2C%22selfpromo%22%2C%22interaction%22%2C%22intro%22%2C%22outro%22%5D"
++        val chosen = YouTubeSettings.categoryIds(YouTubeSettings.sponsorCategories.current()).sorted()
++        if (chosen.isEmpty()) return emptyList()
++        val categories = "%5B" + chosen.joinToString("%2C") { "%22$it%22" } + "%5D"
++        val cacheKey = "$videoId|$categories"
++        cache[cacheKey]?.let { return it }
+         val result = runCatching {
+             val response = httpRequestRaw(
+                 method = "GET",
+@@ -86,11 +93,73 @@ private object YouTubeSponsorBlock {
+                 )
+             }.filter { it.endMs > it.startMs }
+         }.getOrDefault(emptyList())
+-        cache[videoId] = result
++        cache[cacheKey] = result
+         return result
+     }
+ }
+ 
++/** What the player toolbar buttons of a YouTube video read and change. Empty videoId = not a YouTube video. */
++data class YouTubeSessionState(
++    val videoId: String = "",
++    val title: String = "",
++    val channel: String = "",
++    val thumb: String = "",
++    val channelId: String = "",
++    val related: List<YtItem> = emptyList(),
++    val liked: Boolean = false,
++    val showUpNext: Boolean = false,
++    val skipNotice: String = "",
++    val pendingSkip: Long = -1L,
++) {
++    val active: Boolean get() = videoId.isNotBlank()
++}
++
++object YouTubePlayerSession {
++    private val _state = MutableStateFlow(YouTubeSessionState())
++    val state: StateFlow<YouTubeSessionState> = _state.asStateFlow()
++    private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
++
++    fun update(block: (YouTubeSessionState) -> YouTubeSessionState) = _state.update(block)
++
++    fun begin(videoId: String, title: String, channel: String, thumb: String) {
++        _state.value = YouTubeSessionState(videoId = videoId, title = title, channel = channel, thumb = thumb)
++    }
++
++    fun end() {
++        _state.value = YouTubeSessionState()
++    }
++
++    fun toggleLike() {
++        val now = _state.value
++        if (!now.active) return
++        val target = !now.liked
++        _state.update { it.copy(liked = target) }
++        scope.launch {
++            if (!runCatching { YtInnertube.like(now.videoId, target) }.getOrDefault(false)) {
++                _state.update { if (it.videoId == now.videoId) it.copy(liked = !target) else it }
++            }
++        }
++    }
++
++    fun toggleSubscribe() {
++        val now = _state.value
++        if (now.channelId.isNotBlank()) YouTubeRepository.toggleSubscription(now.channelId, now.channel)
++    }
++
++    fun toggleWatchLater() {
++        val now = _state.value
++        if (!now.active) return
++        YouTubeRepository.toggleWatchLater(
++            YtItem(id = now.videoId, title = now.title, channel = now.channel, channelId = now.channelId, thumb = now.thumb),
++        )
++    }
++}
++
++/**
++ * Logic host for a YouTube video in the app's own player: SponsorBlock skipping, loop, autoplay next
++ * and the Up next list. It draws nothing except dialogs; the buttons live in the normal player toolbar
++ * (see [youTubeControlActions]), so normal videos never see them.
++ */
+ @Composable
+ fun YouTubePlayerOptions(
+     videoId: String,
+@@ -99,40 +168,46 @@ fun YouTubePlayerOptions(
+     thumb: String,
+     positionMs: Long,
+     isEnded: Boolean,
+-    controlsVisible: Boolean,
+     controller: PlayerEngineController?,
+-    modifier: Modifier = Modifier,
+ ) {
+     val sponsorSkip by YouTubePlayerPrefs.sponsorSkip.value.collectAsState()
++    val sponsorAsk by YouTubeSettings.sponsorAsk.value.collectAsState()
++    val sponsorNotice by YouTubeSettings.sponsorNotice.value.collectAsState()
+     val loop by YouTubePlayerPrefs.loop.value.collectAsState()
+-    val autoplayNext by YouTubePlayerPrefs.autoplayNext.value.collectAsState()
+-    val saved by YouTubeRepository.saved.collectAsState()
+-    var showSheet by remember { mutableStateOf(false) }
++    val autoplayNext by YouTubePrefs.autoplay.value.collectAsState()
++    val session by YouTubePlayerSession.state.collectAsState()
+     var segments by remember(videoId) { mutableStateOf<List<SponsorSegment>>(emptyList()) }
+-    var owner by remember(videoId) { mutableStateOf<Pair<String, String>?>(null) }
+-    var related by remember(videoId) { mutableStateOf<List<YtItem>>(emptyList()) }
+-    var liked by remember(videoId) { mutableStateOf(false) }
+     var skipped by remember(videoId) { mutableStateOf(emptySet<Long>()) }
+     var handledEnd by remember(videoId) { mutableStateOf(false) }
+-    val scope = remember { kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default) }
++
++    DisposableEffect(videoId) {
++        YouTubePlayerSession.begin(videoId, title, channel, thumb)
++        onDispose { YouTubePlayerSession.end() }
++    }
+ 
+     LaunchedEffect(videoId) {
+-        YouTubePlayerPrefs.sponsorSkip.ensureLoaded()
++        YouTubeSettings.ensureLoaded()
+         YouTubePlayerPrefs.loop.ensureLoaded()
+-        YouTubePlayerPrefs.autoplayNext.ensureLoaded()
+         YouTubeRepository.ensureLoaded()
+         segments = YouTubeSponsorBlock.segments(videoId)
+-        owner = YouTubeRepository.ownerOf(videoId)
+-        related = runCatching { YtInnertube.related(videoId) }.getOrDefault(emptyList())
++        val owner = YouTubeRepository.ownerOf(videoId)
++        YouTubePlayerSession.update { it.copy(channelId = owner?.first.orEmpty(), channel = owner?.second?.ifBlank { channel } ?: channel) }
++        val related = runCatching { YtInnertube.related(videoId) }.getOrDefault(emptyList())
++        YouTubePlayerSession.update { it.copy(related = related) }
+     }
+ 
+-    // SponsorBlock: jump over a marked segment once when playback reaches its start.
+-    LaunchedEffect(positionMs, sponsorSkip, segments) {
+-        if (!sponsorSkip || controller == null) return@LaunchedEffect
++    // SponsorBlock: jump over a marked segment once when playback reaches its start, or ask first.
++    LaunchedEffect(positionMs, sponsorSkip, sponsorAsk, segments) {
++        if (!sponsorSkip || controller == null || session.pendingSkip >= 0) return@LaunchedEffect
+         val hit = segments.firstOrNull { positionMs >= it.startMs && positionMs < it.endMs - 500 && it.startMs !in skipped }
+             ?: return@LaunchedEffect
+         skipped = skipped + hit.startMs
+-        controller.seekTo(hit.endMs)
++        if (sponsorAsk) {
++            YouTubePlayerSession.update { it.copy(pendingSkip = hit.endMs, skipNotice = hit.category) }
++        } else {
++            controller.seekTo(hit.endMs)
++            if (sponsorNotice) YouTubePlayerSession.update { it.copy(skipNotice = hit.category) }
++        }
+     }
+ 
+     // End of video: loop it, or move on to the first suggested video.
+@@ -148,35 +223,49 @@ fun YouTubePlayerOptions(
+             controller.seekTo(0L)
+             controller.play()
+         } else if (autoplayNext) {
+-            val hideShorts = YouTubePrefs.hideShorts.current()
+-            related.firstOrNull { it.kind == YtKind.VIDEO && (!hideShorts || !it.isShort) }
++            val keep = currentYtFilter()
++            YouTubePlayerSession.state.value.related
++                .firstOrNull { it.kind == YtKind.VIDEO && keep(it) }
+                 ?.let { YouTubePlayerHooks.playVideo?.invoke(it) }
+         }
+     }
+ 
+-    Box(modifier = modifier) {
+-        if (controlsVisible) {
++    // Short notice after a skip, or the skip question when "Ask before skipping" is on.
++    val label = YouTubeSettings.categories.firstOrNull { it.id == session.skipNotice }?.label ?: session.skipNotice
++    if (session.pendingSkip >= 0) {
++        Dialog(onDismissRequest = { YouTubePlayerSession.update { it.copy(pendingSkip = -1L, skipNotice = "") } }) {
++            Column(
++                modifier = Modifier.fillMaxWidth().background(Color(0xFF1B1B1F), RoundedCornerShape(16.dp)).padding(16.dp),
++                verticalArrangement = Arrangement.spacedBy(8.dp),
++            ) {
++                Text("Skip $label?", color = Color.White, style = MaterialTheme.typography.titleMedium)
++                Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
++                    TextButton(onClick = { YouTubePlayerSession.update { it.copy(pendingSkip = -1L, skipNotice = "") } }) { Text("Keep watching") }
++                    TextButton(onClick = {
++                        val target = session.pendingSkip
++                        YouTubePlayerSession.update { it.copy(pendingSkip = -1L, skipNotice = "") }
++                        controller?.seekTo(target)
++                    }) { Text("Skip") }
++                }
++            }
++        }
++    } else if (session.skipNotice.isNotBlank()) {
++        LaunchedEffect(session.skipNotice) {
++            kotlinx.coroutines.delay(2500)
++            YouTubePlayerSession.update { it.copy(skipNotice = "") }
++        }
++        Box(Modifier.fillMaxSize().padding(bottom = 96.dp), contentAlignment = Alignment.BottomCenter) {
+             Text(
+-                text = "YouTube",
++                text = "Skipped $label",
+                 color = Color.White,
+                 style = MaterialTheme.typography.labelLarge,
+-                modifier = Modifier
+-                    .background(Color(0x99000000), RoundedCornerShape(50))
+-                    .clickable { showSheet = true }
+-                    .padding(horizontal = 14.dp, vertical = 8.dp),
++                modifier = Modifier.background(Color(0xCC000000), RoundedCornerShape(50)).padding(horizontal = 14.dp, vertical = 8.dp),
+             )
+         }
+     }
+ 
+-    if (showSheet) {
+-        val channelId = owner?.first.orEmpty()
+-        val channelName = owner?.second?.ifBlank { channel } ?: channel
+-        val subscribed = channelId.isNotBlank() && saved.subscriptions.any { it.id == channelId }
+-        val watchLater = saved.watchLater.any { it.id == videoId }
+-        val item = remember(videoId, title, channelName, thumb) {
+-            YtItem(id = videoId, title = title, channel = channelName, channelId = channelId, thumb = thumb)
+-        }
+-        Dialog(onDismissRequest = { showSheet = false }) {
++    if (session.showUpNext) {
++        Dialog(onDismissRequest = { YouTubePlayerSession.update { it.copy(showUpNext = false) } }) {
+             Column(
+                 modifier = Modifier
+                     .fillMaxWidth()
+@@ -186,46 +275,23 @@ fun YouTubePlayerOptions(
+                     .verticalScroll(rememberScrollState()),
+                 verticalArrangement = Arrangement.spacedBy(4.dp),
+             ) {
+-                Text(title, color = Color.White, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+-                if (channelName.isNotBlank()) {
+-                    Text(channelName, color = Color(0xFFB0B0B0), style = MaterialTheme.typography.bodySmall)
+-                }
+-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
+-                    if (channelId.isNotBlank()) {
+-                        TextButton(onClick = { YouTubeRepository.toggleSubscription(channelId, channelName) }) {
+-                            Text(if (subscribed) "Subscribed" else "Subscribe")
+-                        }
+-                    }
+-                    TextButton(onClick = {
+-                        val target = !liked
+-                        liked = target
+-                        scope.launch {
+-                            if (!runCatching { YtInnertube.like(videoId, target) }.getOrDefault(false)) liked = !target
+-                        }
+-                    }) { Text(if (liked) "Liked" else "Like") }
+-                    TextButton(onClick = { YouTubeRepository.toggleWatchLater(item) }) {
+-                        Text(if (watchLater) "Saved" else "Watch later")
+-                    }
++                Text("Up next", color = Color.White, style = MaterialTheme.typography.titleMedium)
++                if (session.related.isEmpty()) {
++                    Text("No suggestions yet.", color = Color(0xFFB0B0B0), style = MaterialTheme.typography.bodyMedium)
+                 }
+-                OptionSwitch("Skip sponsors", "SponsorBlock segments", sponsorSkip) { YouTubePlayerPrefs.sponsorSkip.set(it) }
+-                OptionSwitch("Loop video", null, loop) { YouTubePlayerPrefs.loop.set(it) }
+-                OptionSwitch("Autoplay next", "Plays the first Up next video", autoplayNext) { YouTubePlayerPrefs.autoplayNext.set(it) }
+-                if (related.isNotEmpty()) {
+-                    Text("Up next", color = Color.White, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 12.dp))
+-                    related.take(12).forEach { next ->
+-                        Column(
+-                            modifier = Modifier
+-                                .fillMaxWidth()
+-                                .clickable {
+-                                    showSheet = false
+-                                    YouTubePlayerHooks.playVideo?.invoke(next)
+-                                }
+-                                .padding(vertical = 8.dp),
+-                        ) {
+-                            Text(next.title, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
+-                            val meta = listOf(next.channel, next.duration).filter { it.isNotBlank() }.joinToString(" · ")
+-                            if (meta.isNotEmpty()) Text(meta, color = Color(0xFFB0B0B0), style = MaterialTheme.typography.bodySmall)
+-                        }
++                session.related.take(12).forEach { next ->
++                    Column(
++                        modifier = Modifier
++                            .fillMaxWidth()
++                            .clickable {
++                                YouTubePlayerSession.update { it.copy(showUpNext = false) }
++                                YouTubePlayerHooks.playVideo?.invoke(next)
++                            }
++                            .padding(vertical = 8.dp),
++                    ) {
++                        Text(next.title, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
++                        val meta = listOf(next.channel, next.duration).filter { it.isNotBlank() }.joinToString(" · ")
++                        if (meta.isNotEmpty()) Text(meta, color = Color(0xFFB0B0B0), style = MaterialTheme.typography.bodySmall)
+                     }
+                 }
+             }
+@@ -233,16 +299,3 @@ fun YouTubePlayerOptions(
+     }
+ }
+ 
+-@Composable
+-private fun OptionSwitch(label: String, detail: String?, checked: Boolean, onChange: (Boolean) -> Unit) {
+-    Row(
+-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+-        verticalAlignment = Alignment.CenterVertically,
+-    ) {
+-        Column(modifier = Modifier.weight(1f)) {
+-            Text(label, color = Color.White, style = MaterialTheme.typography.bodyLarge)
+-            if (detail != null) Text(detail, color = Color(0xFFB0B0B0), style = MaterialTheme.typography.bodySmall)
+-        }
+-        Switch(checked = checked, onCheckedChange = onChange)
+-    }
+-}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeRepository.kt
+index c1a9acb3e..ce66feac7 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeRepository.kt
+@@ -459,8 +459,8 @@ object YouTubeRepository {
+ 
+     fun playNext() {
+         val current = _watch.value ?: return
+-        val hideShorts = YouTubePrefs.hideShorts.current()
+-        val next = current.related.firstOrNull { it.kind == YtKind.VIDEO && (!hideShorts || !it.isShort) } ?: return
++        val keep = currentYtFilter()
++        val next = current.related.firstOrNull { it.kind == YtKind.VIDEO && keep(it) } ?: return
+         play(next)
+     }
+ 
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
+index bd1a55880..477df5a19 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
+@@ -104,7 +104,14 @@ fun YouTubeScreen(
+     }
+     val pages by YouTubeRepository.pages.collectAsState()
+     val watch by YouTubeRepository.watch.collectAsState()
+-    var tab by rememberSaveable { mutableIntStateOf(0) }
++    var tab by rememberSaveable {
++        YouTubeSettings.ensureLoaded()
++        val visible = YouTubeSettings.visibleTabs(YouTubeSettings.tabOrder.current(), YouTubeSettings.hiddenTabs.current())
++        val wanted = if (YouTubeSettings.rememberLastTab.current()) YouTubeSettings.lastTab.current() else visible.first()
++        val id = if (wanted in visible) wanted else visible.first()
++        mutableIntStateOf(YouTubeSettings.tabs.indexOfFirst { it.first == id }.coerceAtLeast(0))
++    }
++    LaunchedEffect(tab) { YouTubeSettings.lastTab.set(YouTubeSettings.tabs[tab].first) }
+     val page = pages.lastOrNull()
+ 
+     PlatformBackHandler(enabled = watch != null || pages.isNotEmpty()) {
+@@ -201,13 +208,17 @@ private fun RootContent(tab: Int, onTab: (Int) -> Unit) {
+             SearchField(Modifier.padding(horizontal = horizontal))
+             Spacer(Modifier.height(10.dp))
+         }
++        val tabOrder by YouTubeSettings.tabOrder.value.collectAsState()
++        val tabsHidden by YouTubeSettings.hiddenTabs.value.collectAsState()
++        val shownTabs = YouTubeSettings.visibleTabs(tabOrder, tabsHidden)
+         LazyRow(
+             contentPadding = PaddingValues(horizontal = horizontal),
+             horizontalArrangement = Arrangement.spacedBy(8.dp),
+         ) {
+-            val labels = listOf("Home", "Subscriptions", "Shorts", "Saved")
+-            items(labels.size) { index ->
+-                Pill(text = labels[index], selected = tab == index) { onTab(index) }
++            items(shownTabs.size) { position ->
++                val id = shownTabs[position]
++                val index = YouTubeSettings.tabs.indexOfFirst { it.first == id }
++                Pill(text = YouTubeSettings.tabs[index].second, selected = tab == index) { onTab(index) }
+             }
+         }
+         Spacer(Modifier.height(12.dp))
+@@ -267,7 +278,7 @@ private fun HomeTab() {
+     val rows by YouTubeRepository.homeRows.collectAsState()
+     val loading by YouTubeRepository.homeLoading.collectAsState()
+     val saved by YouTubeRepository.saved.collectAsState()
+-    val hideShorts by YouTubePrefs.hideShorts.value.collectAsState()
++    val keep = rememberYtFilter()
+     val account by YouTubeAccount.state.collectAsState()
+     LaunchedEffect(account.signedIn) { YouTubeRepository.loadHome() }
+     LazyColumn(
+@@ -295,7 +306,7 @@ private fun HomeTab() {
+             }
+         }
+         items(rows, key = { it.order }) { row ->
+-            val shown = row.items.filter { !hideShorts || !it.isShort }
++            val shown = row.items.filter(keep)
+             if (shown.isNotEmpty()) {
+                 Column {
+                     SectionTitle(row.title, horizontal)
+@@ -530,7 +541,7 @@ private fun PagedPage(
+     var loading by remember(key) { mutableStateOf(true) }
+     var failed by remember(key) { mutableStateOf(false) }
+     val scope = rememberCoroutineScope()
+-    val hideShorts by YouTubePrefs.hideShorts.value.collectAsState()
++    val keep = rememberYtFilter()
+ 
+     fun startFetch(next: String?) {
+         loading = true
+@@ -561,7 +572,7 @@ private fun PagedPage(
+         if (nearEnd && next != null && !loading) startFetch(next)
+     }
+ 
+-    val visible = items.filter { !hideShorts || !it.isShort }
++    val visible = items.filter(keep)
+     val shorts = visible.filter { it.isShort && it.kind == YtKind.VIDEO }
+     val rest = visible.filterNot { it.isShort && it.kind == YtKind.VIDEO }
+     LazyColumn(
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeSettings.kt
+new file mode 100644
+index 000000000..7ceacc121
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeSettings.kt
+@@ -0,0 +1,189 @@
++package com.nuvio.app.features.youtube
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.collectAsState
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.remember
++import com.nuvio.app.core.storage.AppFileCache
++import com.nuvio.app.features.settings.ForkBoolPref
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++
++/** Text setting kept in the app file cache, same idea as [ForkBoolPref]. */
++class ForkStringPref(val path: String, private val default: String) {
++    private val _value = MutableStateFlow(default)
++    val value: StateFlow<String> = _value.asStateFlow()
++    private var loaded = false
++
++    fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        val stored = runCatching { AppFileCache.read(path) }.getOrNull()
++        if (stored != null) _value.value = stored
++    }
++
++    fun current(): String {
++        ensureLoaded()
++        return _value.value
++    }
++
++    fun set(text: String) {
++        ensureLoaded()
++        _value.value = text
++        runCatching { AppFileCache.write(path, text) }
++    }
++}
++
++data class YtSponsorCategory(val id: String, val label: String)
++
++/** YouTube settings of the fork: SponsorBlock, feeds, tabs and hidden words (same groups as the 1T reference app). */
++object YouTubeSettings {
++    val sponsorNotice = ForkBoolPref("settings/youtube_sb_notice", true)
++    val sponsorAsk = ForkBoolPref("settings/youtube_sb_ask", false)
++    val sponsorCategories = ForkStringPref("settings/youtube_sb_categories", "sponsor,selfpromo,interaction")
++    val hideWatched = ForkBoolPref("settings/youtube_hide_watched", false)
++    val hideUpcoming = ForkBoolPref("settings/youtube_hide_upcoming", true)
++    val rememberLastTab = ForkBoolPref("settings/youtube_remember_tab", true)
++    val lastTab = ForkStringPref("settings/youtube_last_tab", "home")
++    val tabOrder = ForkStringPref("settings/youtube_tab_order", "home,subs,shorts,saved")
++    val hiddenTabs = ForkStringPref("settings/youtube_hidden_tabs", "")
++    val hiddenWords = ForkStringPref("settings/youtube_hidden_words", "")
++    val hiddenChannels = ForkStringPref("settings/youtube_hidden_channels", "")
++
++    val categories = listOf(
++        YtSponsorCategory("sponsor", "Sponsor"),
++        YtSponsorCategory("selfpromo", "Self-promotion"),
++        YtSponsorCategory("interaction", "Like and subscribe reminders"),
++        YtSponsorCategory("intro", "Intros"),
++        YtSponsorCategory("outro", "Outros and end cards"),
++        YtSponsorCategory("preview", "Previews and recaps"),
++        YtSponsorCategory("music_offtopic", "Non-music parts"),
++        YtSponsorCategory("filler", "Filler"),
++    )
++
++    val tabs = listOf("home" to "Home", "subs" to "Subscriptions", "shorts" to "Shorts", "saved" to "Saved")
++
++    private fun ids(text: String) = text.split(',').map { it.trim() }.filter { it.isNotEmpty() }
++    fun categoryIds(text: String): Set<String> = ids(text).toSet()
++    fun toggleCategory(id: String) {
++        val now = categoryIds(sponsorCategories.current())
++        sponsorCategories.set((if (id in now) now - id else now + id).joinToString(","))
++    }
++
++    /** Tab ids in the saved order; ids added later are appended, unknown ids dropped. */
++    fun orderedTabs(order: String): List<String> {
++        val known = tabs.map { it.first }
++        val saved = ids(order).filter { it in known }.distinct()
++        return saved + known.filter { it !in saved }
++    }
++
++    fun moveTab(id: String, delta: Int) {
++        val list = orderedTabs(tabOrder.current()).toMutableList()
++        val from = list.indexOf(id)
++        val to = from + delta
++        if (from < 0 || to !in list.indices) return
++        list.add(to, list.removeAt(from))
++        tabOrder.set(list.joinToString(","))
++    }
++
++    fun setTabVisible(id: String, visible: Boolean) {
++        val hidden = ids(hiddenTabs.current()).toMutableSet()
++        // At least one tab must stay on.
++        if (!visible && tabs.size - hidden.size <= 1) return
++        if (visible) hidden.remove(id) else hidden.add(id)
++        hiddenTabs.set(hidden.joinToString(","))
++    }
++
++    fun visibleTabs(order: String, hidden: String): List<String> {
++        val off = ids(hidden).toSet()
++        return orderedTabs(order).filter { it !in off }
++    }
++
++    fun lines(text: String): List<String> = text.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
++
++    fun addLine(pref: ForkStringPref, value: String) {
++        val clean = value.trim().replace('\n', ' ')
++        if (clean.isEmpty()) return
++        val now = lines(pref.current())
++        if (now.any { it.equals(clean, ignoreCase = true) }) return
++        pref.set((now + clean).joinToString("\n"))
++    }
++
++    fun removeLine(pref: ForkStringPref, value: String) {
++        pref.set(lines(pref.current()).filterNot { it == value }.joinToString("\n"))
++    }
++
++    fun ensureLoaded() {
++        listOf(sponsorNotice, sponsorAsk, hideWatched, hideUpcoming, rememberLastTab).forEach { it.ensureLoaded() }
++        listOf(sponsorCategories, lastTab, tabOrder, hiddenTabs, hiddenWords, hiddenChannels).forEach { it.ensureLoaded() }
++        YouTubePrefs.tabEnabled.ensureLoaded()
++        YouTubePrefs.autoplay.ensureLoaded()
++        YouTubePrefs.hideShorts.ensureLoaded()
++        YouTubePlayerPrefs.sponsorSkip.ensureLoaded()
++    }
++}
++
++/** Decides which feed items stay visible: Shorts, watched, upcoming, hidden words and hidden channels. */
++@Composable
++internal fun rememberYtFilter(): (YtItem) -> Boolean {
++    ensureSettingsLoaded()
++    val hideShorts by YouTubePrefs.hideShorts.value.collectAsState()
++    val hideWatched by YouTubeSettings.hideWatched.value.collectAsState()
++    val hideUpcoming by YouTubeSettings.hideUpcoming.value.collectAsState()
++    val words by YouTubeSettings.hiddenWords.value.collectAsState()
++    val channels by YouTubeSettings.hiddenChannels.value.collectAsState()
++    val saved by YouTubeRepository.saved.collectAsState()
++    return remember(hideShorts, hideWatched, hideUpcoming, words, channels, saved.continueWatching) {
++        buildYtFilter(hideShorts, hideWatched, hideUpcoming, words, channels, saved.continueWatching)
++    }
++}
++
++/** Same filter as [rememberYtFilter], read once from the current settings (for code outside composition). */
++internal fun currentYtFilter(): (YtItem) -> Boolean {
++    YouTubeSettings.ensureLoaded()
++    return buildYtFilter(
++        YouTubePrefs.hideShorts.current(),
++        YouTubeSettings.hideWatched.current(),
++        YouTubeSettings.hideUpcoming.current(),
++        YouTubeSettings.hiddenWords.current(),
++        YouTubeSettings.hiddenChannels.current(),
++        YouTubeRepository.saved.value.continueWatching,
++    )
++}
++
++private fun buildYtFilter(
++    hideShorts: Boolean,
++    hideWatched: Boolean,
++    hideUpcoming: Boolean,
++    words: String,
++    channels: String,
++    progress: List<YtProgress>,
++): (YtItem) -> Boolean {
++    val wordList = YouTubeSettings.lines(words).map { it.lowercase() }
++    val channelList = YouTubeSettings.lines(channels).map { it.lowercase() }
++    val watched = progress
++        .filter { it.durationMs > 0 && it.positionMs * 10 >= it.durationMs * 9 }
++        .map { it.item.id }
++        .toSet()
++    return { item ->
++        val title = item.title.lowercase()
++        val channel = item.channel.lowercase()
++        (!hideShorts || !item.isShort) &&
++            (!hideWatched || item.id !in watched) &&
++            (!hideUpcoming || !isUpcoming(item)) &&
++            wordList.none { it in title } &&
++            channelList.none { it == channel }
++    }
++}
++
++@Composable
++private fun ensureSettingsLoaded() {
++    remember { YouTubeSettings.ensureLoaded(); 0 }
++}
++
++private fun isUpcoming(item: YtItem): Boolean {
++    if (item.kind != YtKind.VIDEO || item.isLive) return false
++    val meta = item.meta.lowercase()
++    return meta.startsWith("scheduled") || meta.startsWith("premieres") || meta.contains("waiting")
++}
