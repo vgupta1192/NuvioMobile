@@ -1,8 +1,19 @@
 diff --git a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/TrailerExtractionPlatform.android.kt b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/TrailerExtractionPlatform.android.kt
-index c1b3aa97a..676cf49be 100644
+index c1b3aa97a..af49625f4 100644
 --- a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/TrailerExtractionPlatform.android.kt
 +++ b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/TrailerExtractionPlatform.android.kt
-@@ -90,11 +90,12 @@ internal object TrailerExtractionPlatform {
+@@ -16,6 +16,10 @@ import okhttp3.RequestBody.Companion.toRequestBody
+ import java.util.concurrent.TimeUnit
+ 
+ internal object TrailerExtractionPlatform {
++    init {
++        com.nuvio.app.features.youtube.YouTubeWarmupHooks.prefetchFirstBytes = { YoutubeFirstChunkCache.prefetch(it) }
++    }
++
+     val defaultHeaders: Map<String, String> = mapOf(
+         "accept-language" to "en-US,en;q=0.9",
+         "user-agent" to
+@@ -90,11 +94,12 @@ internal object TrailerExtractionPlatform {
              bestProgressive?.url
          }
  
@@ -18,6 +29,198 @@ index c1b3aa97a..676cf49be 100644
          } else {
              null
          }
+diff --git a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt
+index 79335c171..6d2518217 100644
+--- a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt
++++ b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt
+@@ -31,6 +31,8 @@ class YoutubeChunkedDataSourceFactory(
+         private const val TAG = "YTChunkedDS"
+         /** 10 MB chunks – large enough to avoid too many requests, small enough to dodge throttle. */
+         private const val CHUNK_SIZE = 10L * 1024 * 1024
++        /** The first request is small so the first frame does not wait for a large response. */
++        private const val FIRST_CHUNK_SIZE = 1L * 1024 * 1024
+     }
+ 
+     override fun createDataSource(): DataSource {
+@@ -57,6 +59,9 @@ class YoutubeChunkedDataSourceFactory(
+         private var currentChunkEnd = 0L
+         private var bytesReadInChunk = 0L
+         private var originalDataSpec: DataSpec? = null
++        private var prefetched: ByteArray? = null
++        private var prefetchedPos = 0
++        private var streamEndsAfterPrefetched = false
+ 
+         override fun addTransferListener(transferListener: TransferListener) {
+             upstream.addTransferListener(transferListener)
+@@ -72,8 +77,30 @@ class YoutubeChunkedDataSourceFactory(
+             }
+ 
+             originalDataSpec = dataSpec
++            currentUri = uri
+             currentChunkStart = dataSpec.position
+             totalContentLength = dataSpec.length
++            prefetched = null
++            prefetchedPos = 0
++            streamEndsAfterPrefetched = false
++
++            // Bytes downloaded before the viewer tapped the card start the stream with no network wait.
++            val cached = if (dataSpec.position == 0L) YoutubeFirstChunkCache.get(uri.toString()) else null
++            if (cached != null) {
++                var bytes = cached.bytes
++                if (totalContentLength != C.LENGTH_UNSET.toLong() && bytes.size > totalContentLength) {
++                    bytes = bytes.copyOf(totalContentLength.toInt())
++                }
++                prefetched = bytes
++                streamEndsAfterPrefetched = cached.bytes.size < cached.requested
++                currentChunkStart = bytes.size.toLong()
++                if (totalContentLength != C.LENGTH_UNSET.toLong()) {
++                    val total = totalContentLength
++                    totalContentLength -= bytes.size
++                    return total
++                }
++                return C.LENGTH_UNSET.toLong()
++            }
+ 
+             return openNextChunk()
+         }
+@@ -82,10 +109,11 @@ class YoutubeChunkedDataSourceFactory(
+             val spec = originalDataSpec ?: throw IllegalStateException(
+                 runBlocking { getString(Res.string.player_error_unable_to_play_stream) },
+             )
++            val size = if (currentChunkStart == spec.position) minOf(FIRST_CHUNK_SIZE, chunkSize) else chunkSize
+             val end = if (totalContentLength != C.LENGTH_UNSET.toLong()) {
+-                minOf(currentChunkStart + chunkSize - 1, currentChunkStart + totalContentLength - 1)
++                minOf(currentChunkStart + size - 1, currentChunkStart + totalContentLength - 1)
+             } else {
+-                currentChunkStart + chunkSize - 1
++                currentChunkStart + size - 1
+             }
+             currentChunkEnd = end
+ 
+@@ -110,6 +138,30 @@ class YoutubeChunkedDataSourceFactory(
+                 return upstream.read(buffer, offset, length)
+             }
+ 
++            val memory = prefetched
++            if (memory != null) {
++                if (prefetchedPos < memory.size) {
++                    val count = minOf(length, memory.size - prefetchedPos)
++                    System.arraycopy(memory, prefetchedPos, buffer, offset, count)
++                    prefetchedPos += count
++                    return count
++                }
++                prefetched = null
++                if (streamEndsAfterPrefetched || (originalDataSpec?.length ?: C.LENGTH_UNSET.toLong()).let {
++                        it != C.LENGTH_UNSET.toLong() && totalContentLength <= 0
++                    }
++                ) {
++                    return C.RESULT_END_OF_INPUT
++                }
++                return try {
++                    openNextChunk()
++                    upstream.read(buffer, offset, length).also { if (it > 0) bytesReadInChunk += it }
++                } catch (e: Exception) {
++                    Log.w(TAG, "Failed to open chunk after prefetched bytes: ${e.message}")
++                    C.RESULT_END_OF_INPUT
++                }
++            }
++
+             val bytesRead = upstream.read(buffer, offset, length)
+             if (bytesRead == C.RESULT_END_OF_INPUT) {
+                 // Current chunk exhausted — open the next one
+@@ -146,6 +198,7 @@ class YoutubeChunkedDataSourceFactory(
+ 
+         override fun close() {
+             upstream.close()
++            prefetched = null
+             currentUri = null
+             originalDataSpec = null
+         }
+diff --git a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeFirstChunkCache.kt b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeFirstChunkCache.kt
+new file mode 100644
+index 000000000..9c9f8f46c
+--- /dev/null
++++ b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeFirstChunkCache.kt
+@@ -0,0 +1,79 @@
++package com.nuvio.app.features.trailer
++
++import androidx.media3.common.util.UnstableApi
++import androidx.media3.datasource.DataSpec
++import androidx.media3.datasource.DefaultHttpDataSource
++import java.io.ByteArrayOutputStream
++import java.util.concurrent.Executors
++
++/**
++ * The first bytes of a YouTube video and audio stream, downloaded before the viewer taps the card.
++ * [YoutubeChunkedDataSourceFactory] serves a request that starts at byte 0 from here, so the player
++ * has data for its first frame without waiting for the network round trip.
++ */
++@UnstableApi
++internal object YoutubeFirstChunkCache {
++    class Entry(val bytes: ByteArray, val requested: Int)
++
++    private const val MAX_ENTRIES = 8
++    const val VIDEO_BYTES = 3 * 1024 * 1024
++    const val AUDIO_BYTES = 512 * 1024
++
++    private val entries = object : LinkedHashMap<String, Entry>(16, 0.75f, true) {
++        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Entry>?): Boolean = size > MAX_ENTRIES
++    }
++    private val inFlight = HashSet<String>()
++    private val executor = Executors.newFixedThreadPool(2) { runnable ->
++        Thread(runnable, "yt-first-chunk").apply { isDaemon = true }
++    }
++
++    fun get(url: String): Entry? = synchronized(entries) { entries[url] }
++
++    fun prefetch(source: TrailerPlaybackSource) {
++        prefetch(source.videoUrl, VIDEO_BYTES)
++        source.audioUrl?.let { prefetch(it, AUDIO_BYTES) }
++    }
++
++    private fun prefetch(rawUrl: String, bytes: Int) {
++        if (!rawUrl.contains("googlevideo.com")) return
++        // Same normalisation as the data source, which looks the entry up by Uri.toString().
++        val url = android.net.Uri.parse(rawUrl).toString()
++        synchronized(entries) {
++            if (entries.containsKey(url) || !inFlight.add(url)) return
++        }
++        executor.execute {
++            try {
++                val data = download(url, bytes)
++                if (data != null) synchronized(entries) { entries[url] = Entry(data, bytes) }
++            } finally {
++                synchronized(entries) { inFlight.remove(url) }
++            }
++        }
++    }
++
++    private fun download(url: String, bytes: Int): ByteArray? {
++        val upstream = DefaultHttpDataSource.Factory()
++            .setConnectTimeoutMs(8_000)
++            .setReadTimeoutMs(8_000)
++            .setAllowCrossProtocolRedirects(true)
++            .createDataSource()
++        return try {
++            val rangedUri = android.net.Uri.parse(url).buildUpon()
++                .appendQueryParameter("range", "0-${bytes - 1}")
++                .build()
++            upstream.open(DataSpec(rangedUri))
++            val out = ByteArrayOutputStream(bytes)
++            val buffer = ByteArray(64 * 1024)
++            while (out.size() < bytes) {
++                val read = upstream.read(buffer, 0, minOf(buffer.size, bytes - out.size()))
++                if (read < 0) break
++                out.write(buffer, 0, read)
++            }
++            out.toByteArray().takeIf { it.isNotEmpty() }
++        } catch (_: Exception) {
++            null
++        } finally {
++            runCatching { upstream.close() }
++        }
++    }
++}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/NuvioExoPlayerPerformanceHelper.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/NuvioExoPlayerPerformanceHelper.kt
 index 39df22650..b9bcf9cf2 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/NuvioExoPlayerPerformanceHelper.kt
@@ -735,7 +938,7 @@ index e2c97bbf8..369b7a597 100644
  
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt
 new file mode 100644
-index 000000000..8918370ba
+index 000000000..2d5787e49
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt
 @@ -0,0 +1,76 @@
@@ -787,7 +990,7 @@ index 000000000..8918370ba
 +            val deferred = scope.async {
 +                gate.withPermit {
 +                    runCatching { TrailerPlaybackResolver.resolveFromYouTubeUrl(watchUrl) }.getOrNull()
-+                }
++                }?.also { source -> runCatching { YouTubeWarmupHooks.prefetchFirstBytes?.invoke(source) } }
 +            }
 +            entries[item.id] = Entry(key, deferred, TimeSource.Monotonic.markNow())
 +        }
@@ -1071,6 +1274,21 @@ index e3112aae5..00af6caec 100644
 +        while (map.size > 32) map.remove(map.keys.first())
 +    }
  }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeWarmupHooks.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeWarmupHooks.kt
+new file mode 100644
+index 000000000..4c3c14e63
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeWarmupHooks.kt
+@@ -0,0 +1,9 @@
++package com.nuvio.app.features.youtube
++
++import com.nuvio.app.features.trailer.TrailerPlaybackSource
++
++/** Platform hooks for the prewarm. Android registers one that downloads the first bytes of a stream. */
++object YouTubeWarmupHooks {
++    @Volatile
++    var prefetchFirstBytes: ((TrailerPlaybackSource) -> Unit)? = null
++}
 diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
 index 3ff0cebd2..dcb3b6445 100644
 --- a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
