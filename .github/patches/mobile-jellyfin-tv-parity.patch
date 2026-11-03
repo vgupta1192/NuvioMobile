@@ -1,0 +1,451 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt
+index c20f82856..70fb8c7fb 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinClient.kt
+@@ -172,7 +172,7 @@ internal object JellyfinClient {
+                 put(
+                     "Fields",
+                     "Overview,Genres,ProductionYear,CommunityRating,OfficialRating,RunTimeTicks," +
+-                        "Container,UserData,SeriesId,SeriesName",
++                        "Container,UserData,SeriesId,SeriesName,ProviderIds",
+                 )
+                 put("Recursive", recursive.toString())
+                 put("ImageTypeLimit", "1")
+@@ -209,7 +209,7 @@ internal object JellyfinClient {
+             mapOf(
+                 "userId" to session.userId,
+                 "seasonId" to seasonId,
+-                "Fields" to "Overview,CommunityRating,RunTimeTicks,Container,UserData,SeriesId,SeriesName",
++                "Fields" to "Overview,CommunityRating,RunTimeTicks,Container,UserData,SeriesId,SeriesName,ProviderIds",
+                 "ImageTypeLimit" to "1",
+                 "EnableImageTypes" to "Primary,Thumb",
+             ),
+@@ -323,6 +323,13 @@ internal object JellyfinClient {
+         val name = obj.string("Name") ?: return null
+         val userData = obj["UserData"] as? JsonObject
+         val imageTags = obj["ImageTags"] as? JsonObject
++        val providerIds = obj["ProviderIds"] as? JsonObject
++        fun providerId(key: String): String? = providerIds
++            ?.entries
++            ?.firstOrNull { it.key.equals(key, ignoreCase = true) }
++            ?.value
++            ?.let { runCatching { it.jsonPrimitive.contentOrNull }.getOrNull() }
++            ?.takeIf { it.isNotBlank() }
+         val people = obj.array("People").orEmpty().mapNotNull { element ->
+             val person = element as? JsonObject ?: return@mapNotNull null
+             val personName = person.string("Name")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+@@ -365,6 +372,9 @@ internal object JellyfinClient {
+             cast = people.filter { !it.isDirector },
+             mediaInfo = parseMediaInfo(obj),
+             logoTag = imageTags?.string("Logo"),
++            imdbId = providerId("Imdb"),
++            tmdbId = providerId("Tmdb"),
++            tvdbId = providerId("Tvdb"),
+         )
+     }
+ 
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
+index 2d5f94235..69e00cb8c 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
+@@ -17,6 +17,19 @@ import androidx.compose.foundation.layout.padding
+ import androidx.compose.foundation.layout.size
+ import androidx.compose.foundation.layout.width
+ import androidx.compose.foundation.lazy.LazyRow
++import androidx.compose.foundation.lazy.LazyListState
++import androidx.compose.foundation.lazy.rememberLazyListState
++import androidx.compose.foundation.text.KeyboardOptions
++import androidx.compose.material3.AlertDialog
++import androidx.compose.material3.OutlinedTextField
++import androidx.compose.material3.TextButton
++import androidx.compose.ui.text.input.KeyboardType
++import com.nuvio.app.features.details.ImdbEpisodeRatingsRepository
++import com.nuvio.app.features.details.components.rememberRatingAction
++import com.nuvio.app.features.mdblist.MdbListMetadataService
++import com.nuvio.app.features.mdblist.MdbListSettingsRepository
++import kotlinx.coroutines.withTimeoutOrNull
++import kotlin.math.roundToInt
+ import androidx.compose.foundation.lazy.items
+ import androidx.compose.foundation.rememberScrollState
+ import androidx.compose.foundation.shape.RoundedCornerShape
+@@ -146,6 +159,57 @@ private fun JellyfinDetailContent(
+             },
+         )
+     }
++    val mdbSettings by MdbListSettingsRepository.uiState.collectAsStateWithLifecycle()
++    var enrichedMeta by remember(meta) { mutableStateOf(meta) }
++    LaunchedEffect(meta) {
++        MdbListSettingsRepository.ensureLoaded()
++        enrichedMeta = withTimeoutOrNull(8_000L) {
++            MdbListMetadataService.enrichMeta(
++                meta = meta,
++                fallbackItemId = meta.id,
++                settings = MdbListSettingsRepository.snapshot(),
++            )
++        } ?: meta
++    }
++    var episodeRatings by remember(item.id) { mutableStateOf<Map<Pair<Int, Int>, Double>>(emptyMap()) }
++    LaunchedEffect(item.id, item.imdbId, item.tmdbId) {
++        if (!item.isSeries) return@LaunchedEffect
++        episodeRatings = try {
++            ImdbEpisodeRatingsRepository.getEpisodeRatings(
++                imdbId = item.imdbId,
++                tmdbId = item.tmdbId?.toIntOrNull(),
++            )
++        } catch (error: kotlinx.coroutines.CancellationException) {
++            throw error
++        } catch (error: Throwable) {
++            emptyMap()
++        }
++    }
++    val rateAction = rememberRatingAction(enrichedMeta)
++    var showGoTo by remember(item.id) { mutableStateOf(false) }
++    var goTo by remember(item.id) { mutableStateOf<Pair<Int, Int>?>(null) }
++    val episodesListState = rememberLazyListState()
++    LaunchedEffect(goTo, state.episodes, state.selectedSeasonId, state.seasons) {
++        val (seasonNumber, episodeNumber) = goTo ?: return@LaunchedEffect
++        val season = state.seasons.firstOrNull { it.indexNumber == seasonNumber }
++        if (season == null) {
++            goTo = null
++            return@LaunchedEffect
++        }
++        if (state.selectedSeasonId != season.id) {
++            JellyfinRepository.selectSeason(season.id)
++            return@LaunchedEffect
++        }
++        val index = state.episodes.indexOfFirst {
++            it.parentIndexNumber == seasonNumber && it.indexNumber == episodeNumber
++        }
++        if (index >= 0) {
++            episodesListState.animateScrollToItem(index)
++            goTo = null
++        } else if (state.episodes.isNotEmpty() && state.episodes.all { it.parentIndexNumber == seasonNumber }) {
++            goTo = null
++        }
++    }
+     val playable: JellyfinItem? = when {
+         item.isSeries || item.isFolder ->
+             state.episodes.firstOrNull { it.resumePositionMs > 0 } ?: state.episodes.firstOrNull()
+@@ -153,6 +217,11 @@ private fun JellyfinDetailContent(
+         else -> null
+     }
+ 
++    val playLabelSuffix = playable
++        ?.takeIf { it.isEpisode && it.parentIndexNumber != null && it.indexNumber != null }
++        ?.let { " S${it.parentIndexNumber}E${it.indexNumber}" }
++        .orEmpty()
++
+     Column(
+         modifier = Modifier
+             .fillMaxSize()
+@@ -193,18 +262,43 @@ private fun JellyfinDetailContent(
+                         playable == null && item.isSeries -> "No episodes"
+                         playable == null && item.isFolder -> "No files"
+                         playable == null -> "Not playable"
+-                        playable.resumePositionMs > 0 -> "Resume"
+-                        else -> "Play"
++                        playable.resumePositionMs > 0 -> "Resume$playLabelSuffix"
++                        else -> "Play$playLabelSuffix"
+                     },
+                     fontWeight = FontWeight.SemiBold,
+                 )
+             }
++            val showGoToChip = item.isSeries && state.seasons.isNotEmpty()
++            if (rateAction != null || item.tvdbId != null || showGoToChip) {
++                Spacer(modifier = Modifier.height(10.dp))
++                Row(
++                    horizontalArrangement = Arrangement.spacedBy(8.dp),
++                    verticalAlignment = Alignment.CenterVertically,
++                    modifier = Modifier.horizontalScroll(rememberScrollState()),
++                ) {
++                    if (rateAction != null) {
++                        JellyfinActionChip(
++                            label = rateAction.label,
++                            icon = rateAction.icon,
++                            highlighted = rateAction.isActive,
++                            onClick = rateAction.onClick,
++                        )
++                    }
++                    if (showGoToChip) {
++                        JellyfinActionChip(label = "Go to episode", onClick = { showGoTo = true })
++                    }
++                    item.tvdbId?.let { tvdb ->
++                        JellyfinActionChip(label = "TVDB $tvdb")
++                    }
++                }
++            }
+             Spacer(modifier = Modifier.height(14.dp))
+             JellyfinMediaBadgesRow(item = item)
+         }
+         DetailMetaInfo(
+-            meta = meta,
++            meta = enrichedMeta,
+             modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
++            isMdbListActive = mdbSettings.isActive,
+         )
+         DetailCastSection(
+             cast = meta.cast,
+@@ -226,12 +320,98 @@ private fun JellyfinDetailContent(
+         if (item.isSeries || item.isFolder) {
+             JellyfinDetailEpisodes(
+                 state = state,
++                episodeRatings = episodeRatings,
++                listState = episodesListState,
+                 onPlay = onPlay,
+                 modifier = Modifier.padding(top = 6.dp),
+             )
+         }
+         Spacer(modifier = Modifier.height(40.dp))
+     }
++    if (showGoTo) {
++        JellyfinGoToEpisodeDialog(
++            onDismiss = { showGoTo = false },
++            onConfirm = { seasonNumber, episodeNumber ->
++                showGoTo = false
++                goTo = seasonNumber to episodeNumber
++            },
++        )
++    }
++}
++
++/** Small pill used for Rate / Go to episode / TVDB under the Play button (same idea as the TV detail pills). */
++@Composable
++private fun JellyfinActionChip(
++    label: String,
++    icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
++    highlighted: Boolean = false,
++    onClick: (() -> Unit)? = null,
++) {
++    val tokens = MaterialTheme.nuvio
++    val shape = RoundedCornerShape(999.dp)
++    val tint = if (highlighted) MaterialTheme.colorScheme.primary else tokens.colors.textSecondary
++    Row(
++        modifier = Modifier
++            .clip(shape)
++            .background(tokens.colors.surfaceCard)
++            .border(1.dp, tokens.colors.borderSubtle, shape)
++            .let { base -> if (onClick != null) base.clickable(onClick = onClick) else base }
++            .padding(horizontal = 14.dp, vertical = 7.dp),
++        horizontalArrangement = Arrangement.spacedBy(6.dp),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        if (icon != null) {
++            Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
++        }
++        Text(
++            text = label,
++            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
++            color = tint,
++            maxLines = 1,
++        )
++    }
++}
++
++@Composable
++private fun JellyfinGoToEpisodeDialog(
++    onDismiss: () -> Unit,
++    onConfirm: (Int, Int) -> Unit,
++) {
++    var seasonText by remember { mutableStateOf("1") }
++    var episodeText by remember { mutableStateOf("1") }
++    val season = seasonText.toIntOrNull()
++    val episode = episodeText.toIntOrNull()
++    AlertDialog(
++        onDismissRequest = onDismiss,
++        title = { Text("Go to episode") },
++        text = {
++            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
++                OutlinedTextField(
++                    value = seasonText,
++                    onValueChange = { seasonText = it.filter(Char::isDigit).take(3) },
++                    label = { Text("Season") },
++                    singleLine = true,
++                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
++                    modifier = Modifier.weight(1f),
++                )
++                OutlinedTextField(
++                    value = episodeText,
++                    onValueChange = { episodeText = it.filter(Char::isDigit).take(4) },
++                    label = { Text("Episode") },
++                    singleLine = true,
++                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
++                    modifier = Modifier.weight(1f),
++                )
++            }
++        },
++        confirmButton = {
++            TextButton(
++                enabled = season != null && episode != null,
++                onClick = { if (season != null && episode != null) onConfirm(season, episode) },
++            ) { Text("Go") }
++        },
++        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
++    )
+ }
+ 
+ /** The TV photo's badge pills: "1080p H264 · English Dolby Atmos 5.1 · CC None (+38)" + Ends at. */
+@@ -325,13 +505,19 @@ internal fun JellyfinPillChip(
+ @Composable
+ private fun JellyfinDetailEpisodes(
+     state: JellyfinUiState,
++    episodeRatings: Map<Pair<Int, Int>, Double>,
++    listState: LazyListState,
+     onPlay: (JellyfinItem) -> Unit,
+     modifier: Modifier = Modifier,
+ ) {
+     val isFolder = state.selectedDetail?.isFolder == true
+     Column(modifier = modifier) {
+         Text(
+-            text = if (isFolder) "Files in this folder" else "Episodes",
++            text = when {
++                isFolder -> "Files in this folder"
++                state.episodes.isNotEmpty() -> "Episodes · ${state.episodes.size}"
++                else -> "Episodes"
++            },
+             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+             color = MaterialTheme.colorScheme.onBackground,
+             modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+@@ -350,6 +536,7 @@ private fun JellyfinDetailEpisodes(
+             )
+ 
+             else -> LazyRow(
++                state = listState,
+                 horizontalArrangement = Arrangement.spacedBy(12.dp),
+                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 24.dp),
+             ) {
+@@ -357,7 +544,13 @@ private fun JellyfinDetailEpisodes(
+                     if (isFolder) {
+                         JellyfinFileRow(episode = episode, onPlay = onPlay)
+                     } else {
+-                        JellyfinEpisodeCard(episode = episode, onPlay = onPlay)
++                        JellyfinEpisodeCard(
++                            episode = episode,
++                            rating = episode.parentIndexNumber?.let { season ->
++                                episode.indexNumber?.let { number -> episodeRatings[season to number] }
++                            },
++                            onPlay = onPlay,
++                        )
+                     }
+                 }
+             }
+@@ -366,7 +559,11 @@ private fun JellyfinDetailEpisodes(
+ }
+ 
+ @Composable
+-private fun JellyfinEpisodeCard(episode: JellyfinItem, onPlay: (JellyfinItem) -> Unit) {
++private fun JellyfinEpisodeCard(
++    episode: JellyfinItem,
++    rating: Double?,
++    onPlay: (JellyfinItem) -> Unit,
++) {
+     val tokens = MaterialTheme.nuvio
+     val cardShape = RoundedCornerShape(14.dp)
+     val thumbnailUrl = remember(episode.id, episode.imageTag) {
+@@ -374,7 +571,7 @@ private fun JellyfinEpisodeCard(episode: JellyfinItem, onPlay: (JellyfinItem) ->
+     }
+     Column(
+         modifier = Modifier
+-            .width(236.dp)
++            .width(272.dp)
+             .clip(cardShape)
+             .background(tokens.colors.surfaceCard)
+             .clickable { onPlay(episode) },
+@@ -431,6 +628,13 @@ private fun JellyfinEpisodeCard(episode: JellyfinItem, onPlay: (JellyfinItem) ->
+                 overflow = TextOverflow.Ellipsis,
+             )
+             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
++                rating?.let { value ->
++                    Text(
++                        text = "IMDb " + ((value * 10).roundToInt() / 10.0).toString(),
++                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
++                        color = Color(0xFFF5C518),
++                    )
++                }
+                 episode.runTimeMinutes?.let { minutes ->
+                     Text(
+                         text = "${minutes}m",
+@@ -446,6 +650,16 @@ private fun JellyfinEpisodeCard(episode: JellyfinItem, onPlay: (JellyfinItem) ->
+                     )
+                 }
+             }
++            episode.overview?.let { overview ->
++                Spacer(modifier = Modifier.height(4.dp))
++                Text(
++                    text = overview,
++                    style = MaterialTheme.typography.bodySmall,
++                    color = tokens.colors.textSecondary,
++                    maxLines = 3,
++                    overflow = TextOverflow.Ellipsis,
++                )
++            }
+         }
+     }
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinModels.kt
+index d4ee562d4..30473a09d 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinModels.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinModels.kt
+@@ -72,6 +72,9 @@ data class JellyfinItem(
+     val cast: List<JellyfinPerson> = emptyList(),
+     val mediaInfo: JellyfinMediaInfo? = null,
+     val logoTag: String? = null,
++    val imdbId: String? = null,
++    val tmdbId: String? = null,
++    val tvdbId: String? = null,
+ ) {
+     val isSeries: Boolean get() = type.equals("Series", ignoreCase = true)
+     val isFolder: Boolean
+@@ -196,6 +199,7 @@ internal fun JellyfinItem.toMetaDetails(
+     logo = logoUrl,
+     description = overview,
+     releaseInfo = productionYear?.toString(),
++    imdbId = imdbId,
+     imdbRating = communityRating
+         ?.takeIf { it > 0.0 }
+         ?.let { rating -> ((rating * 10).roundToInt() / 10.0).toString() },
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinRepository.kt
+index 07d847066..3da54caac 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinRepository.kt
+@@ -360,16 +360,25 @@ object JellyfinRepository {
+     }
+ 
+     /** Latest items per visible library + the server's resume list, fetched in parallel. */
+-    fun loadHome(force: Boolean = false) {
++    /**
++     * [silent] = refresh in place on every Home open (like the TV fork): shown rows stay on
++     * screen and are swapped when the new answers arrive.
++     */
++    fun loadHome(force: Boolean = false, silent: Boolean = false) {
+         val session = _uiState.value.session ?: return
+-        if (!force && (_uiState.value.isLoadingHome || _uiState.value.homeRows.isNotEmpty())) return
++        if (silent) {
++            if (_uiState.value.isLoadingHome) return
++        } else if (!force && (_uiState.value.isLoadingHome || _uiState.value.homeRows.isNotEmpty())) {
++            return
++        }
+         homeJob?.cancel()
+         homeJob = scope.launch {
+             try {
+                 _uiState.update { it.copy(isLoadingHome = true) }
+                 val snapshot = _uiState.value
+                 val visibleLibs = snapshot.libraries.filter { library -> library.id !in snapshot.hiddenLibraryIds }
+-                _uiState.update {
++                val keepRows = silent && snapshot.homeRows.isNotEmpty()
++                if (!keepRows) _uiState.update {
+                     it.copy(
+                         resumeItems = emptyList(),
+                         homeRows = visibleLibs.map { library ->
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt
+index 547ca408a..a406ec687 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt
+@@ -230,7 +230,7 @@ private fun JellyfinHome(
+     modifier: Modifier = Modifier,
+ ) {
+     LaunchedEffect(session.sessionKey) {
+-        JellyfinRepository.loadHome()
++        JellyfinRepository.loadHome(silent = true)
+     }
+     val heroItems = remember(state.resumeItems, state.homeRows) {
+         buildList {
