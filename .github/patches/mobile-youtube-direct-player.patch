@@ -72,10 +72,10 @@ index 85c648cbc..dd9000165 100644
  
          val playerBuilder = ExoPlayer.Builder(context)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index 218394f06..b626eb0eb 100644
+index 218394f06..632f724d9 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-@@ -950,11 +950,19 @@ internal fun MainAppContent(
+@@ -950,11 +950,21 @@ internal fun MainAppContent(
          }
  
          fun openYouTubeVideo(item: com.nuvio.app.features.youtube.YtItem, positionMs: Long) {
@@ -88,14 +88,19 @@ index 218394f06..b626eb0eb 100644
 +            )
              coroutineScope.launch {
                  val watchUrl = com.nuvio.app.features.streams.YouTubeStreamResolver.watchUrl(item.id)
-                 val source = runCatching {
-                     com.nuvio.app.features.trailer.TrailerPlaybackResolver.resolveFromYouTubeUrl(watchUrl)
-                 }.getOrNull()
+-                val source = runCatching {
+-                    com.nuvio.app.features.trailer.TrailerPlaybackResolver.resolveFromYouTubeUrl(watchUrl)
+-                }.getOrNull()
++                // A card that was pressed or sat at the top of a feed is usually resolved already.
++                val source = com.nuvio.app.features.youtube.YouTubePrewarm.take(item.id)
++                    ?: runCatching {
++                        com.nuvio.app.features.trailer.TrailerPlaybackResolver.resolveFromYouTubeUrl(watchUrl)
++                    }.getOrNull()
 +                com.nuvio.app.features.youtube.YouTubeStartTrace.mark("stream resolved")
                  val playerLaunch = PlayerLaunch(
                      profileId = activePlaybackProfileId,
                      title = item.title,
-@@ -977,6 +985,7 @@ internal fun MainAppContent(
+@@ -977,6 +987,7 @@ internal fun MainAppContent(
                  }
                  val launchId = PlayerLaunchStore.put(playerLaunch)
                  navController.navigate(PlayerRoute(launchId = launchId, title = playerLaunch.title))
@@ -103,7 +108,7 @@ index 218394f06..b626eb0eb 100644
              }
          }
  
-@@ -1403,8 +1412,13 @@ internal fun MainAppContent(
+@@ -1403,8 +1414,13 @@ internal fun MainAppContent(
              )
          }
  
@@ -118,7 +123,7 @@ index 218394f06..b626eb0eb 100644
                  type = item.parentMetaType,
                  videoId = item.videoId,
                  parentMetaId = item.parentMetaId,
-@@ -1418,7 +1432,17 @@ internal fun MainAppContent(
+@@ -1418,7 +1434,17 @@ internal fun MainAppContent(
  
          val openContinueWatching: (ContinueWatchingItem, Boolean, Boolean) -> Unit = { item, manualSelection, startFromBeginning ->
              resumePromptItem = null
@@ -720,11 +725,103 @@ index e2c97bbf8..506e8fd27 100644
          }
      }
  
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt
+new file mode 100644
+index 000000000..8918370ba
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt
+@@ -0,0 +1,76 @@
++package com.nuvio.app.features.youtube
++
++import com.nuvio.app.features.streams.YouTubeStreamResolver
++import com.nuvio.app.features.trailer.TrailerPlaybackResolver
++import com.nuvio.app.features.trailer.TrailerPlaybackSource
++import kotlin.time.Duration.Companion.minutes
++import kotlin.time.TimeMark
++import kotlin.time.TimeSource
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Deferred
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.SupervisorJob
++import kotlinx.coroutines.async
++import kotlinx.coroutines.sync.Semaphore
++import kotlinx.coroutines.sync.withPermit
++
++/**
++ * Resolves the stream of a video before the viewer taps it, so the tap goes straight to the player.
++ * An entry is only handed out while the quality cap and codec it was resolved with still match the
++ * settings, and only for a few minutes, so the stream URL cannot go stale.
++ */
++object YouTubePrewarm {
++    private class Entry(val key: String, val source: Deferred<TrailerPlaybackSource?>, val mark: TimeMark)
++
++    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
++    private val gate = Semaphore(2)
++    private val entries = LinkedHashMap<String, Entry>()
++    private val lock = Any()
++
++    private fun settingsKey(): String =
++        YouTubeSettings.startQuality.current() + "|" + YouTubeSettings.codecPreference.current()
++
++    private fun fresh(entry: Entry, key: String): Boolean =
++        entry.key == key && entry.mark.elapsedNow() < MAX_AGE
++
++    /** Starts resolving [item] in the background unless a fresh result is already on its way. */
++    fun warm(item: YtItem) {
++        if (item.kind != YtKind.VIDEO || item.isShort || item.isLive || item.id.isBlank()) return
++        val key = settingsKey()
++        synchronized(lock) {
++            entries[item.id]?.let { if (fresh(it, key)) return }
++            while (entries.size >= MAX_ENTRIES) entries.remove(entries.keys.first())
++            YouTubeStreamQuality.setCap(item.id, YouTubeSettings.startQuality.current().toIntOrNull())
++            YouTubeStreamQuality.setCodec(item.id, YouTubeSettings.codecPreference.current())
++            val watchUrl = YouTubeStreamResolver.watchUrl(item.id)
++            val deferred = scope.async {
++                gate.withPermit {
++                    runCatching { TrailerPlaybackResolver.resolveFromYouTubeUrl(watchUrl) }.getOrNull()
++                }
++            }
++            entries[item.id] = Entry(key, deferred, TimeSource.Monotonic.markNow())
++        }
++    }
++
++    /** Warms the first few playable videos of a list the viewer is looking at. */
++    fun warmFirst(items: List<YtItem>, count: Int = 2) {
++        items.asSequence()
++            .filter { it.kind == YtKind.VIDEO && !it.isShort && !it.isLive }
++            .take(count)
++            .forEach { warm(it) }
++    }
++
++    /** The prewarmed stream for [videoId], or null when none is usable. A failed warm-up is dropped. */
++    suspend fun take(videoId: String): TrailerPlaybackSource? {
++        val key = settingsKey()
++        val entry = synchronized(lock) {
++            entries[videoId]?.takeIf { fresh(it, key) }
++        } ?: return null
++        val source = runCatching { entry.source.await() }.getOrNull()
++        if (source == null) synchronized(lock) { if (entries[videoId] === entry) entries.remove(videoId) }
++        return source
++    }
++
++    private val MAX_AGE = 20.minutes
++    private const val MAX_ENTRIES = 8
++}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
-index 206bbcbdb..24e3eb8fc 100644
+index 206bbcbdb..6b5eef496 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
-@@ -51,6 +51,7 @@ import androidx.compose.runtime.Composable
+@@ -2,6 +2,9 @@ package com.nuvio.app.features.youtube
+ 
+ import androidx.compose.foundation.background
+ import androidx.compose.foundation.clickable
++import androidx.compose.foundation.gestures.awaitEachGesture
++import androidx.compose.foundation.gestures.awaitFirstDown
++import androidx.compose.ui.input.pointer.pointerInput
+ import androidx.compose.foundation.layout.Arrangement
+ import androidx.compose.foundation.layout.Box
+ import androidx.compose.foundation.layout.Column
+@@ -51,6 +54,7 @@ import androidx.compose.runtime.Composable
  import androidx.compose.runtime.CompositionLocalProvider
  import androidx.compose.runtime.DisposableEffect
  import androidx.compose.runtime.LaunchedEffect
@@ -732,7 +829,7 @@ index 206bbcbdb..24e3eb8fc 100644
  import androidx.compose.runtime.collectAsState
  import androidx.compose.runtime.derivedStateOf
  import androidx.compose.runtime.getValue
-@@ -87,10 +88,15 @@ import kotlinx.coroutines.launch
+@@ -87,10 +91,15 @@ import kotlinx.coroutines.launch
  /** Opens a video in the app's full player: item and the position to start from. */
  private val LocalFullPlayer = staticCompositionLocalOf<(YtItem, Long) -> Unit> { { _, _ -> } }
  
@@ -748,7 +845,7 @@ index 206bbcbdb..24e3eb8fc 100644
      } else {
          YouTubeRepository.play(item)
      }
-@@ -138,6 +144,8 @@ fun YouTubeScreen(
+@@ -138,6 +147,8 @@ fun YouTubeScreen(
          YtPage.Shorts -> "Shorts"
      }
  
@@ -757,7 +854,35 @@ index 206bbcbdb..24e3eb8fc 100644
      CompositionLocalProvider(LocalFullPlayer provides onOpenInPlayer) {
          Box(Modifier.fillMaxSize().background(tokens.colors.background)) {
              Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
-@@ -732,6 +740,7 @@ private fun PagedPage(
+@@ -343,6 +354,11 @@ private fun HomeTab() {
+     val keep = rememberYtFilter()
+     val account by YouTubeAccount.state.collectAsState()
+     LaunchedEffect(account.signedIn) { YouTubeRepository.loadHome() }
++    // Stream of the first Continue watching card and the first row, resolved before any tap.
++    LaunchedEffect(rows.size, saved.continueWatching.firstOrNull()?.item?.id) {
++        YouTubePrewarm.warmFirst(saved.continueWatching.take(1).map { it.item }, count = 1)
++        YouTubePrewarm.warmFirst(rows.firstOrNull()?.items?.filter(keep).orEmpty())
++    }
+     LazyColumn(
+         modifier = Modifier.fillMaxSize(),
+         contentPadding = PaddingValues(bottom = 24.dp),
+@@ -401,6 +417,7 @@ private fun SubscriptionsTab() {
+     val horizontal = tokens.spacing.screenHorizontal
+     val saved by YouTubeRepository.saved.collectAsState()
+     val feed by YouTubeRepository.subsFeed.collectAsState()
++    LaunchedEffect(feed.firstOrNull()?.id) { YouTubePrewarm.warmFirst(feed) }
+     val loading by YouTubeRepository.subsLoading.collectAsState()
+     val account by YouTubeAccount.state.collectAsState()
+     LaunchedEffect(saved.subscriptions, account.signedIn) { YouTubeRepository.loadSubscriptions() }
+@@ -702,6 +719,7 @@ private fun PagedPage(
+     val visible = items.filter(keep)
+     val shorts = visible.filter { it.isShort && it.kind == YtKind.VIDEO }
+     val rest = visible.filterNot { it.isShort && it.kind == YtKind.VIDEO }
++    LaunchedEffect(rest.firstOrNull()?.id) { YouTubePrewarm.warmFirst(rest) }
+     LazyColumn(
+         state = listState,
+         modifier = Modifier.fillMaxSize(),
+@@ -732,6 +750,7 @@ private fun PagedPage(
  @Composable
  private fun ShortCard(item: YtItem, siblings: List<YtItem>) {
      val tokens = MaterialTheme.nuvio
@@ -765,7 +890,7 @@ index 206bbcbdb..24e3eb8fc 100644
      Box(
          modifier = Modifier
              .width(130.dp)
-@@ -747,7 +756,7 @@ private fun ShortCard(item: YtItem, siblings: List<YtItem>) {
+@@ -747,7 +766,7 @@ private fun ShortCard(item: YtItem, siblings: List<YtItem>) {
              modifier = Modifier.fillMaxSize(),
          )
          Text(
@@ -774,15 +899,27 @@ index 206bbcbdb..24e3eb8fc 100644
              color = Color.White,
              style = MaterialTheme.typography.labelMedium,
              maxLines = 2,
-@@ -786,6 +795,7 @@ private fun ItemCard(
+@@ -786,7 +805,18 @@ private fun ItemCard(
          }
          return
      }
+-    Column(modifier = modifier.clickable { openItem(item, siblings) }) {
 +    val (shownTitle, shownThumb) = rememberBrandedItem(item)
-     Column(modifier = modifier.clickable { openItem(item, siblings) }) {
++    Column(
++        modifier = modifier
++            // Resolve the stream while the finger is still down; the tap itself is left to clickable.
++            .pointerInput(item.id) {
++                awaitEachGesture {
++                    awaitFirstDown(requireUnconsumed = false)
++                    YouTubePrewarm.warm(item)
++                }
++            }
++            .clickable { openItem(item, siblings) },
++    ) {
          Box(
              modifier = Modifier
-@@ -795,7 +805,7 @@ private fun ItemCard(
+                 .fillMaxWidth()
+@@ -795,7 +825,7 @@ private fun ItemCard(
                  .background(tokens.colors.surfaceCard),
          ) {
              AsyncImage(
@@ -791,7 +928,7 @@ index 206bbcbdb..24e3eb8fc 100644
                  contentDescription = null,
                  contentScale = ContentScale.Crop,
                  modifier = Modifier.fillMaxSize(),
-@@ -831,7 +841,7 @@ private fun ItemCard(
+@@ -831,7 +861,7 @@ private fun ItemCard(
          Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.Top) {
              Column(Modifier.weight(1f)) {
                  Text(
@@ -877,25 +1014,45 @@ index 000000000..8deed955f
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeStreamQuality.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeStreamQuality.kt
-index e3112aae5..2dd42a194 100644
+index e3112aae5..a52ae32c0 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeStreamQuality.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeStreamQuality.kt
-@@ -24,5 +24,16 @@ object YouTubeStreamQuality {
-         capHeight = height ?: 0
+@@ -12,17 +12,31 @@ object YouTubeStreamQuality {
+     private val _heights = MutableStateFlow<Pair<String, List<Int>>>("" to emptyList())
+     val heights: StateFlow<Pair<String, List<Int>>> = _heights.asStateFlow()
+ 
+-    private var capVideoId: String = ""
+-    private var capHeight: Int = 0
++    private val caps = HashMap<String, Int>()
+ 
+     fun publish(videoId: String, list: List<Int>) {
+         _heights.value = videoId to list
      }
  
-+    private var codecVideoId: String = ""
-+    private var codecPref: String = "auto"
+     fun setCap(videoId: String, height: Int?) {
+-        capVideoId = videoId
+-        capHeight = height ?: 0
++        if (height == null || height <= 0) caps.remove(videoId) else caps[videoId] = height
++        trim(caps)
+     }
+ 
+-    fun capFor(videoId: String): Int? = capHeight.takeIf { it > 0 && videoId == capVideoId }
++    private val codecs = HashMap<String, String>()
 +
 +    /** Codec the viewer prefers for that one video ("auto", "avc", "vp9", "av1"). */
 +    fun setCodec(videoId: String, codec: String) {
-+        codecVideoId = videoId
-+        codecPref = codec
++        codecs[videoId] = codec
++        trim(codecs)
 +    }
 +
-+    fun codecFor(videoId: String): String = if (videoId == codecVideoId) codecPref else "auto"
++    fun codecFor(videoId: String): String = codecs[videoId] ?: "auto"
 +
-     fun capFor(videoId: String): Int? = capHeight.takeIf { it > 0 && videoId == capVideoId }
++    fun capFor(videoId: String): Int? = caps[videoId]?.takeIf { it > 0 }
++
++    // Videos are warmed ahead of a tap, so more than one id keeps a setting; keep the map small.
++    private fun trim(map: MutableMap<String, *>) {
++        while (map.size > 32) map.remove(map.keys.first())
++    }
  }
 diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
 index 3ff0cebd2..dcb3b6445 100644
