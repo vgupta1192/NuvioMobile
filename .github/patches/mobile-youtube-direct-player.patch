@@ -1,0 +1,308 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AudioTrackModal.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AudioTrackModal.kt
+index 08b120323..db529c5d9 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AudioTrackModal.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/AudioTrackModal.kt
+@@ -23,6 +23,7 @@ import androidx.compose.material3.Icon
+ import androidx.compose.material3.MaterialTheme
+ import androidx.compose.material3.Text
+ import androidx.compose.runtime.Composable
++import androidx.compose.runtime.collectAsState
+ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.mutableStateOf
+ import androidx.compose.runtime.remember
+@@ -120,7 +121,40 @@ fun AudioTrackModal(
+                     )
+                 }
+ 
+-                if (qualities.size > 1) {
++                val ytSession = com.nuvio.app.features.youtube.YouTubePlayerSession.state.collectAsState().value
++                val ytHeights = com.nuvio.app.features.youtube.YouTubeStreamQuality.heights.collectAsState().value
++                    .let { if (it.first == ytSession.videoId) it.second else emptyList() }
++                if (ytSession.active && ytHeights.size > 1) {
++                    Text(
++                        text = stringResource(Res.string.player_video_quality),
++                        color = Color.White,
++                        style = MaterialTheme.typography.headlineMedium,
++                        modifier = Modifier.padding(top = 12.dp, bottom = 8.dp),
++                    )
++                    val ytCap = com.nuvio.app.features.youtube.YouTubeStreamQuality.capFor(ytSession.videoId)
++                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
++                        (listOf<Int?>(null) + ytHeights).forEach { h ->
++                            QualityRow(
++                                label = if (h == null) stringResource(Res.string.player_video_quality_auto) else "${h}p",
++                                isSelected = ytCap == h,
++                                onClick = {
++                                    if (ytCap != h) {
++                                        com.nuvio.app.features.youtube.YouTubeStreamQuality.setCap(ytSession.videoId, h)
++                                        com.nuvio.app.features.youtube.YouTubePlayerHooks.playVideo?.invoke(
++                                            com.nuvio.app.features.youtube.YtItem(
++                                                id = ytSession.videoId,
++                                                title = ytSession.title,
++                                                channel = ytSession.channel,
++                                                channelId = ytSession.channelId,
++                                                thumb = ytSession.thumb,
++                                            ),
++                                        )
++                                    }
++                                },
++                            )
++                        }
++                    }
++                } else if (qualities.size > 1) {
+                     Text(
+                         text = stringResource(Res.string.player_video_quality),
+                         color = Color.White,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
+index c061ea657..d08395aaf 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
+@@ -219,10 +219,12 @@ internal fun PlayerControlActions(
+         .mapNotNull { entry -> actionsById[entry.id] }
+     val visibleCount = 4
+     val hasOverflow = actions.size > visibleCount
+-    var expanded by remember(hasOverflow) { mutableStateOf(false) }
+-    val scrollState = rememberScrollState()
++    // Kept across control hide/show and action-list changes so the bar stays scrolled right.
++    var expanded by remember { mutableStateOf(toolbarExpandedMemory) }
++    val scrollState = rememberScrollState(if (expanded) Int.MAX_VALUE else 0)
+     val startOffset = if (onNextEpisodeClick != null) (-13).dp else (-12).dp
+-    LaunchedEffect(expanded, scrollState.maxValue) {
++    LaunchedEffect(expanded) {
++        toolbarExpandedMemory = expanded
+         if (expanded) scrollState.animateScrollTo(scrollState.maxValue) else scrollState.scrollTo(0)
+     }
+     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+@@ -440,3 +442,5 @@ internal data class PlayerControlAction(
+     val id: String = "",
+     val tint: Color = Color.White,
+ )
++
++private var toolbarExpandedMemory = false
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerYouTubeActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerYouTubeActions.kt
+index 419d10cb6..1b42f2a86 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerYouTubeActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerYouTubeActions.kt
+@@ -28,7 +28,6 @@ internal val YouTubeToolbarButtons = listOf(
+     ForkToolbarButton("yt_watch_later", "YouTube: Watch later"),
+     ForkToolbarButton("yt_loop", "YouTube: Loop video"),
+     ForkToolbarButton("yt_sponsor", "YouTube: Skip sponsors"),
+-    ForkToolbarButton("yt_autoplay", "YouTube: Autoplay next"),
+     ForkToolbarButton("yt_upnext", "YouTube: Up next"),
+     ForkToolbarButton("yt_info", "YouTube: Video info and quality"),
+ )
+@@ -40,7 +39,6 @@ internal fun youTubeControlActions(): List<PlayerControlAction> {
+     val saved by YouTubeRepository.saved.collectAsState()
+     val loop by YouTubePlayerPrefs.loop.value.collectAsState()
+     val sponsor by YouTubePlayerPrefs.sponsorSkip.value.collectAsState()
+-    val autoplay by YouTubePrefs.autoplay.value.collectAsState()
+     if (!session.active) return emptyList()
+     val on = MaterialTheme.colorScheme.primary
+     val subscribed = session.channelId.isNotBlank() && saved.subscriptions.any { it.id == session.channelId }
+@@ -71,10 +69,6 @@ internal fun youTubeControlActions(): List<PlayerControlAction> {
+             if (sponsor) "Skip sponsors on" else "Skip sponsors", { YouTubePlayerPrefs.sponsorSkip.set(!sponsor) },
+             icon = Icons.Rounded.FastForward, id = "yt_sponsor", tint = if (sponsor) on else Color.White,
+         ),
+-        PlayerControlAction(
+-            if (autoplay) "Autoplay next: on" else "Autoplay next: off", { YouTubePrefs.autoplay.set(!autoplay) },
+-            icon = Icons.Rounded.PlayCircle, id = "yt_autoplay", tint = if (autoplay) on else Color.White,
+-        ),
+         PlayerControlAction(
+             "Up next", { YouTubePlayerSession.update { it.copy(showUpNext = true) } },
+             icon = Icons.AutoMirrored.Rounded.PlaylistPlay, id = "yt_upnext",
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
+index e2c97bbf8..dc3c13867 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
+@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
+ import androidx.compose.foundation.clickable
+ import androidx.compose.foundation.layout.Arrangement
+ import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.layout.fillMaxHeight
+ import androidx.compose.foundation.layout.Column
+ import androidx.compose.foundation.layout.Row
+ import androidx.compose.foundation.layout.fillMaxSize
+@@ -310,13 +312,27 @@ fun YouTubePlayerOptions(
+                 busy = false
+             }
+         }
+-        Dialog(onDismissRequest = { close() }) {
++        Dialog(
++            onDismissRequest = { close() },
++            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
++        ) {
++          Box(
++              Modifier.fillMaxSize().clickable(
++                  indication = null,
++                  interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
++              ) { close() },
++              contentAlignment = Alignment.CenterEnd,
++          ) {
+             Column(
+                 modifier = Modifier
+-                    .fillMaxWidth()
+-                    .heightIn(max = 520.dp)
+-                    .background(Color(0xFF1B1B1F), RoundedCornerShape(16.dp))
+-                    .padding(16.dp)
++                    .fillMaxHeight()
++                    .width(380.dp)
++                    .background(Color(0xF2121214))
++                    .clickable(
++                        indication = null,
++                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
++                    ) {}
++                    .padding(horizontal = 20.dp, vertical = 16.dp)
+                     .verticalScroll(rememberScrollState()),
+                 verticalArrangement = Arrangement.spacedBy(10.dp),
+             ) {
+@@ -385,7 +401,11 @@ fun YouTubePlayerOptions(
+                         Text(if (later) "Saved" else "Watch later", color = if (later) accent else Color.White)
+                     }
+                 }
+-                Text("Quality", color = Color.White, style = MaterialTheme.typography.titleSmall)
++                Text(
++                    "Quality · " + (cap?.let { "${it}p" } ?: "Auto" + (heights.firstOrNull()?.let { " (${it}p)" } ?: "")),
++                    color = Color.White,
++                    style = MaterialTheme.typography.titleSmall,
++                )
+                 if (heights.isEmpty()) {
+                     Text("Resolutions load with the video.", color = Color(0xFFB0B0B0), style = MaterialTheme.typography.bodySmall)
+                 } else {
+@@ -418,6 +438,7 @@ fun YouTubePlayerOptions(
+                 TextButton(onClick = { close(); YouTubePlayerSession.update { it.copy(showUpNext = true) } }) { Text("Up next") }
+                 }
+             }
++          }
+         }
+     }
+ 
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
+index 206bbcbdb..0d260284d 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
+@@ -51,6 +51,7 @@ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.CompositionLocalProvider
+ import androidx.compose.runtime.DisposableEffect
+ import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.SideEffect
+ import androidx.compose.runtime.collectAsState
+ import androidx.compose.runtime.derivedStateOf
+ import androidx.compose.runtime.getValue
+@@ -87,10 +88,15 @@ import kotlinx.coroutines.launch
+ /** Opens a video in the app's full player: item and the position to start from. */
+ private val LocalFullPlayer = staticCompositionLocalOf<(YtItem, Long) -> Unit> { { _, _ -> } }
+ 
++/** Set by [YouTubeScreen] so a tapped video goes straight to the full-screen player. */
++private var directPlayer: ((YtItem, Long) -> Unit)? = null
++
+ private fun openItem(item: YtItem, siblings: List<YtItem>) {
+     if (item.kind == YtKind.VIDEO && item.isShort) {
+         YouTubeRepository.openShortsAt(item, siblings)
+         YouTubeRepository.push(YtPage.Shorts)
++    } else if (item.kind == YtKind.VIDEO && directPlayer != null) {
++        directPlayer?.invoke(item, 0L)
+     } else {
+         YouTubeRepository.play(item)
+     }
+@@ -138,6 +144,8 @@ fun YouTubeScreen(
+         YtPage.Shorts -> "Shorts"
+     }
+ 
++    SideEffect { directPlayer = onOpenInPlayer }
++    DisposableEffect(Unit) { onDispose { directPlayer = null } }
+     CompositionLocalProvider(LocalFullPlayer provides onOpenInPlayer) {
+         Box(Modifier.fillMaxSize().background(tokens.colors.background)) {
+             Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
+diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
+index 3ff0cebd2..21597cfa0 100644
+--- a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
++++ b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
+@@ -2,6 +2,9 @@ package com.nuvio.app.features.trailer
+ 
+ import co.touchlab.kermit.Logger
+ import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.async
++import kotlinx.coroutines.awaitAll
++import kotlinx.coroutines.sync.withLock
+ import kotlinx.coroutines.withContext
+ import kotlinx.coroutines.withTimeout
+ import kotlinx.serialization.json.Json
+@@ -188,7 +191,10 @@ class InAppYouTubeExtractor {
+         val adaptiveAudio = mutableListOf<StreamCandidate>()
+         val manifestUrls = mutableListOf<Triple<String, Int, String>>()
+ 
+-        for (client in CLIENTS) {
++        val lock = kotlinx.coroutines.sync.Mutex()
++        // Player API calls are independent: run them together instead of one after another.
++        kotlinx.coroutines.coroutineScope {
++            CLIENTS.map { client -> async {
+             runCatching {
+                 val playerResponse = fetchPlayerResponse(
+                     apiKey = apiKey,
+@@ -196,7 +202,7 @@ class InAppYouTubeExtractor {
+                     client = client,
+                     visitorData = watchConfig.visitorData,
+                 )
+-
++                lock.withLock {
+                 val streamingData = playerResponse.objectValue("streamingData") ?: return@runCatching
+                 val hlsManifestUrl = streamingData.stringValue("hlsManifestUrl")
+                 if (!hlsManifestUrl.isNullOrBlank()) {
+@@ -282,32 +288,39 @@ class InAppYouTubeExtractor {
+                         )
+                     }
+                 }
++
++                }
+             }
++            } }.awaitAll()
+         }
+ 
+         if (manifestUrls.isEmpty() && progressive.isEmpty() && adaptiveVideo.isEmpty() && adaptiveAudio.isEmpty()) {
+             return null
+         }
+ 
++        val manifestCandidates = kotlinx.coroutines.coroutineScope {
++            manifestUrls.map { (clientKey, priority, manifestUrl) -> async {
++                runCatching {
++                    val variant = parseHlsManifest(manifestUrl) ?: return@runCatching null
++                    ManifestCandidate(
++                        client = clientKey,
++                        priority = priority,
++                        manifestUrl = manifestUrl,
++                        selectedVariantUrl = variant.url,
++                        height = variant.height,
++                        bandwidth = variant.bandwidth,
++                    )
++                }.getOrNull()
++            } }.awaitAll().filterNotNull()
++        }
+         var bestManifest: ManifestCandidate? = null
+-        for ((clientKey, priority, manifestUrl) in manifestUrls) {
+-            runCatching {
+-                val variant = parseHlsManifest(manifestUrl) ?: return@runCatching
+-                val candidate = ManifestCandidate(
+-                    client = clientKey,
+-                    priority = priority,
+-                    manifestUrl = manifestUrl,
+-                    selectedVariantUrl = variant.url,
+-                    height = variant.height,
+-                    bandwidth = variant.bandwidth,
+-                )
+-                if (
+-                    bestManifest == null ||
+-                    candidate.height > bestManifest.height ||
+-                    (candidate.height == bestManifest.height && candidate.bandwidth > bestManifest.bandwidth)
+-                ) {
+-                    bestManifest = candidate
+-                }
++        for (candidate in manifestCandidates) {
++            if (
++                bestManifest == null ||
++                candidate.height > bestManifest.height ||
++                (candidate.height == bestManifest.height && candidate.bandwidth > bestManifest.bandwidth)
++            ) {
++                bestManifest = candidate
+             }
+         }
+ 
