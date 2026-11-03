@@ -1,0 +1,456 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt
+index b1bb4c9ee..0fa5b9ded 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt
+@@ -14,6 +14,8 @@ import androidx.compose.foundation.verticalScroll
+ import androidx.compose.material.icons.rounded.Check
+ import androidx.compose.material3.Surface
+ import androidx.compose.ui.draw.clip
++import androidx.compose.ui.layout.ContentScale
++import coil3.compose.AsyncImage
+ import androidx.compose.ui.window.Dialog
+ import androidx.compose.ui.window.DialogProperties
+ import androidx.compose.foundation.layout.Arrangement
+@@ -289,14 +291,32 @@ private fun YouTubeListSection(title: String, hint: String, pref: ForkStringPref
+ internal fun YouTubeAccountsDialog(onDismiss: () -> Unit) {
+     val account by YouTubeAccount.state.collectAsState()
+     val current = account.label.ifBlank { "YouTube account" }
++    LaunchedEffect(account.signedIn) { if (account.signedIn) YouTubeAccount.refreshProfiles() }
+     AlertDialog(
+         onDismissRequest = onDismiss,
+         title = { Text("Who's watching?") },
+         text = {
+-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+-                AccountRow(label = current, current = true, onClick = onDismiss)
++            Column(
++                modifier = Modifier.verticalScroll(rememberScrollState()),
++                verticalArrangement = Arrangement.spacedBy(2.dp),
++            ) {
++                if (account.profiles.isEmpty()) {
++                    AccountRow(label = current, detail = "", avatar = "", current = true, onClick = onDismiss)
++                } else {
++                    account.profiles.forEachIndexed { index, profile ->
++                        AccountRow(
++                            label = profile.name,
++                            detail = profile.detail,
++                            avatar = profile.avatar,
++                            current = profile.pageId == account.activePageId,
++                        ) {
++                            YouTubeAccount.selectProfile(index)
++                            onDismiss()
++                        }
++                    }
++                }
+                 account.others.forEachIndexed { index, label ->
+-                    AccountRow(label = label.ifBlank { "YouTube account" }, current = false) {
++                    AccountRow(label = label.ifBlank { "YouTube account" }, detail = "Other Google account", avatar = "", current = false) {
+                         YouTubeAccount.switchTo(index)
+                         onDismiss()
+                     }
+@@ -316,7 +336,7 @@ internal fun YouTubeAccountsDialog(onDismiss: () -> Unit) {
+ }
+ 
+ @Composable
+-private fun AccountRow(label: String, current: Boolean, onClick: () -> Unit) {
++private fun AccountRow(label: String, detail: String, avatar: String, current: Boolean, onClick: () -> Unit) {
+     Row(
+         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
+         verticalAlignment = Alignment.CenterVertically,
+@@ -326,19 +346,38 @@ private fun AccountRow(label: String, current: Boolean, onClick: () -> Unit) {
+             modifier = Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
+             contentAlignment = Alignment.Center,
+         ) {
++            if (avatar.isNotBlank()) {
++                AsyncImage(
++                    model = if (avatar.startsWith("//")) "https:$avatar" else avatar,
++                    contentDescription = null,
++                    contentScale = ContentScale.Crop,
++                    modifier = Modifier.fillMaxSize(),
++                )
++            } else {
++                Text(
++                    text = label.take(1).uppercase(),
++                    color = MaterialTheme.colorScheme.onPrimary,
++                    style = MaterialTheme.typography.titleMedium,
++                )
++            }
++        }
++        Column(Modifier.weight(1f)) {
+             Text(
+-                text = label.take(1).lowercase(),
+-                color = MaterialTheme.colorScheme.onPrimary,
+-                style = MaterialTheme.typography.titleMedium,
++                text = label,
++                style = MaterialTheme.typography.bodyLarge,
++                maxLines = 1,
++                overflow = TextOverflow.Ellipsis,
+             )
++            if (detail.isNotBlank()) {
++                Text(
++                    text = detail,
++                    color = MaterialTheme.colorScheme.onSurfaceVariant,
++                    style = MaterialTheme.typography.bodySmall,
++                    maxLines = 1,
++                    overflow = TextOverflow.Ellipsis,
++                )
++            }
+         }
+-        Text(
+-            text = label,
+-            style = MaterialTheme.typography.bodyLarge,
+-            maxLines = 1,
+-            overflow = TextOverflow.Ellipsis,
+-            modifier = Modifier.weight(1f),
+-        )
+         if (current) Icon(Icons.Rounded.Check, contentDescription = "Current account")
+     }
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeAccount.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeAccount.kt
+index d425f265a..60b198649 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeAccount.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeAccount.kt
+@@ -36,6 +36,20 @@ data class YtAccountState(
+     val error: String? = null,
+     /** Labels of the other signed-in accounts, in switch order. */
+     val others: List<String> = emptyList(),
++    /** Profiles of the active Google account: the account itself and its brand channels. */
++    val profiles: List<YtProfile> = emptyList(),
++    /** Brand channel the app acts as; empty means the account itself. */
++    val activePageId: String = "",
++)
++
++/** One entry of "Who's watching?": the Google account or one of its brand channels. */
++@Serializable
++data class YtProfile(
++    val name: String,
++    val detail: String = "",
++    val avatar: String = "",
++    val pageId: String = "",
++    val selected: Boolean = false,
+ )
+ 
+ @Serializable
+@@ -45,6 +59,8 @@ private data class StoredAccount(
+     val expiresAtMs: Long = 0L,
+     val label: String = "",
+     val deviceId: String = "",
++    val pageId: String = "",
++    val profiles: List<YtProfile> = emptyList(),
+ )
+ 
+ /**
+@@ -93,6 +109,8 @@ object YouTubeAccount {
+                 signedIn = stored.refreshToken.isNotBlank(),
+                 label = stored.label,
+                 others = others.map { account -> account.label.ifBlank { "YouTube account" } },
++                profiles = stored.profiles,
++                activePageId = stored.pageId,
+                 error = error ?: it.error,
+             )
+         }
+@@ -242,7 +260,7 @@ object YouTubeAccount {
+                     it.copy(signedIn = true, label = stored.label, busy = false, userCode = "", verificationUrl = "", error = null)
+                 }
+                 YouTubeRepository.onAccountChanged()
+-                scope.launch { refreshLabel() }
++                scope.launch { refreshProfiles() }
+                 return
+             }
+             when (body?.str("error")) {
+@@ -274,11 +292,48 @@ object YouTubeAccount {
+         }
+     }
+ 
+-    private suspend fun refreshLabel() {
+-        val name = runCatching { YtInnertube.accountName() }.getOrNull()
+-        stored = stored.copy(label = name?.takeIf { it.isNotBlank() } ?: stored.label.ifBlank { "YouTube account" })
++    /** The brand channel id sent as X-Goog-Pageid; empty when the account itself is active. */
++    fun pageId(): String {
++        ensureLoaded()
++        return stored.pageId
++    }
++
++    /** Reads every profile of the active Google account and keeps the one in use selected. */
++    suspend fun refreshProfiles() {
++        val list = runCatching { YtInnertube.accounts() }.getOrNull().orEmpty()
++        if (list.isEmpty()) {
++            if (stored.label.isBlank()) {
++                stored = stored.copy(label = "YouTube account")
++                persist()
++                publish()
++            }
++            return
++        }
++        val known = list.any { it.pageId == stored.pageId }
++        val pageId = if (known && stored.profiles.isNotEmpty()) stored.pageId else list.firstOrNull { it.selected }?.pageId ?: list.first().pageId
++        val marked = list.map { it.copy(selected = it.pageId == pageId) }
++        stored = stored.copy(
++            pageId = pageId,
++            profiles = marked,
++            label = marked.firstOrNull { it.selected }?.name ?: stored.label.ifBlank { "YouTube account" },
++        )
+         persist()
+-        _state.update { it.copy(label = stored.label) }
++        publish()
++    }
++
++    /** Acts as the [index]th profile of the active account (the account itself or a brand channel). */
++    fun selectProfile(index: Int) {
++        ensureLoaded()
++        val profile = stored.profiles.getOrNull(index) ?: return
++        if (profile.pageId == stored.pageId) return
++        stored = stored.copy(
++            pageId = profile.pageId,
++            label = profile.name,
++            profiles = stored.profiles.map { it.copy(selected = it.pageId == profile.pageId) },
++        )
++        persist()
++        publish()
++        YouTubeRepository.onAccountChanged()
+     }
+ 
+     fun signOut() {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInnertube.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInnertube.kt
+index 57f8b39c5..5fa99ccaf 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInnertube.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInnertube.kt
+@@ -110,17 +110,20 @@ internal object YtInnertube {
+     private suspend fun post(
+         endpoint: String,
+         authed: Boolean = false,
++        actAsProfile: Boolean = true,
+         fill: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit,
+     ): JsonObject? {
+         ensureInit()
+         var token: String? = null
+         if (authed) token = YouTubeAccount.accessToken() ?: return null
+-        var response = send(endpoint, token, fill) ?: return null
++        // The selected brand channel of the account is sent as X-Goog-Pageid, like the reference app does.
++        val pageId = if (authed && actAsProfile) YouTubeAccount.pageId().takeIf { it.isNotBlank() } else null
++        var response = send(endpoint, token, pageId, fill) ?: return null
+         if (authed && response.status == 401) {
+             // The access token was refused: refresh once and try again before giving up.
+             YouTubeAccount.invalidateAccess()
+             token = YouTubeAccount.accessToken() ?: return null
+-            response = send(endpoint, token, fill) ?: return null
++            response = send(endpoint, token, pageId, fill) ?: return null
+             if (response.status == 401) {
+                 YouTubeAccount.reportError("YouTube refused the sign-in. Sign out and sign in again.")
+             }
+@@ -135,6 +138,7 @@ internal object YtInnertube {
+     private suspend fun send(
+         endpoint: String,
+         token: String?,
++        pageId: String?,
+         fill: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit,
+     ): com.nuvio.app.features.addons.RawHttpResponse? {
+         val visitor = visitorData
+@@ -157,6 +161,7 @@ internal object YtInnertube {
+             put("Origin", BASE)
+             put("Accept-Language", "en-US,en;q=0.9")
+             if (token != null) put("Authorization", "Bearer $token") else put("Cookie", "SOCS=CAI")
++            if (token != null && pageId != null) put("X-Goog-Pageid", pageId)
+             if (visitor != null && !tv) put("X-Goog-Visitor-Id", visitor)
+         }
+         // The anonymous web call keeps its API key; account calls authenticate with the Bearer token only.
+@@ -218,8 +223,51 @@ internal object YtInnertube {
+     }
+ 
+     suspend fun accountName(): String? {
+-        val root = post("account/accounts_list", authed = true) { } ?: return null
+-        return text(findObject(root, "accountName")).takeIf { it.isNotBlank() }
++        val profiles = accounts()
++        return (profiles.firstOrNull { it.selected } ?: profiles.firstOrNull())?.name?.takeIf { it.isNotBlank() }
++    }
++
++    /** Every profile of the signed-in Google account: the account itself and its brand channels. */
++    suspend fun accounts(): List<YtProfile> {
++        val root = post("account/accounts_list", authed = true, actAsProfile = false) {
++            putJsonObject("accountReadMask") {
++                put("returnOwner", true)
++                put("returnBrandAccounts", true)
++                put("returnPersonaAccounts", false)
++            }
++        } ?: return emptyList()
++        val found = ArrayList<JsonObject>()
++        collectObjects(root, "accountItem", found)
++        return found.mapNotNull { item ->
++            val name = text(item["accountName"])
++            if (name.isBlank()) return@mapNotNull null
++            val pageId = findString(item["serviceEndpoint"], "pageId").orEmpty()
++            YtProfile(
++                name = name,
++                detail = text(item["accountByline"]).ifBlank { text(item["channelHandle"]) },
++                avatar = bestThumb(item["accountPhoto"]).orEmpty(),
++                pageId = pageId,
++                selected = (item["isSelected"] as? JsonPrimitive)?.contentOrNull == "true",
++            )
++        }
++    }
++
++    /** A browse feed (topic pages, history, library): read with the account when signed in. */
++    suspend fun browseFeed(browseId: String): YtPageResult? {
++        val authed = YouTubeAccount.isSignedIn
++        val root = post("browse", authed) { put("browseId", browseId) } ?: return null
++        return parse(root, "browse", authed)
++    }
++
++    private fun collectObjects(element: JsonElement?, key: String, out: MutableList<JsonObject>) {
++        when (element) {
++            is JsonObject -> {
++                (element[key] as? JsonObject)?.let { out.add(it) }
++                for (value in element.values) collectObjects(value, key, out)
++            }
++            is JsonArray -> for (value in element) collectObjects(value, key, out)
++            else -> Unit
++        }
+     }
+ 
+     suspend fun subscribe(channelId: String): Boolean =
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
+index efec26c80..cebeec900 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
+@@ -208,7 +208,7 @@ private fun RootContent(tab: Int, onTab: (Int) -> Unit) {
+                 )
+             }
+         }
+-        if (tab != 2) {
++        if (YouTubeSettings.tabs[tab].first != "shorts") {
+             SearchField(Modifier.padding(horizontal = horizontal))
+             Spacer(Modifier.height(10.dp))
+         }
+@@ -226,11 +226,15 @@ private fun RootContent(tab: Int, onTab: (Int) -> Unit) {
+             }
+         }
+         Spacer(Modifier.height(12.dp))
+-        when (tab) {
+-            0 -> HomeTab()
+-            1 -> SubscriptionsTab()
+-            2 -> ShortsHost(Modifier.weight(1f))
+-            else -> SavedTab()
++        when (val id = YouTubeSettings.tabs[tab].first) {
++            "home" -> HomeTab()
++            "subs" -> SubscriptionsTab()
++            "shorts" -> ShortsHost(Modifier.weight(1f))
++            "saved" -> SavedTab()
++            "channels" -> ChannelsTab()
++            "history" -> AccountFeedTab(id, "FEhistory", "Sign in to see your watch history.")
++            "playlists" -> AccountFeedTab(id, "FEplaylist_aggregation", "Sign in to see your playlists.")
++            else -> TopicTab(id)
+         }
+     }
+ }
+@@ -371,6 +375,68 @@ private fun SubscriptionsTab() {
+     }
+ }
+ 
++/** A feed that only exists for a signed-in account: history and playlists. */
++@Composable
++private fun AccountFeedTab(id: String, browseId: String, signInHint: String) {
++    val horizontal = MaterialTheme.nuvio.spacing.screenHorizontal
++    val account by YouTubeAccount.state.collectAsState()
++    if (!account.signedIn) {
++        Column(Modifier.fillMaxWidth().padding(horizontal = horizontal), verticalArrangement = Arrangement.spacedBy(12.dp)) {
++            YouTubeAccountPanel()
++            EmptyState(signInHint, null) {}
++        }
++        return
++    }
++    PagedPage(key = "tab-$id-${account.activePageId}-${account.label}", header = null) { token ->
++        if (token == null) YtInnertube.browseFeed(browseId) else YtInnertube.continuation(token)
++    }
++}
++
++/** Live, Music, Gaming, News and Sports: the YouTube topic pages, with a search when the page comes back empty. */
++@Composable
++private fun TopicTab(id: String) {
++    val account by YouTubeAccount.state.collectAsState()
++    val feed = YouTubeSettings.topicFeeds[id]
++    PagedPage(key = "tab-$id-${account.signedIn}-${account.activePageId}", header = null) { token ->
++        if (token != null) return@PagedPage YtInnertube.continuation(token)
++        val page = feed?.let { YtInnertube.browseFeed(it.first) }
++        if (page != null && page.items.isNotEmpty()) page else feed?.let { YtInnertube.search(it.second, YtInnertube.VIDEOS_ONLY) } ?: page
++    }
++}
++
++/** Channels the user follows: the local list, plus the channels of the signed-in account's subscriptions feed. */
++@Composable
++private fun ChannelsTab() {
++    val tokens = MaterialTheme.nuvio
++    val horizontal = tokens.spacing.screenHorizontal
++    val saved by YouTubeRepository.saved.collectAsState()
++    val feed by YouTubeRepository.subsFeed.collectAsState()
++    val account by YouTubeAccount.state.collectAsState()
++    LaunchedEffect(saved.subscriptions, account.signedIn) { YouTubeRepository.loadSubscriptions() }
++    val channels = (saved.subscriptions + feed.filter { it.channelId.isNotBlank() }
++        .distinctBy { it.channelId }
++        .map { YtItem(kind = YtKind.CHANNEL, id = it.channelId, title = it.channel, thumb = "") })
++        .distinctBy { it.id }
++    if (channels.isEmpty()) {
++        Column(Modifier.fillMaxWidth().padding(horizontal = horizontal), verticalArrangement = Arrangement.spacedBy(12.dp)) {
++            if (!account.signedIn) YouTubeAccountPanel()
++            EmptyState("No channels yet. Open a channel and tap Subscribe.", null) {}
++        }
++        return
++    }
++    LazyColumn(
++        modifier = Modifier.fillMaxSize(),
++        contentPadding = PaddingValues(start = horizontal, end = horizontal, bottom = 24.dp),
++        verticalArrangement = Arrangement.spacedBy(12.dp),
++    ) {
++        items(channels.chunked(4)) { row ->
++            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
++                row.forEach { channel -> ChannelBubble(channel) }
++            }
++        }
++    }
++}
++
+ @Composable
+ private fun ShortsHost(modifier: Modifier) {
+     val shorts by YouTubeRepository.shorts.collectAsState()
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeSettings.kt
+index 7ceacc121..063607dd5 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeSettings.kt
+@@ -46,7 +46,7 @@ object YouTubeSettings {
+     val hideUpcoming = ForkBoolPref("settings/youtube_hide_upcoming", true)
+     val rememberLastTab = ForkBoolPref("settings/youtube_remember_tab", true)
+     val lastTab = ForkStringPref("settings/youtube_last_tab", "home")
+-    val tabOrder = ForkStringPref("settings/youtube_tab_order", "home,subs,shorts,saved")
++    val tabOrder = ForkStringPref("settings/youtube_tab_order", "home,subs,history,playlists,live,music,gaming,news,sports,shorts,channels,saved")
+     val hiddenTabs = ForkStringPref("settings/youtube_hidden_tabs", "")
+     val hiddenWords = ForkStringPref("settings/youtube_hidden_words", "")
+     val hiddenChannels = ForkStringPref("settings/youtube_hidden_channels", "")
+@@ -62,7 +62,29 @@ object YouTubeSettings {
+         YtSponsorCategory("filler", "Filler"),
+     )
+ 
+-    val tabs = listOf("home" to "Home", "subs" to "Subscriptions", "shorts" to "Shorts", "saved" to "Saved")
++    val tabs = listOf(
++        "home" to "Home",
++        "subs" to "Subscriptions",
++        "history" to "History",
++        "playlists" to "Playlists",
++        "live" to "Live",
++        "music" to "Music",
++        "gaming" to "Gaming",
++        "news" to "News",
++        "sports" to "Sports",
++        "shorts" to "Shorts",
++        "channels" to "Channels",
++        "saved" to "Saved",
++    )
++
++    /** Browse id and fallback search of the topic tabs; the fallback is used when YouTube sends nothing. */
++    val topicFeeds = mapOf(
++        "live" to ("FEtopics_live" to "live"),
++        "music" to ("FEtopics_music" to "music"),
++        "gaming" to ("FEtopics_gaming" to "gaming"),
++        "news" to ("FEtopics_news" to "news"),
++        "sports" to ("FEtopics_sports" to "sports highlights"),
++    )
+ 
+     private fun ids(text: String) = text.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+     fun categoryIds(text: String): Set<String> = ids(text).toSet()
