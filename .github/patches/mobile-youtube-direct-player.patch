@@ -1,19 +1,45 @@
 diff --git a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/TrailerExtractionPlatform.android.kt b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/TrailerExtractionPlatform.android.kt
-index c1b3aa97a..af49625f4 100644
+index c1b3aa97a..7f91358d0 100644
 --- a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/TrailerExtractionPlatform.android.kt
 +++ b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/TrailerExtractionPlatform.android.kt
-@@ -16,6 +16,10 @@ import okhttp3.RequestBody.Companion.toRequestBody
+@@ -16,6 +16,36 @@ import okhttp3.RequestBody.Companion.toRequestBody
  import java.util.concurrent.TimeUnit
  
  internal object TrailerExtractionPlatform {
 +    init {
 +        com.nuvio.app.features.youtube.YouTubeWarmupHooks.prefetchFirstBytes = { YoutubeFirstChunkCache.prefetch(it) }
++        com.nuvio.app.features.youtube.YouTubeWarmupHooks.hardwareCodecs = { hardwareVideoCodecs }
++    }
++
++    /** Video codecs this device decodes in hardware, from the platform codec list. */
++    private val hardwareVideoCodecs: Set<String> by lazy {
++        runCatching {
++            val found = HashSet<String>()
++            android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).codecInfos
++                .filter { !it.isEncoder }
++                .forEach { info ->
++                    val hardware = if (android.os.Build.VERSION.SDK_INT >= 29) {
++                        info.isHardwareAccelerated && !info.isSoftwareOnly
++                    } else {
++                        !info.name.startsWith("OMX.google.") && !info.name.startsWith("c2.android.")
++                    }
++                    if (!hardware) return@forEach
++                    info.supportedTypes.forEach { type ->
++                        when (type.lowercase()) {
++                            "video/avc" -> found.add("avc")
++                            "video/x-vnd.on2.vp9" -> found.add("vp9")
++                            "video/av01" -> found.add("av1")
++                        }
++                    }
++                }
++            found.toSet()
++        }.getOrDefault(emptySet())
 +    }
 +
      val defaultHeaders: Map<String, String> = mapOf(
          "accept-language" to "en-US,en;q=0.9",
          "user-agent" to
-@@ -90,11 +94,12 @@ internal object TrailerExtractionPlatform {
+@@ -90,11 +120,12 @@ internal object TrailerExtractionPlatform {
              bestProgressive?.url
          }
  
@@ -280,7 +306,7 @@ index 39df22650..b9bcf9cf2 100644
              backBufferMs = PlaybackBufferSettings.DEFAULT_BACK_BUFFER_MS,
          )
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index 85c648cbc..dd9000165 100644
+index 85c648cbc..418affc84 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 @@ -492,6 +492,7 @@ private fun ExoPlayerSurface(
@@ -291,6 +317,39 @@ index 85c648cbc..dd9000165 100644
          )
  
          val playerBuilder = ExoPlayer.Builder(context)
+@@ -845,6 +846,32 @@ private fun ExoPlayerSurface(
+         exoPlayer.addListener(listener)
+         // Nuvio fork: forward the player's own bandwidth meter to the auto quality speed test.
+         val autoQualityAnalyticsListener = object : androidx.media3.exoplayer.analytics.AnalyticsListener {
++            // Nuvio fork: Start timing lines for the video decoder (codec, hardware or software) and first frame.
++            override fun onVideoDecoderInitialized(
++                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
++                decoderName: String,
++                initializedTimestampMs: Long,
++                initializationDurationMs: Long,
++            ) {
++                if (!YouTubeDiag.isYouTubeMedia(sourceUrl)) return
++                val software = decoderName.startsWith("OMX.google.") || decoderName.startsWith("c2.android.") ||
++                    decoderName.contains(".sw.") || decoderName.contains("ffmpeg", ignoreCase = true) ||
++                    decoderName.contains("libgav1") || decoderName.contains("dav1d")
++                val mime = exoPlayer.videoFormat?.sampleMimeType.orEmpty().substringAfter('/')
++                com.nuvio.app.features.youtube.YouTubeStartTrace.mark(
++                    "decoder ${if (software) "SOFTWARE" else "hardware"} $mime $decoderName init ${initializationDurationMs} ms",
++                )
++            }
++
++            override fun onRenderedFirstFrame(
++                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
++                output: Any,
++                renderTimeMs: Long,
++            ) {
++                if (!YouTubeDiag.isYouTubeMedia(sourceUrl)) return
++                com.nuvio.app.features.youtube.YouTubeStartTrace.mark("first frame")
++            }
++
+             override fun onBandwidthEstimate(
+                 eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                 elapsedMs: Int,
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/YouTubeDiag.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/YouTubeDiag.kt
 index 5a549e170..867c2303e 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/YouTubeDiag.kt
@@ -1500,10 +1559,10 @@ index e3112aae5..00af6caec 100644
  }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeWarmupHooks.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeWarmupHooks.kt
 new file mode 100644
-index 000000000..4c3c14e63
+index 000000000..c1bc61dcd
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeWarmupHooks.kt
-@@ -0,0 +1,9 @@
+@@ -0,0 +1,13 @@
 +package com.nuvio.app.features.youtube
 +
 +import com.nuvio.app.features.trailer.TrailerPlaybackSource
@@ -1512,9 +1571,13 @@ index 000000000..4c3c14e63
 +object YouTubeWarmupHooks {
 +    @Volatile
 +    var prefetchFirstBytes: ((TrailerPlaybackSource) -> Unit)? = null
++
++    /** Codecs ("avc", "vp9", "av1") this device decodes in hardware; null when unknown. */
++    @Volatile
++    var hardwareCodecs: (() -> Set<String>)? = null
 +}
 diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
-index 3ff0cebd2..dcb3b6445 100644
+index 3ff0cebd2..75c16fdc3 100644
 --- a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
 +++ b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
 @@ -1,7 +1,11 @@
@@ -1701,7 +1764,7 @@ index 3ff0cebd2..dcb3b6445 100644
      }
  
      private suspend fun singleUrlSource(
-@@ -551,6 +587,22 @@ class InAppYouTubeExtractor {
+@@ -551,6 +587,30 @@ class InAppYouTubeExtractor {
          return parseUrl(url)?.query?.get("n")?.firstOrNull()?.isNotBlank() == true
      }
  
@@ -1714,9 +1777,17 @@ index 3ff0cebd2..dcb3b6445 100644
 +
 +    /** Keeps the best height, but narrows that height to the preferred codec when it is offered there. */
 +    private fun preferCodec(pool: List<StreamCandidate>, codec: String): List<StreamCandidate> {
-+        if (codec.isBlank() || codec == "auto") return pool
++        if (codec.isBlank()) return pool
 +        val top = pool.maxOfOrNull { it.height } ?: return pool
 +        val atTop = pool.filter { it.height == top }
++        if (codec == "auto") {
++            // Same height, but a codec this device decodes in hardware starts faster than a software one.
++            val hardware = runCatching {
++                com.nuvio.app.features.youtube.YouTubeWarmupHooks.hardwareCodecs?.invoke()
++            }.getOrNull().orEmpty()
++            val hw = atTop.filter { it.codec in hardware }
++            return if (hardware.isEmpty() || hw.isEmpty() || hw.size == atTop.size) pool else hw
++        }
 +        val match = atTop.filter { it.codec == codec }
 +        return if (match.isEmpty()) pool else match
 +    }
