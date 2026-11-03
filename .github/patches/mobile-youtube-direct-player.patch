@@ -384,8 +384,21 @@ index 5a549e170..867c2303e 100644
          job?.cancel()
          scope.launch { send("ready", url, null) }
      }
+diff --git a/composeApp/src/androidPlaystore/kotlin/com/nuvio/app/features/trailer/TrailerPlaybackResolver.android.kt b/composeApp/src/androidPlaystore/kotlin/com/nuvio/app/features/trailer/TrailerPlaybackResolver.android.kt
+index db2776747..0487698f1 100644
+--- a/composeApp/src/androidPlaystore/kotlin/com/nuvio/app/features/trailer/TrailerPlaybackResolver.android.kt
++++ b/composeApp/src/androidPlaystore/kotlin/com/nuvio/app/features/trailer/TrailerPlaybackResolver.android.kt
+@@ -3,5 +3,7 @@ package com.nuvio.app.features.trailer
+ actual object TrailerPlaybackResolver {
+     actual suspend fun resolveFromYouTubeUrl(youtubeUrl: String): TrailerPlaybackSource? = null
+ 
++    actual suspend fun warmUp() {}
++
+     actual suspend fun resolveSingleUrlFromYouTubeUrl(youtubeUrl: String): String? = null
+ }
+\ No newline at end of file
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index 218394f06..753faf5ad 100644
+index 218394f06..f8243901f 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 @@ -950,11 +950,21 @@ internal fun MainAppContent(
@@ -421,10 +434,11 @@ index 218394f06..753faf5ad 100644
              }
          }
  
-@@ -988,6 +999,21 @@ internal fun MainAppContent(
+@@ -988,6 +999,22 @@ internal fun MainAppContent(
              }
          }
  
++        androidx.compose.runtime.LaunchedEffect(Unit) { com.nuvio.app.features.youtube.YouTubePrewarm.warmConfig() }
 +        // Channel button of the YouTube player: keep the video playing in the mini player and show the channel.
 +        androidx.compose.runtime.SideEffect {
 +            com.nuvio.app.features.youtube.YouTubePlayerHooks.openChannel = { channelId, name ->
@@ -443,7 +457,7 @@ index 218394f06..753faf5ad 100644
          // Jellyfin fork feature: nav entry opens the Jellyfin route
          LaunchedEffect(navController) {
              if (!ownsAppRuntime) return@LaunchedEffect
-@@ -1403,8 +1429,13 @@ internal fun MainAppContent(
+@@ -1403,8 +1430,13 @@ internal fun MainAppContent(
              )
          }
  
@@ -458,7 +472,7 @@ index 218394f06..753faf5ad 100644
                  type = item.parentMetaType,
                  videoId = item.videoId,
                  parentMetaId = item.parentMetaId,
-@@ -1418,7 +1449,17 @@ internal fun MainAppContent(
+@@ -1418,7 +1450,17 @@ internal fun MainAppContent(
  
          val openContinueWatching: (ContinueWatchingItem, Boolean, Boolean) -> Unit = { item, manualSelection, startFromBeginning ->
              resumePromptItem = null
@@ -1008,6 +1022,18 @@ index 933eae59e..06b9a0113 100644
  @Composable
  private fun YouTubeTabsSection(isTablet: Boolean) {
      val order by YouTubeSettings.tabOrder.value.collectAsState()
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/trailer/TrailerPlaybackResolver.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/trailer/TrailerPlaybackResolver.kt
+index aa26505b9..0e41e03c1 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/trailer/TrailerPlaybackResolver.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/trailer/TrailerPlaybackResolver.kt
+@@ -5,4 +5,7 @@ expect object TrailerPlaybackResolver {
+ 
+     /** One URL with video and audio together, for playing a YouTube video as a stream. */
+     suspend fun resolveSingleUrlFromYouTubeUrl(youtubeUrl: String): String?
++
++    /** Fetches what every resolve needs (page key, visitor id) so the first tap does not wait for it. */
++    suspend fun warmUp()
+ }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeDeArrow.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeDeArrow.kt
 new file mode 100644
 index 000000000..fb9f4dcf1
@@ -1221,10 +1247,10 @@ index e2c97bbf8..4c65b94ca 100644
  
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt
 new file mode 100644
-index 000000000..2d5787e49
+index 000000000..8f687ac06
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,83 @@
 +package com.nuvio.app.features.youtube
 +
 +import com.nuvio.app.features.streams.YouTubeStreamResolver
@@ -1238,6 +1264,7 @@ index 000000000..2d5787e49
 +import kotlinx.coroutines.Dispatchers
 +import kotlinx.coroutines.SupervisorJob
 +import kotlinx.coroutines.async
++import kotlinx.coroutines.launch
 +import kotlinx.coroutines.sync.Semaphore
 +import kotlinx.coroutines.sync.withPermit
 +
@@ -1250,7 +1277,7 @@ index 000000000..2d5787e49
 +    private class Entry(val key: String, val source: Deferred<TrailerPlaybackSource?>, val mark: TimeMark)
 +
 +    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-+    private val gate = Semaphore(2)
++    private val gate = Semaphore(3)
 +    private val entries = LinkedHashMap<String, Entry>()
 +    private val lock = Any()
 +
@@ -1260,9 +1287,15 @@ index 000000000..2d5787e49
 +    private fun fresh(entry: Entry, key: String): Boolean =
 +        entry.key == key && entry.mark.elapsedNow() < MAX_AGE
 +
++    /** Fetches the page key and visitor id in the background; cheap when they are still fresh. */
++    fun warmConfig() {
++        scope.launch { runCatching { TrailerPlaybackResolver.warmUp() } }
++    }
++
 +    /** Starts resolving [item] in the background unless a fresh result is already on its way. */
 +    fun warm(item: YtItem) {
 +        if (item.kind != YtKind.VIDEO || item.isShort || item.isLive || item.id.isBlank()) return
++        warmConfig()
 +        val key = settingsKey()
 +        synchronized(lock) {
 +            entries[item.id]?.let { if (fresh(it, key)) return }
@@ -1280,7 +1313,7 @@ index 000000000..2d5787e49
 +    }
 +
 +    /** Warms the first few playable videos of a list the viewer is looking at. */
-+    fun warmFirst(items: List<YtItem>, count: Int = 2) {
++    fun warmFirst(items: List<YtItem>, count: Int = 4) {
 +        items.asSequence()
 +            .filter { it.kind == YtKind.VIDEO && !it.isShort && !it.isLive }
 +            .take(count)
@@ -1302,7 +1335,7 @@ index 000000000..2d5787e49
 +    private const val MAX_ENTRIES = 8
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
-index 206bbcbdb..6b5eef496 100644
+index 206bbcbdb..98e627818 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
 @@ -2,6 +2,9 @@ package com.nuvio.app.features.youtube
@@ -1339,7 +1372,20 @@ index 206bbcbdb..6b5eef496 100644
      } else {
          YouTubeRepository.play(item)
      }
-@@ -138,6 +147,8 @@ fun YouTubeScreen(
+@@ -102,6 +111,12 @@ fun YouTubeScreen(
+     onOpenInPlayer: (item: YtItem, positionMs: Long) -> Unit,
+ ) {
+     val tokens = MaterialTheme.nuvio
++    LaunchedEffect(Unit) {
++        while (true) {
++            YouTubePrewarm.warmConfig()
++            kotlinx.coroutines.delay(15 * 60 * 1000L)
++        }
++    }
+     LaunchedEffect(Unit) {
+         YouTubeRepository.ensureLoaded()
+         YouTubePrefs.autoplay.ensureLoaded()
+@@ -138,6 +153,8 @@ fun YouTubeScreen(
          YtPage.Shorts -> "Shorts"
      }
  
@@ -1348,7 +1394,7 @@ index 206bbcbdb..6b5eef496 100644
      CompositionLocalProvider(LocalFullPlayer provides onOpenInPlayer) {
          Box(Modifier.fillMaxSize().background(tokens.colors.background)) {
              Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
-@@ -343,6 +354,11 @@ private fun HomeTab() {
+@@ -343,6 +360,11 @@ private fun HomeTab() {
      val keep = rememberYtFilter()
      val account by YouTubeAccount.state.collectAsState()
      LaunchedEffect(account.signedIn) { YouTubeRepository.loadHome() }
@@ -1360,7 +1406,7 @@ index 206bbcbdb..6b5eef496 100644
      LazyColumn(
          modifier = Modifier.fillMaxSize(),
          contentPadding = PaddingValues(bottom = 24.dp),
-@@ -401,6 +417,7 @@ private fun SubscriptionsTab() {
+@@ -401,6 +423,7 @@ private fun SubscriptionsTab() {
      val horizontal = tokens.spacing.screenHorizontal
      val saved by YouTubeRepository.saved.collectAsState()
      val feed by YouTubeRepository.subsFeed.collectAsState()
@@ -1368,7 +1414,7 @@ index 206bbcbdb..6b5eef496 100644
      val loading by YouTubeRepository.subsLoading.collectAsState()
      val account by YouTubeAccount.state.collectAsState()
      LaunchedEffect(saved.subscriptions, account.signedIn) { YouTubeRepository.loadSubscriptions() }
-@@ -702,6 +719,7 @@ private fun PagedPage(
+@@ -702,6 +725,7 @@ private fun PagedPage(
      val visible = items.filter(keep)
      val shorts = visible.filter { it.isShort && it.kind == YtKind.VIDEO }
      val rest = visible.filterNot { it.isShort && it.kind == YtKind.VIDEO }
@@ -1376,7 +1422,7 @@ index 206bbcbdb..6b5eef496 100644
      LazyColumn(
          state = listState,
          modifier = Modifier.fillMaxSize(),
-@@ -732,6 +750,7 @@ private fun PagedPage(
+@@ -732,6 +756,7 @@ private fun PagedPage(
  @Composable
  private fun ShortCard(item: YtItem, siblings: List<YtItem>) {
      val tokens = MaterialTheme.nuvio
@@ -1384,7 +1430,7 @@ index 206bbcbdb..6b5eef496 100644
      Box(
          modifier = Modifier
              .width(130.dp)
-@@ -747,7 +766,7 @@ private fun ShortCard(item: YtItem, siblings: List<YtItem>) {
+@@ -747,7 +772,7 @@ private fun ShortCard(item: YtItem, siblings: List<YtItem>) {
              modifier = Modifier.fillMaxSize(),
          )
          Text(
@@ -1393,7 +1439,7 @@ index 206bbcbdb..6b5eef496 100644
              color = Color.White,
              style = MaterialTheme.typography.labelMedium,
              maxLines = 2,
-@@ -786,7 +805,18 @@ private fun ItemCard(
+@@ -786,7 +811,18 @@ private fun ItemCard(
          }
          return
      }
@@ -1413,7 +1459,7 @@ index 206bbcbdb..6b5eef496 100644
          Box(
              modifier = Modifier
                  .fillMaxWidth()
-@@ -795,7 +825,7 @@ private fun ItemCard(
+@@ -795,7 +831,7 @@ private fun ItemCard(
                  .background(tokens.colors.surfaceCard),
          ) {
              AsyncImage(
@@ -1422,7 +1468,7 @@ index 206bbcbdb..6b5eef496 100644
                  contentDescription = null,
                  contentScale = ContentScale.Crop,
                  modifier = Modifier.fillMaxSize(),
-@@ -831,7 +861,7 @@ private fun ItemCard(
+@@ -831,7 +867,7 @@ private fun ItemCard(
          Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.Top) {
              Column(Modifier.weight(1f)) {
                  Text(
@@ -1577,13 +1623,14 @@ index 000000000..c1bc61dcd
 +    var hardwareCodecs: (() -> Set<String>)? = null
 +}
 diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
-index 3ff0cebd2..75c16fdc3 100644
+index 3ff0cebd2..d7df5863d 100644
 --- a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
 +++ b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
-@@ -1,7 +1,11 @@
+@@ -1,7 +1,12 @@
  package com.nuvio.app.features.trailer
  
  import co.touchlab.kermit.Logger
++import kotlin.time.Duration.Companion.hours
 +import kotlin.time.Duration.Companion.minutes
  import kotlinx.coroutines.Dispatchers
 +import kotlinx.coroutines.async
@@ -1592,16 +1639,42 @@ index 3ff0cebd2..75c16fdc3 100644
  import kotlinx.coroutines.withContext
  import kotlinx.coroutines.withTimeout
  import kotlinx.serialization.json.Json
-@@ -15,6 +19,8 @@ internal const val TRAILER_REQUEST_TIMEOUT_MS = 20_000L
+@@ -15,6 +20,34 @@ internal const val TRAILER_REQUEST_TIMEOUT_MS = 20_000L
  
  private const val EXTRACTOR_TIMEOUT_MS = 30_000L
  private const val PREFERRED_SEPARATE_CLIENT = "visionos"
-+private val WATCH_CONFIG_TTL = 30.minutes
++private val WATCH_CONFIG_TTL = 4.hours
++private val WATCH_CONFIG_REFRESH = 20.minutes
 +private var cachedWatchConfig: Pair<WatchConfig, kotlin.time.TimeMark>? = null
++private val watchConfigLock = kotlinx.coroutines.sync.Mutex()
++
++/** Fetches the page key and visitor id ahead of a tap so the first resolve skips the watch page (about 1.3 s). */
++internal suspend fun warmYouTubeWatchConfig() {
++    val current = cachedWatchConfig
++    if (current != null && current.second.elapsedNow() < WATCH_CONFIG_REFRESH) return
++    watchConfigLock.withLock {
++        val again = cachedWatchConfig
++        if (again != null && again.second.elapsedNow() < WATCH_CONFIG_REFRESH) return
++        runCatching {
++            val response = TrailerExtractionPlatform.performRequest(
++                url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ&hl=en",
++                method = "GET",
++                headers = TrailerExtractionPlatform.defaultHeaders,
++                body = null,
++                timeoutMillis = TRAILER_REQUEST_TIMEOUT_MS,
++            )
++            if (response.ok) {
++                val key = API_KEY_REGEX.find(response.body)?.groupValues?.getOrNull(1)
++                val visitor = VISITOR_DATA_REGEX.find(response.body)?.groupValues?.getOrNull(1)
++                if (key != null) cachedWatchConfig = WatchConfig(key, visitor) to kotlin.time.TimeSource.Monotonic.markNow()
++            }
++        }
++    }
++}
  
  private val VIDEO_ID_REGEX = Regex("^[a-zA-Z0-9_-]{11}$")
  private val API_KEY_REGEX = Regex("\"INNERTUBE_API_KEY\":\"([^\"]+)\"")
-@@ -48,6 +54,8 @@ internal data class StreamCandidate(
+@@ -48,6 +81,8 @@ internal data class StreamCandidate(
      // alternate-language dub track, not the video's original/default audio.
      // Always true for video/progressive candidates, so it never affects them.
      val isDefaultAudioTrack: Boolean = true,
@@ -1610,7 +1683,7 @@ index 3ff0cebd2..75c16fdc3 100644
  )
  
  private data class ManifestBestVariant(
-@@ -167,19 +175,25 @@ class InAppYouTubeExtractor {
+@@ -167,19 +202,25 @@ class InAppYouTubeExtractor {
      ): TrailerPlaybackSource? {
          val videoId = extractVideoId(youtubeUrl) ?: return null
  
@@ -1648,7 +1721,7 @@ index 3ff0cebd2..75c16fdc3 100644
          val apiKey = watchConfig.apiKey
              ?: throw IllegalStateException("Unable to extract INNERTUBE_API_KEY")
  
-@@ -188,7 +202,11 @@ class InAppYouTubeExtractor {
+@@ -188,7 +229,11 @@ class InAppYouTubeExtractor {
          val adaptiveAudio = mutableListOf<StreamCandidate>()
          val manifestUrls = mutableListOf<Triple<String, Int, String>>()
  
@@ -1661,7 +1734,7 @@ index 3ff0cebd2..75c16fdc3 100644
              runCatching {
                  val playerResponse = fetchPlayerResponse(
                      apiKey = apiKey,
-@@ -196,7 +214,7 @@ class InAppYouTubeExtractor {
+@@ -196,7 +241,7 @@ class InAppYouTubeExtractor {
                      client = client,
                      visitorData = watchConfig.visitorData,
                  )
@@ -1670,7 +1743,7 @@ index 3ff0cebd2..75c16fdc3 100644
                  val streamingData = playerResponse.objectValue("streamingData") ?: return@runCatching
                  val hlsManifestUrl = streamingData.stringValue("hlsManifestUrl")
                  if (!hlsManifestUrl.isNullOrBlank()) {
-@@ -256,6 +274,7 @@ class InAppYouTubeExtractor {
+@@ -256,6 +301,7 @@ class InAppYouTubeExtractor {
                              height = height,
                              fps = fps,
                              ext = if (mimeType.contains("webm")) "webm" else "mp4",
@@ -1678,7 +1751,7 @@ index 3ff0cebd2..75c16fdc3 100644
                          )
                      } else if (hasAudio) {
                          val bitrate = format.numberValue("bitrate")
-@@ -282,32 +301,48 @@ class InAppYouTubeExtractor {
+@@ -282,32 +328,48 @@ class InAppYouTubeExtractor {
                          )
                      }
                  }
@@ -1745,7 +1818,7 @@ index 3ff0cebd2..75c16fdc3 100644
              }
          }
  
-@@ -319,15 +354,16 @@ class InAppYouTubeExtractor {
+@@ -319,15 +381,16 @@ class InAppYouTubeExtractor {
          if (heights.isNotEmpty()) com.nuvio.app.features.youtube.YouTubeStreamQuality.publish(videoId, heights)
          val cap = com.nuvio.app.features.youtube.YouTubeStreamQuality.capFor(videoId)
          val pool = if (cap != null) adaptiveVideo.filter { it.height in 1..cap }.ifEmpty { adaptiveVideo } else adaptiveVideo
@@ -1764,7 +1837,7 @@ index 3ff0cebd2..75c16fdc3 100644
      }
  
      private suspend fun singleUrlSource(
-@@ -551,6 +587,30 @@ class InAppYouTubeExtractor {
+@@ -551,6 +614,30 @@ class InAppYouTubeExtractor {
          return parseUrl(url)?.query?.get("n")?.firstOrNull()?.isNotBlank() == true
      }
  
@@ -1795,3 +1868,29 @@ index 3ff0cebd2..75c16fdc3 100644
      private fun videoScore(height: Int, fps: Int, bitrate: Double): Double {
          return height * 1_000_000_000.0 + fps * 1_000_000.0 + bitrate
      }
+diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/TrailerPlaybackResolver.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/TrailerPlaybackResolver.kt
+index 992de35fb..db5f01754 100644
+--- a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/TrailerPlaybackResolver.kt
++++ b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/TrailerPlaybackResolver.kt
+@@ -8,6 +8,8 @@ actual object TrailerPlaybackResolver {
+         return extractor.extractPlaybackSource(youtubeUrl)
+     }
+ 
++    actual suspend fun warmUp() = warmYouTubeWatchConfig()
++
+     actual suspend fun resolveSingleUrlFromYouTubeUrl(youtubeUrl: String): String? {
+         if (youtubeUrl.isBlank()) return null
+         return extractor.extractSingleUrl(youtubeUrl)
+diff --git a/composeApp/src/iosAppStore/kotlin/com/nuvio/app/features/trailer/TrailerPlaybackResolver.ios.kt b/composeApp/src/iosAppStore/kotlin/com/nuvio/app/features/trailer/TrailerPlaybackResolver.ios.kt
+index db2776747..0487698f1 100644
+--- a/composeApp/src/iosAppStore/kotlin/com/nuvio/app/features/trailer/TrailerPlaybackResolver.ios.kt
++++ b/composeApp/src/iosAppStore/kotlin/com/nuvio/app/features/trailer/TrailerPlaybackResolver.ios.kt
+@@ -3,5 +3,7 @@ package com.nuvio.app.features.trailer
+ actual object TrailerPlaybackResolver {
+     actual suspend fun resolveFromYouTubeUrl(youtubeUrl: String): TrailerPlaybackSource? = null
+ 
++    actual suspend fun warmUp() {}
++
+     actual suspend fun resolveSingleUrlFromYouTubeUrl(youtubeUrl: String): String? = null
+ }
+\ No newline at end of file
