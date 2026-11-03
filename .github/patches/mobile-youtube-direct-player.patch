@@ -2773,7 +2773,7 @@ index 000000000..0d06be8b4
 +    var lastExtractFailure: String? = null
 +}
 diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
-index 3ff0cebd2..6676c05b6 100644
+index 3ff0cebd2..08a7c972e 100644
 --- a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
 +++ b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
 @@ -1,7 +1,12 @@
@@ -2789,13 +2789,14 @@ index 3ff0cebd2..6676c05b6 100644
  import kotlinx.coroutines.withContext
  import kotlinx.coroutines.withTimeout
  import kotlinx.serialization.json.Json
-@@ -15,6 +20,34 @@ internal const val TRAILER_REQUEST_TIMEOUT_MS = 20_000L
+@@ -15,6 +20,35 @@ internal const val TRAILER_REQUEST_TIMEOUT_MS = 20_000L
  
  private const val EXTRACTOR_TIMEOUT_MS = 30_000L
  private const val PREFERRED_SEPARATE_CLIENT = "visionos"
 +private val WATCH_CONFIG_TTL = 4.hours
 +private val WATCH_CONFIG_REFRESH = 20.minutes
 +private var cachedWatchConfig: Pair<WatchConfig, kotlin.time.TimeMark>? = null
++private const val FALLBACK_API_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
 +private val watchConfigLock = kotlinx.coroutines.sync.Mutex()
 +
 +/** Fetches the page key and visitor id ahead of a tap so the first resolve skips the watch page (about 1.3 s). */
@@ -2824,7 +2825,7 @@ index 3ff0cebd2..6676c05b6 100644
  
  private val VIDEO_ID_REGEX = Regex("^[a-zA-Z0-9_-]{11}$")
  private val API_KEY_REGEX = Regex("\"INNERTUBE_API_KEY\":\"([^\"]+)\"")
-@@ -48,6 +81,8 @@ internal data class StreamCandidate(
+@@ -48,6 +82,8 @@ internal data class StreamCandidate(
      // alternate-language dub track, not the video's original/default audio.
      // Always true for video/progressive candidates, so it never affects them.
      val isDefaultAudioTrack: Boolean = true,
@@ -2833,7 +2834,7 @@ index 3ff0cebd2..6676c05b6 100644
  )
  
  private data class ManifestBestVariant(
-@@ -158,6 +193,7 @@ class InAppYouTubeExtractor {
+@@ -158,6 +194,7 @@ class InAppYouTubeExtractor {
              }
          }.onFailure {
              log.w { "Trailer extractor failed for $youtubeUrl: ${it.message}" }
@@ -2841,7 +2842,7 @@ index 3ff0cebd2..6676c05b6 100644
          }.getOrNull()
      }
  
-@@ -167,19 +203,25 @@ class InAppYouTubeExtractor {
+@@ -167,19 +204,36 @@ class InAppYouTubeExtractor {
      ): TrailerPlaybackSource? {
          val videoId = extractVideoId(youtubeUrl) ?: return null
  
@@ -2857,20 +2858,31 @@ index 3ff0cebd2..6676c05b6 100644
 -            throw IllegalStateException("Failed to fetch watch page (${watchResponse.status})")
 +        // The key and visitor id are not per video: reuse them so later videos skip the page fetch.
 +        val cached = cachedWatchConfig?.takeIf { it.second.elapsedNow() < WATCH_CONFIG_TTL }?.first
-+        val watchConfig = cached ?: run {
-+            val watchUrl = "https://www.youtube.com/watch?v=$videoId&hl=en"
-+            val watchResponse = TrailerExtractionPlatform.performRequest(
-+                url = watchUrl,
-+                method = "GET",
-+                headers = TrailerExtractionPlatform.defaultHeaders,
-+                body = null,
-+                timeoutMillis = TRAILER_REQUEST_TIMEOUT_MS,
-+            )
-+            if (!watchResponse.ok) {
-+                throw IllegalStateException("Failed to fetch watch page (${watchResponse.status})")
-+            }
-+            getWatchConfig(watchResponse.body).also {
-+                if (it.apiKey != null) cachedWatchConfig = it to kotlin.time.TimeSource.Monotonic.markNow()
++        // One fetch at a time: parallel resolves each fetching the page get HTTP 429.
++        val watchConfig = cached ?: watchConfigLock.withLock {
++            cachedWatchConfig?.takeIf { it.second.elapsedNow() < WATCH_CONFIG_TTL }?.first ?: run {
++                val watchUrl = "https://www.youtube.com/watch?v=$videoId&hl=en"
++                val fetched = runCatching {
++                    val watchResponse = TrailerExtractionPlatform.performRequest(
++                        url = watchUrl,
++                        method = "GET",
++                        headers = TrailerExtractionPlatform.defaultHeaders,
++                        body = null,
++                        timeoutMillis = TRAILER_REQUEST_TIMEOUT_MS,
++                    )
++                    if (!watchResponse.ok) {
++                        throw IllegalStateException("Failed to fetch watch page (${watchResponse.status})")
++                    }
++                    getWatchConfig(watchResponse.body)
++                }
++                val config = fetched.getOrNull()?.takeIf { it.apiKey != null }
++                if (config != null) {
++                    cachedWatchConfig = config to kotlin.time.TimeSource.Monotonic.markNow()
++                    config
++                } else {
++                    // Rate limited or blocked: reuse an expired config, else the public web key without a visitor id.
++                    cachedWatchConfig?.first ?: WatchConfig(FALLBACK_API_KEY, null)
++                }
 +            }
          }
 -
@@ -2879,7 +2891,7 @@ index 3ff0cebd2..6676c05b6 100644
          val apiKey = watchConfig.apiKey
              ?: throw IllegalStateException("Unable to extract INNERTUBE_API_KEY")
  
-@@ -188,7 +230,12 @@ class InAppYouTubeExtractor {
+@@ -188,7 +242,12 @@ class InAppYouTubeExtractor {
          val adaptiveAudio = mutableListOf<StreamCandidate>()
          val manifestUrls = mutableListOf<Triple<String, Int, String>>()
  
@@ -2893,7 +2905,7 @@ index 3ff0cebd2..6676c05b6 100644
              runCatching {
                  val playerResponse = fetchPlayerResponse(
                      apiKey = apiKey,
-@@ -196,8 +243,13 @@ class InAppYouTubeExtractor {
+@@ -196,8 +255,13 @@ class InAppYouTubeExtractor {
                      client = client,
                      visitorData = watchConfig.visitorData,
                  )
@@ -2909,7 +2921,7 @@ index 3ff0cebd2..6676c05b6 100644
                  val hlsManifestUrl = streamingData.stringValue("hlsManifestUrl")
                  if (!hlsManifestUrl.isNullOrBlank()) {
                      manifestUrls += Triple(client.key, client.priority, hlsManifestUrl)
-@@ -256,6 +308,7 @@ class InAppYouTubeExtractor {
+@@ -256,6 +320,7 @@ class InAppYouTubeExtractor {
                              height = height,
                              fps = fps,
                              ext = if (mimeType.contains("webm")) "webm" else "mp4",
@@ -2917,7 +2929,7 @@ index 3ff0cebd2..6676c05b6 100644
                          )
                      } else if (hasAudio) {
                          val bitrate = format.numberValue("bitrate")
-@@ -282,32 +335,49 @@ class InAppYouTubeExtractor {
+@@ -282,32 +347,49 @@ class InAppYouTubeExtractor {
                          )
                      }
                  }
@@ -2985,7 +2997,7 @@ index 3ff0cebd2..6676c05b6 100644
              }
          }
  
-@@ -319,15 +389,16 @@ class InAppYouTubeExtractor {
+@@ -319,15 +401,16 @@ class InAppYouTubeExtractor {
          if (heights.isNotEmpty()) com.nuvio.app.features.youtube.YouTubeStreamQuality.publish(videoId, heights)
          val cap = com.nuvio.app.features.youtube.YouTubeStreamQuality.capFor(videoId)
          val pool = if (cap != null) adaptiveVideo.filter { it.height in 1..cap }.ifEmpty { adaptiveVideo } else adaptiveVideo
@@ -3004,7 +3016,7 @@ index 3ff0cebd2..6676c05b6 100644
      }
  
      private suspend fun singleUrlSource(
-@@ -551,6 +622,30 @@ class InAppYouTubeExtractor {
+@@ -551,6 +634,30 @@ class InAppYouTubeExtractor {
          return parseUrl(url)?.query?.get("n")?.firstOrNull()?.isNotBlank() == true
      }
  
