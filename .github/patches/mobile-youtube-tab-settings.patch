@@ -1,0 +1,223 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt
+index 54d8e8c5a..b1bb4c9ee 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt
+@@ -1,6 +1,21 @@
+ package com.nuvio.app.features.settings
+ 
++import androidx.compose.foundation.background
+ import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.WindowInsets
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.layout.systemBars
++import androidx.compose.foundation.layout.windowInsetsPadding
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.shape.CircleShape
++import androidx.compose.foundation.verticalScroll
++import androidx.compose.material.icons.rounded.Check
++import androidx.compose.material3.Surface
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.window.Dialog
++import androidx.compose.ui.window.DialogProperties
+ import androidx.compose.foundation.layout.Arrangement
+ import androidx.compose.foundation.layout.Column
+ import androidx.compose.foundation.layout.Row
+@@ -37,7 +52,7 @@ import com.nuvio.app.features.youtube.YouTubeSettings
+ 
+ /** Fork settings: YouTube tab. Same groups as the 1T reference app: Account, Playback, SponsorBlock, Feeds, Tabs, Hidden words. */
+ @Composable
+-internal fun ExtraYouTubeSection(isTablet: Boolean) {
++internal fun ExtraYouTubeSection(isTablet: Boolean, showTabToggle: Boolean = true) {
+     LaunchedEffect(Unit) {
+         YouTubeSettings.ensureLoaded()
+         YouTubePlayerPrefs.loop.ensureLoaded()
+@@ -56,7 +71,7 @@ internal fun ExtraYouTubeSection(isTablet: Boolean) {
+     val account by YouTubeAccount.state.collectAsState()
+     var showAccounts by remember { mutableStateOf(false) }
+ 
+-    SettingsSection(title = "YouTube", isTablet = isTablet) {
++    if (showTabToggle) SettingsSection(title = "YouTube", isTablet = isTablet) {
+         SettingsGroup(isTablet = isTablet) {
+             SettingsSwitchRow(
+                 title = "YouTube tab",
+@@ -269,32 +284,22 @@ private fun YouTubeListSection(title: String, hint: String, pref: ForkStringPref
+     }
+ }
+ 
+-/** "Who's watching?": the signed-in accounts, add another, sign out of the current one. */
++/** "Who's watching?": the signed-in accounts (current one ticked), add another, sign out of the current one. */
+ @Composable
+-private fun YouTubeAccountsDialog(onDismiss: () -> Unit) {
++internal fun YouTubeAccountsDialog(onDismiss: () -> Unit) {
+     val account by YouTubeAccount.state.collectAsState()
++    val current = account.label.ifBlank { "YouTube account" }
+     AlertDialog(
+         onDismissRequest = onDismiss,
+         title = { Text("Who's watching?") },
+         text = {
+             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+-                Text(
+-                    text = account.label.ifBlank { "YouTube account" } + "  (current)",
+-                    style = MaterialTheme.typography.bodyLarge,
+-                    modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+-                )
++                AccountRow(label = current, current = true, onClick = onDismiss)
+                 account.others.forEachIndexed { index, label ->
+-                    Text(
+-                        text = label.ifBlank { "YouTube account" },
+-                        style = MaterialTheme.typography.bodyLarge,
+-                        modifier = Modifier
+-                            .fillMaxWidth()
+-                            .clickable {
+-                                YouTubeAccount.switchTo(index)
+-                                onDismiss()
+-                            }
+-                            .padding(vertical = 10.dp),
+-                    )
++                    AccountRow(label = label.ifBlank { "YouTube account" }, current = false) {
++                        YouTubeAccount.switchTo(index)
++                        onDismiss()
++                    }
+                 }
+                 TextButton(onClick = {
+                     YouTubeAccount.addAccount()
+@@ -303,9 +308,65 @@ private fun YouTubeAccountsDialog(onDismiss: () -> Unit) {
+                 TextButton(onClick = {
+                     YouTubeAccount.signOut()
+                     onDismiss()
+-                }) { Text("Sign out") }
++                }) { Text("Sign out of $current") }
+             }
+         },
+         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+     )
+ }
++
++@Composable
++private fun AccountRow(label: String, current: Boolean, onClick: () -> Unit) {
++    Row(
++        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
++        verticalAlignment = Alignment.CenterVertically,
++        horizontalArrangement = Arrangement.spacedBy(12.dp),
++    ) {
++        Box(
++            modifier = Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
++            contentAlignment = Alignment.Center,
++        ) {
++            Text(
++                text = label.take(1).lowercase(),
++                color = MaterialTheme.colorScheme.onPrimary,
++                style = MaterialTheme.typography.titleMedium,
++            )
++        }
++        Text(
++            text = label,
++            style = MaterialTheme.typography.bodyLarge,
++            maxLines = 1,
++            overflow = TextOverflow.Ellipsis,
++            modifier = Modifier.weight(1f),
++        )
++        if (current) Icon(Icons.Rounded.Check, contentDescription = "Current account")
++    }
++}
++
++/** Full-screen YouTube settings opened from the Settings button in the YouTube tab header. */
++@Composable
++fun YouTubeSettingsSheet(onDismiss: () -> Unit) {
++    Dialog(
++        onDismissRequest = onDismiss,
++        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
++    ) {
++        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
++            Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
++                Row(
++                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
++                    verticalAlignment = Alignment.CenterVertically,
++                ) {
++                    Text(
++                        text = "YouTube settings",
++                        style = MaterialTheme.typography.headlineSmall,
++                        modifier = Modifier.weight(1f),
++                    )
++                    TextButton(onClick = onDismiss) { Text("Done") }
++                }
++                Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
++                    ExtraYouTubeSection(isTablet = false, showTabToggle = false)
++                }
++            }
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
+index 477df5a19..efec26c80 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
+@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
+ import androidx.compose.foundation.layout.size
+ import androidx.compose.foundation.layout.statusBars
+ import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.layout.widthIn
+ import androidx.compose.foundation.layout.windowInsetsPadding
+ import androidx.compose.foundation.layout.windowInsetsTopHeight
+ import androidx.compose.foundation.lazy.LazyColumn
+@@ -69,6 +70,8 @@ import androidx.compose.ui.text.input.ImeAction
+ import androidx.compose.ui.text.style.TextOverflow
+ import androidx.compose.ui.unit.dp
+ import coil3.compose.AsyncImage
++import com.nuvio.app.features.settings.YouTubeAccountsDialog
++import com.nuvio.app.features.settings.YouTubeSettingsSheet
+ import com.nuvio.app.core.ui.NuvioLoadingIndicator
+ import com.nuvio.app.core.ui.NuvioScreenHeader
+ import com.nuvio.app.core.ui.PlatformBackHandler
+@@ -113,6 +116,10 @@ fun YouTubeScreen(
+     }
+     LaunchedEffect(tab) { YouTubeSettings.lastTab.set(YouTubeSettings.tabs[tab].first) }
+     val page = pages.lastOrNull()
++    var showSettings by remember { mutableStateOf(false) }
++    var showAccounts by remember { mutableStateOf(false) }
++    if (showSettings) YouTubeSettingsSheet(onDismiss = { showSettings = false })
++    if (showAccounts) YouTubeAccountsDialog(onDismiss = { showAccounts = false })
+ 
+     PlatformBackHandler(enabled = watch != null || pages.isNotEmpty()) {
+         if (watch != null) YouTubeRepository.closeWatch() else YouTubeRepository.popPage()
+@@ -136,6 +143,17 @@ fun YouTubeScreen(
+                     title = title,
+                     modifier = Modifier.padding(horizontal = tokens.spacing.screenHorizontal),
+                     onBack = { if (!YouTubeRepository.popPage()) onBack() },
++                    actions = {
++                        if (page == null) {
++                            TextButton(onClick = { showSettings = true }) { Text("Settings") }
++                            val headerAccount by YouTubeAccount.state.collectAsState()
++                            if (headerAccount.signedIn) {
++                                OutlinedButton(onClick = { showAccounts = true }) {
++                                    Text(headerAccount.label.ifBlank { "Account" }, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 140.dp))
++                                }
++                            }
++                        }
++                    },
+                 )
+                 when (page) {
+                     null -> RootContent(tab = tab, onTab = { tab = it })
+@@ -181,20 +199,6 @@ private fun RootContent(tab: Int, onTab: (Int) -> Unit) {
+     LaunchedEffect(Unit) { YouTubeAccount.ensureLoaded() }
+     Column(Modifier.fillMaxSize()) {
+         if (account.signedIn) {
+-            Row(
+-                modifier = Modifier.fillMaxWidth().padding(horizontal = horizontal),
+-                verticalAlignment = Alignment.CenterVertically,
+-            ) {
+-                Text(
+-                    text = account.label.ifBlank { "YouTube account" },
+-                    color = tokens.colors.textMuted,
+-                    style = MaterialTheme.typography.labelLarge,
+-                    maxLines = 1,
+-                    overflow = TextOverflow.Ellipsis,
+-                    modifier = Modifier.weight(1f),
+-                )
+-                TextButton(onClick = { YouTubeAccount.signOut() }) { Text("Sign out") }
+-            }
+             account.error?.let { message ->
+                 Text(
+                     text = message,
