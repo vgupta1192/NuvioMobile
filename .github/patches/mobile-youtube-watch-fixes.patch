@@ -21,19 +21,6 @@ index bad95623d..0daa89f2b 100644
                  }
              }
              if (canRate) {
-diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt
-index 875e3eab3..0f58297c3 100644
---- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt
-+++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt
-@@ -288,7 +288,7 @@ private fun JellyfinHome(
-             // Tall artwork: the hero fills the screen except for one peeking row.
-             HomeHeroSection(
-                 items = heroItems,
--                viewportHeight = maxHeight,
-+                viewportHeight = this@BoxWithConstraints.maxHeight,
-                 mobileBelowSectionHeightHint = 250.dp,
-                 onItemClick = { preview -> onOpenDetails(preview.id.stripJellyfinPrefix()) },
-             )
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/MiniPlayer.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/MiniPlayer.kt
 index bd09ca022..48c14936d 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/MiniPlayer.kt
