@@ -30,10 +30,18 @@ index c1b3aa97a..af49625f4 100644
              null
          }
 diff --git a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt
-index 79335c171..6d2518217 100644
+index 79335c171..0bf566708 100644
 --- a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt
 +++ b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt
-@@ -31,6 +31,8 @@ class YoutubeChunkedDataSourceFactory(
+@@ -8,6 +8,7 @@ import androidx.media3.datasource.DataSource
+ import androidx.media3.datasource.DataSpec
+ import androidx.media3.datasource.DefaultHttpDataSource
+ import androidx.media3.datasource.TransferListener
++import com.nuvio.app.features.youtube.YouTubeStartTrace
+ import kotlinx.coroutines.runBlocking
+ import nuvio.composeapp.generated.resources.Res
+ import nuvio.composeapp.generated.resources.player_error_unable_to_play_stream
+@@ -31,6 +32,8 @@ class YoutubeChunkedDataSourceFactory(
          private const val TAG = "YTChunkedDS"
          /** 10 MB chunks – large enough to avoid too many requests, small enough to dodge throttle. */
          private const val CHUNK_SIZE = 10L * 1024 * 1024
@@ -42,7 +50,7 @@ index 79335c171..6d2518217 100644
      }
  
      override fun createDataSource(): DataSource {
-@@ -57,6 +59,9 @@ class YoutubeChunkedDataSourceFactory(
+@@ -57,6 +60,9 @@ class YoutubeChunkedDataSourceFactory(
          private var currentChunkEnd = 0L
          private var bytesReadInChunk = 0L
          private var originalDataSpec: DataSpec? = null
@@ -52,7 +60,7 @@ index 79335c171..6d2518217 100644
  
          override fun addTransferListener(transferListener: TransferListener) {
              upstream.addTransferListener(transferListener)
-@@ -72,8 +77,30 @@ class YoutubeChunkedDataSourceFactory(
+@@ -72,20 +78,47 @@ class YoutubeChunkedDataSourceFactory(
              }
  
              originalDataSpec = dataSpec
@@ -65,6 +73,10 @@ index 79335c171..6d2518217 100644
 +
 +            // Bytes downloaded before the viewer tapped the card start the stream with no network wait.
 +            val cached = if (dataSpec.position == 0L) YoutubeFirstChunkCache.get(uri.toString()) else null
++            val kind = uri.getQueryParameter("mime")?.substringBefore('/') ?: "media"
++            YouTubeStartTrace.mark(
++                "$kind open at ${dataSpec.position}: " + if (cached != null) "prefetched bytes" else "network",
++            )
 +            if (cached != null) {
 +                var bytes = cached.bytes
 +                if (totalContentLength != C.LENGTH_UNSET.toLong() && bytes.size > totalContentLength) {
@@ -81,9 +93,11 @@ index 79335c171..6d2518217 100644
 +                return C.LENGTH_UNSET.toLong()
 +            }
  
-             return openNextChunk()
+-            return openNextChunk()
++            return openNextChunk().also { YouTubeStartTrace.mark("$kind first response") }
          }
-@@ -82,10 +109,11 @@ class YoutubeChunkedDataSourceFactory(
+ 
+         private fun openNextChunk(): Long {
              val spec = originalDataSpec ?: throw IllegalStateException(
                  runBlocking { getString(Res.string.player_error_unable_to_play_stream) },
              )
@@ -97,7 +111,7 @@ index 79335c171..6d2518217 100644
              }
              currentChunkEnd = end
  
-@@ -110,6 +138,30 @@ class YoutubeChunkedDataSourceFactory(
+@@ -110,6 +143,30 @@ class YoutubeChunkedDataSourceFactory(
                  return upstream.read(buffer, offset, length)
              }
  
@@ -128,7 +142,7 @@ index 79335c171..6d2518217 100644
              val bytesRead = upstream.read(buffer, offset, length)
              if (bytesRead == C.RESULT_END_OF_INPUT) {
                  // Current chunk exhausted — open the next one
-@@ -146,6 +198,7 @@ class YoutubeChunkedDataSourceFactory(
+@@ -146,6 +203,7 @@ class YoutubeChunkedDataSourceFactory(
  
          override fun close() {
              upstream.close()
@@ -274,6 +288,40 @@ index 85c648cbc..dd9000165 100644
          )
  
          val playerBuilder = ExoPlayer.Builder(context)
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/YouTubeDiag.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/YouTubeDiag.kt
+index 5a549e170..867c2303e 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/YouTubeDiag.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/YouTubeDiag.kt
+@@ -28,6 +28,7 @@ internal object YouTubeDiag {
+     private const val TAG = "NuvioYtDiag"
+     private const val ENDPOINT = "https://nuviodiag.kissmissi.duckdns.org/d/yt"
+     private const val STALL_MS = 15_000L
++    private const val PROBE_DELAY_MS = 6_000L
+     private const val SEGMENT_BYTES = 1_500_000
+     private const val LOG_LINES = 160
+     private const val CHROME_UA =
+@@ -58,8 +59,12 @@ internal object YouTubeDiag {
+         startedAtMs = SystemClock.elapsedRealtime()
+         ready = false
+         job = scope.launch {
++            // The probe downloads from the same video address as the player, so it only runs
++            // once playback has not started after a grace period; a healthy start is left alone.
++            delay(PROBE_DELAY_MS)
++            if (ready) return@launch
+             send("prepare", url, probe(url))
+-            delay(STALL_MS)
++            delay((STALL_MS - PROBE_DELAY_MS).coerceAtLeast(0L))
+             if (!ready) send("stall", url, null)
+         }
+     }
+@@ -67,6 +72,7 @@ internal object YouTubeDiag {
+     fun onReady(url: String) {
+         if (!isYouTubeMedia(url) || ready) return
+         ready = true
++        com.nuvio.app.features.youtube.YouTubeStartTrace.mark("player ready")
+         job?.cancel()
+         scope.launch { send("ready", url, null) }
+     }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 index 218394f06..632f724d9 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
