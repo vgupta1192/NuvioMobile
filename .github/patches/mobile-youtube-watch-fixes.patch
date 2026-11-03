@@ -1,0 +1,607 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
+index bad95623d..0daa89f2b 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
+@@ -294,7 +294,7 @@ private fun JellyfinDetailContent(
+                 )
+             }
+             val showGoToChip = item.isSeries && state.seasons.isNotEmpty()
+-            if (item.tvdbId != null || showGoToChip) {
++            if (showGoToChip) {
+                 Spacer(modifier = Modifier.height(10.dp))
+                 Row(
+                     horizontalArrangement = Arrangement.spacedBy(8.dp),
+@@ -304,9 +304,6 @@ private fun JellyfinDetailContent(
+                     if (showGoToChip) {
+                         JellyfinActionChip(label = "Go to episode", onClick = { showGoTo = true })
+                     }
+-                    item.tvdbId?.let { tvdb ->
+-                        JellyfinActionChip(label = "TVDB $tvdb")
+-                    }
+                 }
+             }
+             if (canRate) {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt
+index 875e3eab3..0f58297c3 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt
+@@ -288,7 +288,7 @@ private fun JellyfinHome(
+             // Tall artwork: the hero fills the screen except for one peeking row.
+             HomeHeroSection(
+                 items = heroItems,
+-                viewportHeight = maxHeight,
++                viewportHeight = this@BoxWithConstraints.maxHeight,
+                 mobileBelowSectionHeightHint = 250.dp,
+                 onItemClick = { preview -> onOpenDetails(preview.id.stripJellyfinPrefix()) },
+             )
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/MiniPlayer.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/MiniPlayer.kt
+index bd09ca022..48c14936d 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/MiniPlayer.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/MiniPlayer.kt
+@@ -184,9 +184,10 @@ internal fun PlayerScreenRuntime.BindMiniPlayerEffects(presentation: Boolean?) {
+             onDispose { MiniPlayerController.detach(runtime) }
+         }
+     }
+-    // Fork: Back leaves the player; the mini player is entered with the toolbar button only.
++    // Back minimizes into the mini player (like upstream) when it is enabled; otherwise it leaves.
+     PlatformBackHandler(enabled = presentation == false) {
+         flushWatchProgress()
++        if (MiniPlayerSetting.isEnabled()) handOffToMiniPlayer()
+         args.onBack()
+     }
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+index d3b084e5a..bb470fdf6 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+@@ -382,6 +382,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+                 positionMs = playbackSnapshot.positionMs,
+                 isEnded = playbackSnapshot.isEnded,
+                 controller = playerController,
++                durationMs = playbackSnapshot.durationMs,
+             )
+         }
+         Box(modifier = videoModifier) {
+@@ -538,6 +539,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
+             },
+             onBack = {
+                 flushWatchProgress()
++                if (!isIos && MiniPlayerSetting.isEnabled()) handOffToMiniPlayer()
+                 args.onBack()
+             },
+             onPartyClick = if (PartyRepository.available.collectAsStateWithLifecycle().value) {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerYouTubeActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerYouTubeActions.kt
+index b2a6fe8a3..419d10cb6 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerYouTubeActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerYouTubeActions.kt
+@@ -4,6 +4,7 @@ import androidx.compose.material.icons.Icons
+ import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
+ import androidx.compose.material.icons.rounded.FastForward
+ import androidx.compose.material.icons.rounded.HowToReg
++import androidx.compose.material.icons.rounded.Info
+ import androidx.compose.material.icons.rounded.PersonAdd
+ import androidx.compose.material.icons.rounded.PlayCircle
+ import androidx.compose.material.icons.rounded.Repeat
+@@ -29,6 +30,7 @@ internal val YouTubeToolbarButtons = listOf(
+     ForkToolbarButton("yt_sponsor", "YouTube: Skip sponsors"),
+     ForkToolbarButton("yt_autoplay", "YouTube: Autoplay next"),
+     ForkToolbarButton("yt_upnext", "YouTube: Up next"),
++    ForkToolbarButton("yt_info", "YouTube: Video info and quality"),
+ )
+ 
+ /** YouTube-only player buttons; empty for every normal video. */
+@@ -70,12 +72,16 @@ internal fun youTubeControlActions(): List<PlayerControlAction> {
+             icon = Icons.Rounded.FastForward, id = "yt_sponsor", tint = if (sponsor) on else Color.White,
+         ),
+         PlayerControlAction(
+-            if (autoplay) "Autoplay next on" else "Autoplay next", { YouTubePrefs.autoplay.set(!autoplay) },
++            if (autoplay) "Autoplay next: on" else "Autoplay next: off", { YouTubePrefs.autoplay.set(!autoplay) },
+             icon = Icons.Rounded.PlayCircle, id = "yt_autoplay", tint = if (autoplay) on else Color.White,
+         ),
+         PlayerControlAction(
+             "Up next", { YouTubePlayerSession.update { it.copy(showUpNext = true) } },
+             icon = Icons.AutoMirrored.Rounded.PlaylistPlay, id = "yt_upnext",
+         ),
++        PlayerControlAction(
++            "Video info", { YouTubePlayerSession.update { it.copy(showInfo = true) } },
++            icon = Icons.Rounded.Info, id = "yt_info",
++        ),
+     )
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt
+index c817f4820..5505619ca 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeCaptions.kt
+@@ -33,6 +33,7 @@ internal object YouTubeCaptions {
+     /** The YouTube video id of a YouStream video id, when captions can be asked for it here. */
+     fun videoIdOrNull(videoId: String): String? {
+         if (AppFeaturePolicy.trailerPlaybackMode != TrailerPlaybackMode.IN_APP) return null
++        if (VIDEO_ID.matches(videoId)) return videoId
+         return videoId.takeIf { it.startsWith(ID_PREFIX) }
+             ?.removePrefix(ID_PREFIX)
+             ?.substringBefore(':')
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
+index 51b2c9a2c..ddde67263 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
+@@ -108,6 +108,7 @@ data class YouTubeSessionState(
+     val related: List<YtItem> = emptyList(),
+     val liked: Boolean = false,
+     val showUpNext: Boolean = false,
++    val showInfo: Boolean = false,
+     val skipNotice: String = "",
+     val pendingSkip: Long = -1L,
+ ) {
+@@ -169,6 +170,7 @@ fun YouTubePlayerOptions(
+     positionMs: Long,
+     isEnded: Boolean,
+     controller: PlayerEngineController?,
++    durationMs: Long = 0L,
+ ) {
+     val sponsorSkip by YouTubePlayerPrefs.sponsorSkip.value.collectAsState()
+     val sponsorAsk by YouTubeSettings.sponsorAsk.value.collectAsState()
+@@ -264,6 +266,70 @@ fun YouTubePlayerOptions(
+         }
+     }
+ 
++    if (session.showInfo) {
++        val saved by YouTubeRepository.saved.collectAsState()
++        val heights = YouTubeStreamQuality.heights.collectAsState().value.let { if (it.first == videoId) it.second else emptyList() }
++        val cap = YouTubeStreamQuality.capFor(videoId)
++        val subscribed = session.channelId.isNotBlank() && saved.subscriptions.any { it.id == session.channelId }
++        val later = saved.watchLater.any { it.id == videoId }
++        val accent = MaterialTheme.colorScheme.primary
++        fun close() = YouTubePlayerSession.update { it.copy(showInfo = false) }
++        Dialog(onDismissRequest = { close() }) {
++            Column(
++                modifier = Modifier
++                    .fillMaxWidth()
++                    .heightIn(max = 520.dp)
++                    .background(Color(0xFF1B1B1F), RoundedCornerShape(16.dp))
++                    .padding(16.dp)
++                    .verticalScroll(rememberScrollState()),
++                verticalArrangement = Arrangement.spacedBy(10.dp),
++            ) {
++                Text(title, color = Color.White, style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
++                Text(session.channel.ifBlank { channel }, color = Color(0xFFB0B0B0), style = MaterialTheme.typography.bodyMedium)
++                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
++                    TextButton(onClick = { YouTubePlayerSession.toggleLike() }) {
++                        Text(if (session.liked) "Liked" else "Like", color = if (session.liked) accent else Color.White)
++                    }
++                    if (session.channelId.isNotBlank()) {
++                        TextButton(onClick = { YouTubePlayerSession.toggleSubscribe() }) {
++                            Text(if (subscribed) "Subscribed" else "Subscribe", color = if (subscribed) accent else Color.White)
++                        }
++                    }
++                    TextButton(onClick = { YouTubePlayerSession.toggleWatchLater() }) {
++                        Text(if (later) "Saved" else "Watch later", color = if (later) accent else Color.White)
++                    }
++                }
++                Text("Quality", color = Color.White, style = MaterialTheme.typography.titleSmall)
++                if (heights.isEmpty()) {
++                    Text("Resolutions load with the video.", color = Color(0xFFB0B0B0), style = MaterialTheme.typography.bodySmall)
++                } else {
++                    val options = listOf<Int?>(null) + heights
++                    options.forEach { h ->
++                        val selected = cap == h
++                        Text(
++                            text = if (h == null) "Best available" else "${h}p",
++                            color = if (selected) accent else Color.White,
++                            style = MaterialTheme.typography.bodyMedium,
++                            modifier = Modifier
++                                .fillMaxWidth()
++                                .clickable {
++                                    close()
++                                    if (!selected) {
++                                        YouTubeStreamQuality.setCap(videoId, h)
++                                        val now = YtItem(id = videoId, title = title, channel = session.channel.ifBlank { channel }, channelId = session.channelId, thumb = thumb)
++                                        YouTubeRepository.saveProgress(now, positionMs, durationMs, force = true)
++                                        YouTubePlayerHooks.playVideo?.invoke(now)
++                                    }
++                                }
++                                .padding(vertical = 6.dp),
++                        )
++                    }
++                }
++                TextButton(onClick = { close(); YouTubePlayerSession.update { it.copy(showUpNext = true) } }) { Text("Up next") }
++            }
++        }
++    }
++
+     if (session.showUpNext) {
+         Dialog(onDismissRequest = { YouTubePlayerSession.update { it.copy(showUpNext = false) } }) {
+             Column(
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
+index 6ef1a3715..206bbcbdb 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
+@@ -35,6 +35,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+ import androidx.compose.material.icons.rounded.Close
+ import androidx.compose.material.icons.rounded.MoreVert
+ import androidx.compose.material.icons.rounded.Search
++import androidx.compose.material.icons.rounded.Settings
+ import androidx.compose.material3.Button
+ import androidx.compose.material3.DropdownMenu
+ import androidx.compose.material3.DropdownMenuItem
+@@ -143,7 +144,6 @@ fun YouTubeScreen(
+                 if (page == null) {
+                     YouTubeRootHeader(
+                         title = title,
+-                        onBack = { if (!YouTubeRepository.popPage()) onBack() },
+                         onSettings = { showSettings = true },
+                         onAccount = { showAccounts = true },
+                     )
+@@ -190,7 +190,7 @@ fun YouTubeScreen(
+ 
+ /** Compact root header: back, small title, Settings and the active profile's avatar. */
+ @Composable
+-private fun YouTubeRootHeader(title: String, onBack: () -> Unit, onSettings: () -> Unit, onAccount: () -> Unit) {
++private fun YouTubeRootHeader(title: String, onSettings: () -> Unit, onAccount: () -> Unit) {
+     val tokens = MaterialTheme.nuvio
+     val account by YouTubeAccount.state.collectAsState()
+     LaunchedEffect(account.signedIn, account.profiles.isEmpty()) {
+@@ -205,17 +205,17 @@ private fun YouTubeRootHeader(title: String, onBack: () -> Unit, onSettings: ()
+             .padding(horizontal = tokens.spacing.screenHorizontal, vertical = 4.dp),
+         verticalAlignment = Alignment.CenterVertically,
+     ) {
+-        IconButton(onClick = onBack) {
+-            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = tokens.colors.textPrimary)
+-        }
+         Text(
+             text = title,
++            color = tokens.colors.textPrimary,
+             style = MaterialTheme.typography.titleLarge,
+             fontWeight = FontWeight.SemiBold,
+             maxLines = 1,
+             modifier = Modifier.weight(1f),
+         )
+-        TextButton(onClick = onSettings) { Text("Settings", maxLines = 1) }
++        IconButton(onClick = onSettings) {
++            Icon(Icons.Rounded.Settings, contentDescription = "Settings", tint = tokens.colors.textPrimary)
++        }
+         if (account.signedIn) {
+             Box(
+                 modifier = Modifier
+@@ -361,7 +361,10 @@ private fun HomeTab() {
+                     ) {
+                         items(saved.continueWatching, key = { it.item.id }) { progress ->
+                             val fraction = if (progress.durationMs > 0) progress.positionMs.toFloat() / progress.durationMs else 0f
+-                            ItemCard(progress.item, Modifier.width(240.dp), progress = fraction, siblings = emptyList())
++                            ItemCard(
++                                progress.item, Modifier.width(240.dp), progress = fraction, siblings = emptyList(),
++                                onRemove = { YouTubeRepository.removeContinue(progress.item.id) },
++                            )
+                         }
+                     }
+                 }
+@@ -764,6 +767,7 @@ private fun ItemCard(
+     modifier: Modifier,
+     siblings: List<YtItem>,
+     progress: Float? = null,
++    onRemove: (() -> Unit)? = null,
+ ) {
+     val tokens = MaterialTheme.nuvio
+     if (item.kind == YtKind.CHANNEL) {
+@@ -845,13 +849,13 @@ private fun ItemCard(
+                     )
+                 }
+             }
+-            if (item.kind == YtKind.VIDEO) ItemMenu(item)
++            if (item.kind == YtKind.VIDEO) ItemMenu(item, onRemove)
+         }
+     }
+ }
+ 
+ @Composable
+-private fun ItemMenu(item: YtItem) {
++private fun ItemMenu(item: YtItem, onRemove: (() -> Unit)? = null) {
+     val tokens = MaterialTheme.nuvio
+     val fullPlayer = LocalFullPlayer.current
+     val saved by YouTubeRepository.saved.collectAsState()
+@@ -862,6 +866,15 @@ private fun ItemMenu(item: YtItem) {
+             Icon(Icons.Rounded.MoreVert, contentDescription = "More", tint = tokens.colors.textMuted)
+         }
+         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
++            if (onRemove != null) {
++                DropdownMenuItem(
++                    text = { Text("Remove from Continue watching") },
++                    onClick = {
++                        open = false
++                        onRemove()
++                    },
++                )
++            }
+             DropdownMenuItem(
+                 text = { Text(if (isSaved) "Remove from Watch later" else "Watch later") },
+                 onClick = {
+@@ -928,7 +941,7 @@ private fun WatchPane(watch: YtWatch, modifier: Modifier) {
+                         initialPositionMs = watch.startPositionMs.takeIf { it > 5_000L },
+                         initialPositionRequestKey = item.id,
+                         resizeMode = PlayerResizeMode.Fit,
+-                        useNativeController = true,
++                        useNativeController = false,
+                         onControllerReady = { controller = it },
+                         onSnapshot = {
+                             snapshot = it
+@@ -954,11 +967,33 @@ private fun WatchPane(watch: YtWatch, modifier: Modifier) {
+                         }) { Text("Retry") }
+                     }
+                 }
+-                IconButton(
+-                    onClick = { YouTubeRepository.closeWatch() },
+-                    modifier = Modifier.align(Alignment.TopStart),
+-                ) {
+-                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Close player", tint = Color.White)
++                if (watch.source != null && error == null) {
++                    WatchPlayerOverlay(
++                        snapshot = snapshot,
++                        autoplay = autoplay,
++                        watchLater = saved.watchLater.any { it.id == item.id },
++                        hasChannel = item.channelId.isNotBlank(),
++                        onBack = { YouTubeRepository.closeWatch() },
++                        onPlayPause = { if (snapshot.isPlaying) controller?.pause() else controller?.play() },
++                        onSeek = { controller?.seekTo(it) },
++                        onAutoplay = { YouTubePrefs.autoplay.set(!autoplay) },
++                        onWatchLater = { YouTubeRepository.toggleWatchLater(item) },
++                        onChannel = {
++                            YouTubeRepository.closeWatch()
++                            YouTubeRepository.push(YtPage.Channel(item.channelId, item.channel))
++                        },
++                        onFullPlayer = {
++                            controller?.pause()
++                            val position = latest.value.positionMs
++                            YouTubeRepository.saveProgress(item, position, latest.value.durationMs, force = true)
++                            fullPlayer(item, position)
++                        },
++                        modifier = Modifier.fillMaxSize(),
++                    )
++                } else {
++                    IconButton(onClick = { YouTubeRepository.closeWatch() }, modifier = Modifier.align(Alignment.TopStart)) {
++                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Close player", tint = Color.White)
++                    }
+                 }
+             }
+         }
+@@ -976,43 +1011,6 @@ private fun WatchPane(watch: YtWatch, modifier: Modifier) {
+                     }
+                 }
+             }
+-            item(key = "actions") {
+-                val isSaved = saved.watchLater.any { it.id == item.id }
+-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+-                        item {
+-                            Pill(if (isSaved) "Saved to Watch later" else "Watch later", selected = isSaved) {
+-                                YouTubeRepository.toggleWatchLater(item)
+-                            }
+-                        }
+-                        if (item.channelId.isNotBlank()) {
+-                            item {
+-                                Pill("Channel") {
+-                                    YouTubeRepository.closeWatch()
+-                                    YouTubeRepository.push(YtPage.Channel(item.channelId, item.channel))
+-                                }
+-                            }
+-                        }
+-                        item {
+-                            Pill("Full player") {
+-                                controller?.pause()
+-                                val position = latest.value.positionMs
+-                                YouTubeRepository.saveProgress(item, position, latest.value.durationMs, force = true)
+-                                fullPlayer(item, position)
+-                            }
+-                        }
+-                    }
+-                    Row(verticalAlignment = Alignment.CenterVertically) {
+-                        Text(
+-                            "Autoplay next video",
+-                            color = tokens.colors.textPrimary,
+-                            style = MaterialTheme.typography.bodyMedium,
+-                            modifier = Modifier.weight(1f),
+-                        )
+-                        Switch(checked = autoplay, onCheckedChange = { YouTubePrefs.autoplay.set(it) })
+-                    }
+-                }
+-            }
+             item(key = "upnext") { SectionTitle("Up next", 0.dp) }
+             if (watch.related.isEmpty()) {
+                 item(key = "related-loading") { CenteredLoader() }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeStreamQuality.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeStreamQuality.kt
+new file mode 100644
+index 000000000..e3112aae5
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeStreamQuality.kt
+@@ -0,0 +1,28 @@
++package com.nuvio.app.features.youtube
++
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++
++/**
++ * Resolutions the extractor found for the YouTube video in the app's player, and the height cap the
++ * viewer picked for that one video. The cap applies to that video id only, so trailers stay on best.
++ */
++object YouTubeStreamQuality {
++    private val _heights = MutableStateFlow<Pair<String, List<Int>>>("" to emptyList())
++    val heights: StateFlow<Pair<String, List<Int>>> = _heights.asStateFlow()
++
++    private var capVideoId: String = ""
++    private var capHeight: Int = 0
++
++    fun publish(videoId: String, list: List<Int>) {
++        _heights.value = videoId to list
++    }
++
++    fun setCap(videoId: String, height: Int?) {
++        capVideoId = videoId
++        capHeight = height ?: 0
++    }
++
++    fun capFor(videoId: String): Int? = capHeight.takeIf { it > 0 && videoId == capVideoId }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeWatchControls.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeWatchControls.kt
+new file mode 100644
+index 000000000..8c5d7a998
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeWatchControls.kt
+@@ -0,0 +1,142 @@
++package com.nuvio.app.features.youtube
++
++import androidx.compose.foundation.background
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.interaction.MutableInteractionSource
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.size
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.automirrored.rounded.ArrowBack
++import androidx.compose.material.icons.rounded.Fullscreen
++import androidx.compose.material.icons.rounded.Pause
++import androidx.compose.material.icons.rounded.AccountCircle
++import androidx.compose.material.icons.rounded.PlayArrow
++import androidx.compose.material.icons.rounded.PlayCircle
++import androidx.compose.material.icons.rounded.WatchLater
++import androidx.compose.material3.Icon
++import androidx.compose.material3.IconButton
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Slider
++import androidx.compose.material3.SliderDefaults
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Brush
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.unit.dp
++import com.nuvio.app.features.player.PlayerPlaybackSnapshot
++
++private fun clock(ms: Long): String {
++    val total = (ms / 1000).coerceAtLeast(0)
++    val h = total / 3600
++    val m = (total % 3600) / 60
++    val s = total % 60
++    val two = { v: Long -> v.toString().padStart(2, '0') }
++    return if (h > 0) "$h:${two(m)}:${two(s)}" else "$m:${two(s)}"
++}
++
++/**
++ * Controls drawn over the inline YouTube player: back and the four actions (Autoplay, Watch later,
++ * Channel, Full player) on top, play/pause in the middle, and the seek bar with the times at the bottom.
++ * A tap on the picture shows or hides them.
++ */
++@Composable
++internal fun WatchPlayerOverlay(
++    snapshot: PlayerPlaybackSnapshot,
++    autoplay: Boolean,
++    watchLater: Boolean,
++    hasChannel: Boolean,
++    onBack: () -> Unit,
++    onPlayPause: () -> Unit,
++    onSeek: (Long) -> Unit,
++    onAutoplay: () -> Unit,
++    onWatchLater: () -> Unit,
++    onChannel: () -> Unit,
++    onFullPlayer: () -> Unit,
++    modifier: Modifier = Modifier,
++) {
++    var visible by remember { mutableStateOf(true) }
++    var tick by remember { mutableStateOf(0) }
++    var scrub by remember { mutableStateOf<Float?>(null) }
++    val accent = MaterialTheme.colorScheme.primary
++    LaunchedEffect(visible, tick, snapshot.isPlaying) {
++        if (visible && snapshot.isPlaying && scrub == null) {
++            kotlinx.coroutines.delay(3500)
++            visible = false
++        }
++    }
++    Box(
++        modifier = modifier.clickable(
++            interactionSource = remember { MutableInteractionSource() },
++            indication = null,
++        ) { visible = !visible; tick++ },
++    ) {
++        if (!visible) return@Box
++        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0x99000000), Color.Transparent, Color(0x99000000)))))
++        Row(
++            Modifier.fillMaxWidth().align(Alignment.TopCenter).padding(horizontal = 4.dp),
++            verticalAlignment = Alignment.CenterVertically,
++        ) {
++            IconButton(onClick = onBack) {
++                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Close player", tint = Color.White)
++            }
++            Box(Modifier.weight(1f))
++            IconButton(onClick = { onAutoplay(); tick++ }) {
++                Icon(Icons.Rounded.PlayCircle, contentDescription = if (autoplay) "Autoplay next on" else "Autoplay next off", tint = if (autoplay) accent else Color.White)
++            }
++            IconButton(onClick = { onWatchLater(); tick++ }) {
++                Icon(Icons.Rounded.WatchLater, contentDescription = "Watch later", tint = if (watchLater) accent else Color.White)
++            }
++            if (hasChannel) {
++                IconButton(onClick = onChannel) {
++                    Icon(Icons.Rounded.AccountCircle, contentDescription = "Channel", tint = Color.White)
++                }
++            }
++            IconButton(onClick = onFullPlayer) {
++                Icon(Icons.Rounded.Fullscreen, contentDescription = "Full player", tint = Color.White)
++            }
++        }
++        IconButton(onClick = { onPlayPause(); tick++ }, modifier = Modifier.align(Alignment.Center).size(56.dp)) {
++            Icon(
++                if (snapshot.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
++                contentDescription = if (snapshot.isPlaying) "Pause" else "Play",
++                tint = Color.White,
++                modifier = Modifier.size(44.dp),
++            )
++        }
++        Column(Modifier.fillMaxWidth().align(Alignment.BottomCenter).padding(horizontal = 12.dp)) {
++            val duration = snapshot.durationMs.coerceAtLeast(1L)
++            val fraction = scrub ?: (snapshot.positionMs.toFloat() / duration).coerceIn(0f, 1f)
++            Slider(
++                value = fraction,
++                onValueChange = { scrub = it; tick++ },
++                onValueChangeFinished = {
++                    scrub?.let { onSeek((it * duration).toLong()) }
++                    scrub = null
++                },
++                colors = SliderDefaults.colors(
++                    thumbColor = accent,
++                    activeTrackColor = accent,
++                    inactiveTrackColor = Color(0x66FFFFFF),
++                ),
++                modifier = Modifier.fillMaxWidth().padding(bottom = 0.dp),
++            )
++            Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.SpaceBetween) {
++                Text(clock(scrub?.let { (it * duration).toLong() } ?: snapshot.positionMs), color = Color.White, style = MaterialTheme.typography.labelSmall)
++                Text(clock(snapshot.durationMs), color = Color.White, style = MaterialTheme.typography.labelSmall)
++            }
++        }
++    }
++}
+diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
+index 40a7b4509..3ff0cebd2 100644
+--- a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
++++ b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
+@@ -315,7 +315,11 @@ class InAppYouTubeExtractor {
+         if (singleUrl) {
+             return singleUrlSource(bestManifest, bestProgressive)
+         }
+-        val bestVideo = pickBestForClient(adaptiveVideo, PREFERRED_SEPARATE_CLIENT)
++        val heights = adaptiveVideo.map { it.height }.filter { it > 0 }.distinct().sortedDescending()
++        if (heights.isNotEmpty()) com.nuvio.app.features.youtube.YouTubeStreamQuality.publish(videoId, heights)
++        val cap = com.nuvio.app.features.youtube.YouTubeStreamQuality.capFor(videoId)
++        val pool = if (cap != null) adaptiveVideo.filter { it.height in 1..cap }.ifEmpty { adaptiveVideo } else adaptiveVideo
++        val bestVideo = pickBestForClient(pool, PREFERRED_SEPARATE_CLIENT)
+         val bestAudio = pickBestForClient(adaptiveAudio, PREFERRED_SEPARATE_CLIENT)
+ 
+         return TrailerExtractionPlatform.buildPlaybackSource(
