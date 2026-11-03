@@ -282,8 +282,132 @@ index 419d10cb6..b204c4e07 100644
          ),
      )
  }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInnertube.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInnertube.kt
+index 5fa99ccaf..9c3d732b9 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInnertube.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInnertube.kt
+@@ -307,6 +307,109 @@ internal object YtInnertube {
+             }
+         } != null
+ 
++    /** Dislikes [videoId], or removes the dislike. Needs a signed-in account. */
++    suspend fun dislike(videoId: String, on: Boolean): Boolean =
++        post(if (on) "like/dislike" else "like/removelike", authed = true) {
++            putJsonObject("target") { put("videoId", videoId) }
++        } != null
++
++    /** Subscriber count line of the video's channel, such as "1.2M subscribers". */
++    suspend fun subscriberText(videoId: String): String? {
++        val root = post("next") { put("videoId", videoId) } ?: return null
++        val renderer = findObject(root, "videoOwnerRenderer") ?: return null
++        return text(renderer["subscriberCountText"]).takeIf { it.isNotBlank() }
++    }
++
++    /** The playlists of the account and whether each already holds [videoId]. */
++    suspend fun playlistsFor(videoId: String): List<YtPlaylistRow>? {
++        val root = post("playlist/get_add_to_playlist", authed = true) { put("videoId", videoId) } ?: return null
++        val rows = mutableListOf<JsonObject>()
++        collectObjects(root, "playlistAddToOptionRenderer", rows)
++        return rows.mapNotNull { row ->
++            val id = row.str("playlistId") ?: return@mapNotNull null
++            YtPlaylistRow(id, text(row["title"]), row.str("containsSelectedVideos") == "ALL")
++        }
++    }
++
++    /** Adds or removes [videoId] on any playlist of the account. */
++    suspend fun editPlaylist(playlistId: String, videoId: String, adding: Boolean): Boolean =
++        post("browse/edit_playlist", authed = true) {
++            put("playlistId", playlistId)
++            putJsonArray("actions") {
++                add(
++                    buildJsonObject {
++                        if (adding) {
++                            put("action", "ACTION_ADD_VIDEO")
++                            put("addedVideoId", videoId)
++                        } else {
++                            put("action", "ACTION_REMOVE_VIDEO_BY_VIDEO_ID")
++                            put("removedVideoId", videoId)
++                        }
++                    },
++                )
++            }
++        } != null
++
++    /** First page of comments of [videoId]; the token in the result loads the next page. */
++    suspend fun comments(videoId: String): YtCommentPage? {
++        val root = post("next") { put("videoId", videoId) } ?: return null
++        val sections = mutableListOf<JsonObject>()
++        collectObjects(root, "itemSectionRenderer", sections)
++        val section = sections.firstOrNull { it.str("sectionIdentifier") == "comment-item-section" }
++        val token = section?.let { findString(it, "token") } ?: return YtCommentPage(emptyList(), null)
++        return moreComments(token)
++    }
++
++    suspend fun moreComments(token: String): YtCommentPage? {
++        val root = post("next") { put("continuation", token) } ?: return null
++        val out = mutableListOf<YtComment>()
++        // Newer layout: the text lives in entity updates beside the thread list.
++        val payloads = mutableListOf<JsonObject>()
++        collectObjects(root, "commentEntityPayload", payloads)
++        for (payload in payloads) {
++            val props = payload["properties"].asObj()
++            val body = text(props?.get("content")).ifBlank { continue }
++            out.add(
++                YtComment(
++                    author = text(payload["author"].asObj()?.get("displayName")).removePrefix("@"),
++                    body = body,
++                    likes = text(payload["toolbar"].asObj()?.get("likeCountNotliked")).takeIf { it != "0" }.orEmpty(),
++                    published = text(props?.get("publishedTime")),
++                ),
++            )
++        }
++        if (out.isEmpty()) {
++            val old = mutableListOf<JsonObject>()
++            collectObjects(root, "commentRenderer", old)
++            for (c in old) {
++                val body = text(c["contentText"]).ifBlank { continue }
++                out.add(
++                    YtComment(
++                        author = text(c["authorText"]).removePrefix("@"),
++                        body = body,
++                        likes = text(c["voteCount"]),
++                        published = text(c["publishedTimeText"]),
++                    ),
++                )
++            }
++        }
++        var next: String? = null
++        val arrays = mutableListOf<JsonArray>()
++        fun walk(e: JsonElement?) {
++            when (e) {
++                is JsonObject -> { (e["continuationItems"] as? JsonArray)?.let { arrays.add(it) }; e.values.forEach { walk(it) } }
++                is JsonArray -> e.forEach { walk(it) }
++                else -> Unit
++            }
++        }
++        walk(root)
++        for (items in arrays) {
++            val last = items.lastOrNull().asObj()?.get("continuationItemRenderer") ?: continue
++            findString(last, "token")?.let { next = it }
++        }
++        return YtCommentPage(out, next)
++    }
++
+     /** Videos YouTube suggests after [videoId] (the "Up next" list). */
+     suspend fun related(videoId: String): List<YtItem> {
+         val root = post("next") { put("videoId", videoId) } ?: return emptyList()
+@@ -605,3 +708,9 @@ internal object YtInnertube {
+         return null
+     }
+ }
++
++data class YtPlaylistRow(val id: String, val title: String, val contains: Boolean)
++
++data class YtComment(val author: String, val body: String, val likes: String, val published: String)
++
++data class YtCommentPage(val comments: List<YtComment>, val next: String?)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
-index e2c97bbf8..dc3c13867 100644
+index ddde67263..dc3c13867 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
 @@ -4,6 +4,8 @@ import androidx.compose.foundation.background
@@ -295,11 +419,68 @@ index e2c97bbf8..dc3c13867 100644
  import androidx.compose.foundation.layout.Column
  import androidx.compose.foundation.layout.Row
  import androidx.compose.foundation.layout.fillMaxSize
-@@ -310,13 +312,27 @@ fun YouTubePlayerOptions(
-                 busy = false
-             }
+@@ -107,6 +109,8 @@ data class YouTubeSessionState(
+     val channelId: String = "",
+     val related: List<YtItem> = emptyList(),
+     val liked: Boolean = false,
++    val disliked: Boolean = false,
++    val subscribers: String = "",
+     val showUpNext: Boolean = false,
+     val showInfo: Boolean = false,
+     val skipNotice: String = "",
+@@ -142,6 +146,18 @@ object YouTubePlayerSession {
          }
+     }
+ 
++    fun toggleDislike() {
++        val now = _state.value
++        if (!now.active) return
++        val target = !now.disliked
++        _state.update { it.copy(disliked = target, liked = if (target) false else it.liked) }
++        scope.launch {
++            if (!runCatching { YtInnertube.dislike(now.videoId, target) }.getOrDefault(false)) {
++                _state.update { if (it.videoId == now.videoId) it.copy(disliked = !target) else it }
++            }
++        }
++    }
++
+     fun toggleSubscribe() {
+         val now = _state.value
+         if (now.channelId.isNotBlank()) YouTubeRepository.toggleSubscription(now.channelId, now.channel)
+@@ -194,6 +210,8 @@ fun YouTubePlayerOptions(
+         segments = YouTubeSponsorBlock.segments(videoId)
+         val owner = YouTubeRepository.ownerOf(videoId)
+         YouTubePlayerSession.update { it.copy(channelId = owner?.first.orEmpty(), channel = owner?.second?.ifBlank { channel } ?: channel) }
++        val subs = runCatching { YtInnertube.subscriberText(videoId) }.getOrNull().orEmpty()
++        YouTubePlayerSession.update { it.copy(subscribers = subs) }
+         val related = runCatching { YtInnertube.related(videoId) }.getOrDefault(emptyList())
+         YouTubePlayerSession.update { it.copy(related = related) }
+     }
+@@ -274,22 +292,106 @@ fun YouTubePlayerOptions(
+         val later = saved.watchLater.any { it.id == videoId }
+         val accent = MaterialTheme.colorScheme.primary
+         fun close() = YouTubePlayerSession.update { it.copy(showInfo = false) }
 -        Dialog(onDismissRequest = { close() }) {
++        var page by remember { mutableStateOf("main") }
++        var playlists by remember { mutableStateOf<List<YtPlaylistRow>?>(null) }
++        var comments by remember { mutableStateOf<List<YtComment>>(emptyList()) }
++        var commentToken by remember { mutableStateOf<String?>(null) }
++        var commentsLoaded by remember { mutableStateOf(false) }
++        var busy by remember { mutableStateOf(false) }
++        val pageScope = androidx.compose.runtime.rememberCoroutineScope()
++        fun loadComments(token: String?) {
++            if (busy) return
++            busy = true
++            pageScope.launch {
++                val result = runCatching { if (token == null) YtInnertube.comments(videoId) else YtInnertube.moreComments(token) }.getOrNull()
++                if (result != null) {
++                    comments = comments + result.comments
++                    commentToken = result.next
++                }
++                commentsLoaded = true
++                busy = false
++            }
++        }
 +        Dialog(
 +            onDismissRequest = { close() },
 +            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
@@ -328,7 +509,67 @@ index e2c97bbf8..dc3c13867 100644
                      .verticalScroll(rememberScrollState()),
                  verticalArrangement = Arrangement.spacedBy(10.dp),
              ) {
-@@ -385,7 +401,11 @@ fun YouTubePlayerOptions(
++                if (page == "playlists") {
++                    TextButton(onClick = { page = "main" }) { Text("Back") }
++                    Text("Save to playlist", color = Color.White, style = MaterialTheme.typography.titleMedium)
++                    val rows = playlists
++                    when {
++                        !YouTubeAccount.isSignedIn -> Text("Sign in to YouTube to save videos.", color = Color(0xFFB0B0B0), style = MaterialTheme.typography.bodyMedium)
++                        rows == null -> Text("Loading…", color = Color(0xFFB0B0B0), style = MaterialTheme.typography.bodyMedium)
++                        rows.isEmpty() -> Text("No playlists found.", color = Color(0xFFB0B0B0), style = MaterialTheme.typography.bodyMedium)
++                        else -> rows.forEach { row ->
++                            Text(
++                                text = (if (row.contains) "✓  " else "     ") + row.title,
++                                color = if (row.contains) accent else Color.White,
++                                style = MaterialTheme.typography.bodyMedium,
++                                modifier = Modifier.fillMaxWidth().clickable {
++                                    playlists = rows.map { if (it.id == row.id) it.copy(contains = !row.contains) else it }
++                                    pageScope.launch {
++                                        val ok = runCatching { YtInnertube.editPlaylist(row.id, videoId, !row.contains) }.getOrDefault(false)
++                                        if (!ok) playlists = playlists?.map { if (it.id == row.id) it.copy(contains = row.contains) else it }
++                                    }
++                                }.padding(vertical = 8.dp),
++                            )
++                        }
++                    }
++                    LaunchedEffect(Unit) {
++                        if (playlists == null && YouTubeAccount.isSignedIn) {
++                            playlists = runCatching { YtInnertube.playlistsFor(videoId) }.getOrNull().orEmpty()
++                        }
++                    }
++                } else if (page == "comments") {
++                    TextButton(onClick = { page = "main" }) { Text("Back") }
++                    Text("Comments", color = Color.White, style = MaterialTheme.typography.titleMedium)
++                    comments.forEach { c ->
++                        Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
++                            val meta = listOf(c.author, c.published, c.likes.takeIf { it.isNotBlank() }?.let { "$it likes" }).filterNotNull().filter { it.isNotBlank() }.joinToString(" · ")
++                            Text(meta, color = Color(0xFFB0B0B0), style = MaterialTheme.typography.labelSmall)
++                            Text(c.body, color = Color.White, style = MaterialTheme.typography.bodyMedium)
++                        }
++                    }
++                    if (busy) Text("Loading…", color = Color(0xFFB0B0B0), style = MaterialTheme.typography.bodyMedium)
++                    else if (commentsLoaded && comments.isEmpty()) Text("Comments are off or not available.", color = Color(0xFFB0B0B0), style = MaterialTheme.typography.bodyMedium)
++                    commentToken?.let { t -> if (!busy) TextButton(onClick = { loadComments(t) }) { Text("More comments") } }
++                    LaunchedEffect(Unit) { if (!commentsLoaded) loadComments(null) }
++                } else {
+                 Text(title, color = Color.White, style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+-                Text(session.channel.ifBlank { channel }, color = Color(0xFFB0B0B0), style = MaterialTheme.typography.bodyMedium)
++                Text(
++                    listOf(session.channel.ifBlank { channel }, session.subscribers).filter { it.isNotBlank() }.joinToString(" · "),
++                    color = Color(0xFFB0B0B0),
++                    style = MaterialTheme.typography.bodyMedium,
++                )
+                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                     TextButton(onClick = { YouTubePlayerSession.toggleLike() }) {
+                         Text(if (session.liked) "Liked" else "Like", color = if (session.liked) accent else Color.White)
+                     }
++                    TextButton(onClick = { YouTubePlayerSession.toggleDislike() }) {
++                        Text(if (session.disliked) "Disliked" else "Dislike", color = if (session.disliked) accent else Color.White)
++                    }
+                     if (session.channelId.isNotBlank()) {
+                         TextButton(onClick = { YouTubePlayerSession.toggleSubscribe() }) {
+                             Text(if (subscribed) "Subscribed" else "Subscribe", color = if (subscribed) accent else Color.White)
+@@ -299,7 +401,11 @@ fun YouTubePlayerOptions(
                          Text(if (later) "Saved" else "Watch later", color = if (later) accent else Color.White)
                      }
                  }
@@ -341,9 +582,16 @@ index e2c97bbf8..dc3c13867 100644
                  if (heights.isEmpty()) {
                      Text("Resolutions load with the video.", color = Color(0xFFB0B0B0), style = MaterialTheme.typography.bodySmall)
                  } else {
-@@ -418,6 +438,7 @@ fun YouTubePlayerOptions(
-                 TextButton(onClick = { close(); YouTubePlayerSession.update { it.copy(showUpNext = true) } }) { Text("Up next") }
+@@ -325,8 +431,14 @@ fun YouTubePlayerOptions(
+                         )
+                     }
                  }
++                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
++                    TextButton(onClick = { page = "playlists" }) { Text("Save to playlist") }
++                    TextButton(onClick = { page = "comments" }) { Text("Comments") }
++                }
+                 TextButton(onClick = { close(); YouTubePlayerSession.update { it.copy(showUpNext = true) } }) { Text("Up next") }
++                }
              }
 +          }
          }
@@ -387,7 +635,7 @@ index 206bbcbdb..0d260284d 100644
          Box(Modifier.fillMaxSize().background(tokens.colors.background)) {
              Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
 diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
-index 3ff0cebd2..07f47299b 100644
+index 3ff0cebd2..5561d7caa 100644
 --- a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
 +++ b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
 @@ -1,7 +1,11 @@
@@ -402,16 +650,17 @@ index 3ff0cebd2..07f47299b 100644
  import kotlinx.coroutines.withContext
  import kotlinx.coroutines.withTimeout
  import kotlinx.serialization.json.Json
-@@ -15,6 +19,8 @@ internal const val TRAILER_REQUEST_TIMEOUT_MS = 20_000L
+@@ -15,6 +19,9 @@ internal const val TRAILER_REQUEST_TIMEOUT_MS = 20_000L
  
  private const val EXTRACTOR_TIMEOUT_MS = 30_000L
  private const val PREFERRED_SEPARATE_CLIENT = "visionos"
++private const val AUTO_START_MAX_HEIGHT = 1080
 +private val WATCH_CONFIG_TTL = 30.minutes
 +private var cachedWatchConfig: Pair<WatchConfig, kotlin.time.TimeMark>? = null
  
  private val VIDEO_ID_REGEX = Regex("^[a-zA-Z0-9_-]{11}$")
  private val API_KEY_REGEX = Regex("\"INNERTUBE_API_KEY\":\"([^\"]+)\"")
-@@ -167,19 +173,24 @@ class InAppYouTubeExtractor {
+@@ -167,19 +174,24 @@ class InAppYouTubeExtractor {
      ): TrailerPlaybackSource? {
          val videoId = extractVideoId(youtubeUrl) ?: return null
  
@@ -448,7 +697,7 @@ index 3ff0cebd2..07f47299b 100644
          val apiKey = watchConfig.apiKey
              ?: throw IllegalStateException("Unable to extract INNERTUBE_API_KEY")
  
-@@ -188,7 +199,11 @@ class InAppYouTubeExtractor {
+@@ -188,7 +200,11 @@ class InAppYouTubeExtractor {
          val adaptiveAudio = mutableListOf<StreamCandidate>()
          val manifestUrls = mutableListOf<Triple<String, Int, String>>()
  
@@ -461,7 +710,7 @@ index 3ff0cebd2..07f47299b 100644
              runCatching {
                  val playerResponse = fetchPlayerResponse(
                      apiKey = apiKey,
-@@ -196,7 +211,7 @@ class InAppYouTubeExtractor {
+@@ -196,7 +212,7 @@ class InAppYouTubeExtractor {
                      client = client,
                      visitorData = watchConfig.visitorData,
                  )
@@ -470,7 +719,7 @@ index 3ff0cebd2..07f47299b 100644
                  val streamingData = playerResponse.objectValue("streamingData") ?: return@runCatching
                  val hlsManifestUrl = streamingData.stringValue("hlsManifestUrl")
                  if (!hlsManifestUrl.isNullOrBlank()) {
-@@ -282,6 +297,17 @@ class InAppYouTubeExtractor {
+@@ -282,6 +298,17 @@ class InAppYouTubeExtractor {
                          )
                      }
                  }
@@ -488,7 +737,7 @@ index 3ff0cebd2..07f47299b 100644
              }
          }
  
-@@ -289,25 +315,29 @@ class InAppYouTubeExtractor {
+@@ -289,25 +316,29 @@ class InAppYouTubeExtractor {
              return null
          }
  
@@ -535,4 +784,15 @@ index 3ff0cebd2..07f47299b 100644
 +                bestManifest = candidate
              }
          }
+ 
+@@ -318,7 +349,9 @@ class InAppYouTubeExtractor {
+         val heights = adaptiveVideo.map { it.height }.filter { it > 0 }.distinct().sortedDescending()
+         if (heights.isNotEmpty()) com.nuvio.app.features.youtube.YouTubeStreamQuality.publish(videoId, heights)
+         val cap = com.nuvio.app.features.youtube.YouTubeStreamQuality.capFor(videoId)
+-        val pool = if (cap != null) adaptiveVideo.filter { it.height in 1..cap }.ifEmpty { adaptiveVideo } else adaptiveVideo
++        // Auto starts at 1080p at most: a 4K stream takes many seconds to buffer and decode before the first frame.
++        val limit = cap ?: AUTO_START_MAX_HEIGHT
++        val pool = adaptiveVideo.filter { it.height in 1..limit }.ifEmpty { adaptiveVideo }
+         val bestVideo = pickBestForClient(pool, PREFERRED_SEPARATE_CLIENT)
+         val bestAudio = pickBestForClient(adaptiveAudio, PREFERRED_SEPARATE_CLIENT)
  
