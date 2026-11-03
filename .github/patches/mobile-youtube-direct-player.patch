@@ -56,37 +56,68 @@ index c1b3aa97a..7f91358d0 100644
              null
          }
 diff --git a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt
-index 79335c171..0bf566708 100644
+index 79335c171..935035f94 100644
 --- a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt
 +++ b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt
-@@ -8,6 +8,7 @@ import androidx.media3.datasource.DataSource
+@@ -8,7 +8,12 @@ import androidx.media3.datasource.DataSource
  import androidx.media3.datasource.DataSpec
  import androidx.media3.datasource.DefaultHttpDataSource
  import androidx.media3.datasource.TransferListener
 +import com.nuvio.app.features.youtube.YouTubeStartTrace
  import kotlinx.coroutines.runBlocking
++import java.io.ByteArrayOutputStream
++import java.util.concurrent.Executors
++import java.util.concurrent.Future
++import java.util.concurrent.TimeUnit
  import nuvio.composeapp.generated.resources.Res
  import nuvio.composeapp.generated.resources.player_error_unable_to_play_stream
-@@ -31,6 +32,8 @@ class YoutubeChunkedDataSourceFactory(
+ import org.jetbrains.compose.resources.getString
+@@ -31,6 +36,14 @@ class YoutubeChunkedDataSourceFactory(
          private const val TAG = "YTChunkedDS"
          /** 10 MB chunks – large enough to avoid too many requests, small enough to dodge throttle. */
          private const val CHUNK_SIZE = 10L * 1024 * 1024
 +        /** The first request is small so the first frame does not wait for a large response. */
 +        private const val FIRST_CHUNK_SIZE = 1L * 1024 * 1024
++        /** Longest the player waits for a read-ahead chunk before it falls back to a direct request. */
++        private const val READ_AHEAD_WAIT_MS = 30_000L
++        /** Shared pool so the next chunk downloads while the player drains the current one. */
++        private val readAheadPool = Executors.newFixedThreadPool(3) { runnable ->
++            Thread(runnable, "yt-read-ahead").apply { isDaemon = true }
++        }
      }
  
      override fun createDataSource(): DataSource {
-@@ -57,6 +60,9 @@ class YoutubeChunkedDataSourceFactory(
+@@ -42,12 +55,13 @@ class YoutubeChunkedDataSourceFactory(
+             upstreamFactory.setDefaultRequestProperties(defaultRequestHeaders)
+         }
+         val upstream = upstreamFactory.createDataSource()
+-        return YoutubeChunkedDataSource(upstream, chunkSizeBytes)
++        return YoutubeChunkedDataSource(upstream, chunkSizeBytes) { upstreamFactory.createDataSource() }
+     }
+ 
+     private class YoutubeChunkedDataSource(
+         private val upstream: DefaultHttpDataSource,
+-        private val chunkSize: Long
++        private val chunkSize: Long,
++        private val newUpstream: () -> DefaultHttpDataSource
+     ) : DataSource {
+ 
+         private var currentUri: Uri? = null
+@@ -57,6 +71,13 @@ class YoutubeChunkedDataSourceFactory(
          private var currentChunkEnd = 0L
          private var bytesReadInChunk = 0L
          private var originalDataSpec: DataSpec? = null
 +        private var prefetched: ByteArray? = null
 +        private var prefetchedPos = 0
 +        private var streamEndsAfterPrefetched = false
++        private var absoluteEnd = C.LENGTH_UNSET.toLong()
++        private var readAhead: Future<ByteArray>? = null
++        private var readAheadStart = 0L
++        private var readAheadRequested = 0L
  
          override fun addTransferListener(transferListener: TransferListener) {
              upstream.addTransferListener(transferListener)
-@@ -72,20 +78,47 @@ class YoutubeChunkedDataSourceFactory(
+@@ -72,20 +93,113 @@ class YoutubeChunkedDataSourceFactory(
              }
  
              originalDataSpec = dataSpec
@@ -96,6 +127,8 @@ index 79335c171..0bf566708 100644
 +            prefetched = null
 +            prefetchedPos = 0
 +            streamEndsAfterPrefetched = false
++            cancelReadAhead()
++            absoluteEnd = if (dataSpec.length != C.LENGTH_UNSET.toLong()) dataSpec.position + dataSpec.length else C.LENGTH_UNSET.toLong()
 +
 +            // Bytes downloaded before the viewer tapped the card start the stream with no network wait.
 +            val cached = if (dataSpec.position == 0L) YoutubeFirstChunkCache.get(uri.toString()) else null
@@ -111,6 +144,7 @@ index 79335c171..0bf566708 100644
 +                prefetched = bytes
 +                streamEndsAfterPrefetched = cached.bytes.size < cached.requested
 +                currentChunkStart = bytes.size.toLong()
++                if (!streamEndsAfterPrefetched) startReadAhead(currentChunkStart)
 +                if (totalContentLength != C.LENGTH_UNSET.toLong()) {
 +                    val total = totalContentLength
 +                    totalContentLength -= bytes.size
@@ -118,15 +152,78 @@ index 79335c171..0bf566708 100644
 +                }
 +                return C.LENGTH_UNSET.toLong()
 +            }
++
++            return openNextChunk().also { YouTubeStartTrace.mark("$kind first response") }
++        }
++
++        private fun cancelReadAhead() {
++            readAhead?.cancel(true)
++            readAhead = null
++        }
++
++        /** Downloads the chunk at [start] in the background so the next chunk is ready when the current one ends. */
++        private fun startReadAhead(start: Long) {
++            val spec = originalDataSpec ?: return
++            if (readAhead != null) return
++            val size = if (absoluteEnd != C.LENGTH_UNSET.toLong()) minOf(chunkSize, absoluteEnd - start) else chunkSize
++            if (size <= 0) return
++            readAheadStart = start
++            readAheadRequested = size
++            readAhead = readAheadPool.submit<ByteArray> { fetchRange(spec, start, size) }
++        }
++
++        private fun fetchRange(spec: DataSpec, start: Long, size: Long): ByteArray {
++            val source = newUpstream()
++            try {
++                val ranged = spec.buildUpon()
++                    .setUri(spec.uri.buildUpon().appendQueryParameter("range", "$start-${start + size - 1}").build())
++                    .setPosition(0)
++                    .setLength(C.LENGTH_UNSET.toLong())
++                    .build()
++                source.open(ranged)
++                val out = ByteArrayOutputStream(size.toInt())
++                val block = ByteArray(64 * 1024)
++                while (true) {
++                    val n = source.read(block, 0, block.size)
++                    if (n == C.RESULT_END_OF_INPUT) break
++                    out.write(block, 0, n)
++                }
++                return out.toByteArray()
++            } finally {
++                runCatching { source.close() }
++            }
++        }
  
 -            return openNextChunk()
-+            return openNextChunk().also { YouTubeStartTrace.mark("$kind first response") }
++        /** Moves the read-ahead chunk into memory when it covers the chunk the player needs next. */
++        private fun takeReadAhead(): Boolean {
++            val pending = readAhead ?: return false
++            if (readAheadStart != currentChunkStart) {
++                cancelReadAhead()
++                return false
++            }
++            val bytes = try {
++                pending.get(READ_AHEAD_WAIT_MS, TimeUnit.MILLISECONDS)
++            } catch (e: Exception) {
++                Log.w(TAG, "Read-ahead at $currentChunkStart failed: ${e.message}")
++                cancelReadAhead()
++                return false
++            }
++            readAhead = null
++            prefetched = bytes
++            prefetchedPos = 0
++            streamEndsAfterPrefetched = bytes.size < readAheadRequested
++            currentChunkStart += bytes.size
++            if (totalContentLength != C.LENGTH_UNSET.toLong()) totalContentLength -= bytes.size
++            if (!streamEndsAfterPrefetched) startReadAhead(currentChunkStart)
++            return true
          }
  
          private fun openNextChunk(): Long {
              val spec = originalDataSpec ?: throw IllegalStateException(
                  runBlocking { getString(Res.string.player_error_unable_to_play_stream) },
              )
++            if (takeReadAhead()) return totalContentLength
 +            val size = if (currentChunkStart == spec.position) minOf(FIRST_CHUNK_SIZE, chunkSize) else chunkSize
              val end = if (totalContentLength != C.LENGTH_UNSET.toLong()) {
 -                minOf(currentChunkStart + chunkSize - 1, currentChunkStart + totalContentLength - 1)
@@ -137,7 +234,15 @@ index 79335c171..0bf566708 100644
              }
              currentChunkEnd = end
  
-@@ -110,6 +143,30 @@ class YoutubeChunkedDataSourceFactory(
+@@ -102,6 +216,7 @@ class YoutubeChunkedDataSourceFactory(
+ 
+             bytesReadInChunk = 0
+             upstream.open(chunkedSpec)
++            startReadAhead(currentChunkEnd + 1)
+             return if (totalContentLength != C.LENGTH_UNSET.toLong()) totalContentLength else C.LENGTH_UNSET.toLong()
+         }
+ 
+@@ -110,6 +225,30 @@ class YoutubeChunkedDataSourceFactory(
                  return upstream.read(buffer, offset, length)
              }
  
@@ -158,7 +263,7 @@ index 79335c171..0bf566708 100644
 +                }
 +                return try {
 +                    openNextChunk()
-+                    upstream.read(buffer, offset, length).also { if (it > 0) bytesReadInChunk += it }
++                    read(buffer, offset, length)
 +                } catch (e: Exception) {
 +                    Log.w(TAG, "Failed to open chunk after prefetched bytes: ${e.message}")
 +                    C.RESULT_END_OF_INPUT
@@ -168,9 +273,20 @@ index 79335c171..0bf566708 100644
              val bytesRead = upstream.read(buffer, offset, length)
              if (bytesRead == C.RESULT_END_OF_INPUT) {
                  // Current chunk exhausted — open the next one
-@@ -146,6 +203,7 @@ class YoutubeChunkedDataSourceFactory(
+@@ -131,7 +270,7 @@ class YoutubeChunkedDataSourceFactory(
+ 
+                 return try {
+                     openNextChunk()
+-                    upstream.read(buffer, offset, length)
++                    read(buffer, offset, length)
+                 } catch (e: Exception) {
+                     Log.w(TAG, "Failed to open next chunk at $currentChunkStart: ${e.message}")
+                     C.RESULT_END_OF_INPUT
+@@ -145,7 +284,9 @@ class YoutubeChunkedDataSourceFactory(
+         override fun getUri(): Uri? = upstream.uri ?: currentUri
  
          override fun close() {
++            cancelReadAhead()
              upstream.close()
 +            prefetched = null
              currentUri = null
