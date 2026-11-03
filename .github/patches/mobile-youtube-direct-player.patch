@@ -1286,10 +1286,10 @@ index 000000000..fb9f4dcf1
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
 new file mode 100644
-index 000000000..45b581903
+index 000000000..9704b3812
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
-@@ -0,0 +1,246 @@
+@@ -0,0 +1,259 @@
 +package com.nuvio.app.features.youtube
 +
 +import androidx.compose.foundation.background
@@ -1400,19 +1400,23 @@ index 000000000..45b581903
 +    var snapshot by remember(item.id) { mutableStateOf(PlayerPlaybackSnapshot()) }
 +    var cues by remember(item.id) { mutableStateOf<List<SubtitleSyncCue>>(emptyList()) }
 +    var failed by remember(item.id) { mutableStateOf(false) }
++    var note by remember(item.id) { mutableStateOf<String?>(null) }
 +    var scrub by remember(item.id) { mutableStateOf<Float?>(null) }
 +    val muted by InlinePreview.muted
 +    val captions by InlinePreview.captions
 +
 +    LaunchedEffect(item.id) {
 +        source = YouTubePrewarm.previewSource(item)
-+        if (source == null) failed = true
++        if (source == null) { note = "preview: no stream"; failed = true }
 +    }
 +    // A preview that has not started after this long gives way to the plain thumbnail.
 +    LaunchedEffect(source) {
 +        if (source == null) return@LaunchedEffect
 +        delay(15_000)
-+        if (snapshot.durationMs <= 0L) failed = true
++        if (snapshot.durationMs <= 0L) {
++            note = "preview: timeout loading=${snapshot.isLoading} playing=${snapshot.isPlaying} audio=${source?.audioUrl != null} ${source?.videoUrl?.take(60)}"
++            failed = true
++        }
 +    }
 +    LaunchedEffect(item.id, captions) {
 +        if (captions && cues.isEmpty()) {
@@ -1429,6 +1433,15 @@ index 000000000..45b581903
 +
 +    Box(modifier = modifier.fillMaxSize()) {
 +        val src = source
++        if (failed && note != null) {
++            Text(
++                text = note.orEmpty(),
++                color = Color.White,
++                fontSize = 9.sp,
++                maxLines = 4,
++                modifier = Modifier.align(Alignment.BottomStart).background(Color.Black.copy(alpha = 0.6f)).padding(4.dp),
++            )
++        }
 +        if (src != null && !failed) {
 +            PlatformPlayerSurface(
 +                sourceUrl = src.videoUrl,
@@ -1443,7 +1456,7 @@ index 000000000..45b581903
 +                    it.setMuted(InlinePreview.muted.value)
 +                },
 +                onSnapshot = { snapshot = it },
-+                onError = { failed = true },
++                onError = { note = "preview error: ${it?.take(160)}"; failed = true },
 +            )
 +            // Taps on the picture open the full player; the controls below sit on top and take their own taps.
 +            Box(
