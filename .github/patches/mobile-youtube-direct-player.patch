@@ -1286,10 +1286,10 @@ index 000000000..fb9f4dcf1
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
 new file mode 100644
-index 000000000..6c6eee342
+index 000000000..90b440414
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
-@@ -0,0 +1,259 @@
+@@ -0,0 +1,260 @@
 +package com.nuvio.app.features.youtube
 +
 +import androidx.compose.foundation.background
@@ -1456,7 +1456,8 @@ index 000000000..6c6eee342
 +                    it.setMuted(InlinePreview.muted.value)
 +                },
 +                onSnapshot = { snapshot = it },
-+                onError = { note = "preview error: ${it?.take(160)}"; failed = true },
++                // The player reports a null error while it switches engines; the 15 s check below catches a preview that never starts.
++                onError = { if (it != null) { note = "preview error: ${it.take(160)}"; failed = true } },
 +            )
 +            // Taps on the picture open the full player; the controls below sit on top and take their own taps.
 +            Box(
