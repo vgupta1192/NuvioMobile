@@ -18,15 +18,74 @@ index c1b3aa97a..676cf49be 100644
          } else {
              null
          }
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/NuvioExoPlayerPerformanceHelper.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/NuvioExoPlayerPerformanceHelper.kt
+index 39df22650..b9bcf9cf2 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/NuvioExoPlayerPerformanceHelper.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/NuvioExoPlayerPerformanceHelper.kt
+@@ -17,6 +17,8 @@ internal object NuvioExoPlayerPerformanceHelper {
+     private const val MIN_BUFFER_MS = 15_000
+     private const val MAX_BUFFER_MS = 45_000
+     private const val BUFFER_FOR_PLAYBACK_MS = 3_000
++    // YouTube (googlevideo) fills fast; 1 s of media is enough to start without stalling.
++    private const val FAST_START_BUFFER_MS = 1_000
+     private const val BACK_BUFFER_TARGET_SHARE_NUM = 1L
+     private const val BACK_BUFFER_TARGET_SHARE_DEN = 2L
+ 
+@@ -82,7 +84,9 @@ internal object NuvioExoPlayerPerformanceHelper {
+     fun buildLoadControl(
+         context: Context,
+         bufferSettings: PlaybackBufferSettings = PlaybackBufferSettings(),
++        fastStart: Boolean = false,
+     ): DefaultLoadControl {
++        val startBufferMs = if (fastStart) FAST_START_BUFFER_MS else BUFFER_FOR_PLAYBACK_MS
+         if (bufferSettings.enabled) {
+             return buildCustomLoadControl(context, bufferSettings)
+         }
+@@ -92,7 +96,7 @@ internal object NuvioExoPlayerPerformanceHelper {
+                 .setBufferDurationsMs(
+                     DefaultLoadControl.DEFAULT_MIN_BUFFER_MS,
+                     50_000,
+-                    DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
++                    if (fastStart) FAST_START_BUFFER_MS else DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
+                     DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
+                 )
+                 .build()
+@@ -103,7 +107,7 @@ internal object NuvioExoPlayerPerformanceHelper {
+             targetBufferMb = targetBufferMb,
+             minBufferMs = MIN_BUFFER_MS,
+             maxBufferMs = MAX_BUFFER_MS,
+-            bufferForPlaybackMs = BUFFER_FOR_PLAYBACK_MS,
++            bufferForPlaybackMs = startBufferMs,
+             bufferForPlaybackAfterRebufferMs = BUFFER_FOR_PLAYBACK_MS,
+             backBufferMs = PlaybackBufferSettings.DEFAULT_BACK_BUFFER_MS,
+         )
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+index 85c648cbc..dd9000165 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+@@ -492,6 +492,7 @@ private fun ExoPlayerSurface(
+                 backBufferDurationMs = playerSettings.backBufferDurationMs,
+                 targetBufferSizeMb = playerSettings.targetBufferSizeMb,
+             ),
++            fastStart = useYoutubeChunkedPlayback,
+         )
+ 
+         val playerBuilder = ExoPlayer.Builder(context)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index 218394f06..b2c36edfa 100644
+index 218394f06..b626eb0eb 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-@@ -950,11 +950,13 @@ internal fun MainAppContent(
+@@ -950,11 +950,19 @@ internal fun MainAppContent(
          }
  
          fun openYouTubeVideo(item: com.nuvio.app.features.youtube.YtItem, positionMs: Long) {
 +            com.nuvio.app.features.youtube.YouTubeStartTrace.begin(item.id)
++            com.nuvio.app.features.youtube.YouTubeSettings.startQuality.current().toIntOrNull()
++                .let { com.nuvio.app.features.youtube.YouTubeStreamQuality.setCap(item.id, it) }
++            com.nuvio.app.features.youtube.YouTubeStreamQuality.setCodec(
++                item.id,
++                com.nuvio.app.features.youtube.YouTubeSettings.codecPreference.current(),
++            )
              coroutineScope.launch {
                  val watchUrl = com.nuvio.app.features.streams.YouTubeStreamResolver.watchUrl(item.id)
                  val source = runCatching {
@@ -36,7 +95,7 @@ index 218394f06..b2c36edfa 100644
                  val playerLaunch = PlayerLaunch(
                      profileId = activePlaybackProfileId,
                      title = item.title,
-@@ -977,6 +979,7 @@ internal fun MainAppContent(
+@@ -977,6 +985,7 @@ internal fun MainAppContent(
                  }
                  val launchId = PlayerLaunchStore.put(playerLaunch)
                  navController.navigate(PlayerRoute(launchId = launchId, title = playerLaunch.title))
@@ -44,7 +103,7 @@ index 218394f06..b2c36edfa 100644
              }
          }
  
-@@ -1403,8 +1406,13 @@ internal fun MainAppContent(
+@@ -1403,8 +1412,13 @@ internal fun MainAppContent(
              )
          }
  
@@ -59,7 +118,7 @@ index 218394f06..b2c36edfa 100644
                  type = item.parentMetaType,
                  videoId = item.videoId,
                  parentMetaId = item.parentMetaId,
-@@ -1418,7 +1426,17 @@ internal fun MainAppContent(
+@@ -1418,7 +1432,17 @@ internal fun MainAppContent(
  
          val openContinueWatching: (ContinueWatchingItem, Boolean, Boolean) -> Unit = { item, manualSelection, startFromBeginning ->
              resumePromptItem = null
@@ -365,6 +424,228 @@ index 419d10cb6..b204c4e07 100644
          ),
      )
  }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt
+index 933eae59e..06b9a0113 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt
+@@ -44,6 +44,7 @@ import androidx.compose.runtime.mutableStateOf
+ import androidx.compose.runtime.remember
+ import androidx.compose.runtime.setValue
+ import androidx.compose.ui.Alignment
++import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.text.style.TextOverflow
+ import androidx.compose.ui.unit.dp
+@@ -53,6 +54,10 @@ import com.nuvio.app.features.youtube.YouTubeAccountPanel
+ import com.nuvio.app.features.youtube.YouTubePlayerPrefs
+ import com.nuvio.app.features.youtube.YouTubePrefs
+ import com.nuvio.app.features.youtube.YouTubeSettings
++import com.nuvio.app.features.youtube.youTubeCodecChoices
++import com.nuvio.app.features.youtube.youTubeCodecLabel
++import com.nuvio.app.features.youtube.youTubeQualityChoices
++import com.nuvio.app.features.youtube.youTubeQualityLabel
+ 
+ /** Fork settings: YouTube tab. Same groups as the 1T reference app: Account, Playback, SponsorBlock, Feeds, Tabs, Hidden words. */
+ @Composable
+@@ -74,6 +79,11 @@ internal fun ExtraYouTubeSection(isTablet: Boolean, showTabToggle: Boolean = tru
+     val hideUpcoming by YouTubeSettings.hideUpcoming.value.collectAsState()
+     val account by YouTubeAccount.state.collectAsState()
+     var showAccounts by remember { mutableStateOf(false) }
++    val startQuality by YouTubeSettings.startQuality.value.collectAsState()
++    val codec by YouTubeSettings.codecPreference.value.collectAsState()
++    val deArrowTitles by YouTubeSettings.deArrowTitles.value.collectAsState()
++    val deArrowThumbs by YouTubeSettings.deArrowThumbnails.value.collectAsState()
++    var choosing by remember { mutableStateOf<String?>(null) }
+ 
+     if (showTabToggle) SettingsSection(title = "YouTube", isTablet = isTablet) {
+         SettingsGroup(isTablet = isTablet) {
+@@ -113,6 +123,20 @@ internal fun ExtraYouTubeSection(isTablet: Boolean, showTabToggle: Boolean = tru
+                 onCheckedChange = { YouTubePrefs.autoplay.set(it) },
+             )
+             SettingsGroupDivider(isTablet = isTablet)
++            SettingsNavigationRow(
++                title = "Start at",
++                description = youTubeQualityLabel(startQuality) + ". Highest resolution a video opens in; you can still change it in the player.",
++                isTablet = isTablet,
++                onClick = { choosing = "quality" },
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsNavigationRow(
++                title = "Preferred codec",
++                description = youTubeCodecLabel(codec) + ". Used at the chosen resolution when YouTube offers it. H.264 starts fastest on weak devices.",
++                isTablet = isTablet,
++                onClick = { choosing = "codec" },
++            )
++            SettingsGroupDivider(isTablet = isTablet)
+             SettingsSwitchRow(
+                 title = "Open on the last tab",
+                 description = "Reopen the tab you used last instead of the first one.",
+@@ -188,9 +212,42 @@ internal fun ExtraYouTubeSection(isTablet: Boolean, showTabToggle: Boolean = tru
+                 isTablet = isTablet,
+                 onCheckedChange = { YouTubeSettings.hideUpcoming.set(it) },
+             )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Better titles (DeArrow)",
++                description = "Community-written titles in place of clickbait.",
++                checked = deArrowTitles,
++                isTablet = isTablet,
++                onCheckedChange = { YouTubeSettings.deArrowTitles.set(it) },
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Better thumbnails (DeArrow)",
++                description = "Thumbnails picked from the video itself.",
++                checked = deArrowThumbs,
++                isTablet = isTablet,
++                onCheckedChange = { YouTubeSettings.deArrowThumbnails.set(it) },
++            )
+         }
+     }
+ 
++    when (choosing) {
++        "quality" -> YouTubeChoiceDialog(
++            title = "Start at",
++            options = youTubeQualityChoices.map { it to youTubeQualityLabel(it) },
++            selected = startQuality,
++            onPick = { YouTubeSettings.startQuality.set(it); choosing = null },
++            onDismiss = { choosing = null },
++        )
++        "codec" -> YouTubeChoiceDialog(
++            title = "Preferred codec",
++            options = youTubeCodecChoices.map { it to youTubeCodecLabel(it) },
++            selected = codec,
++            onPick = { YouTubeSettings.codecPreference.set(it); choosing = null },
++            onDismiss = { choosing = null },
++        )
++    }
++
+     YouTubeTabsSection(isTablet)
+ 
+     YouTubeListSection(
+@@ -211,6 +268,38 @@ internal fun ExtraYouTubeSection(isTablet: Boolean, showTabToggle: Boolean = tru
+     }
+ }
+ 
++@Composable
++private fun YouTubeChoiceDialog(
++    title: String,
++    options: List<Pair<String, String>>,
++    selected: String,
++    onPick: (String) -> Unit,
++    onDismiss: () -> Unit,
++) {
++    AlertDialog(
++        onDismissRequest = onDismiss,
++        title = { Text(title) },
++        text = {
++            Column {
++                options.forEach { (id, label) ->
++                    Row(
++                        modifier = Modifier.fillMaxWidth().clickable { onPick(id) }.padding(vertical = 12.dp),
++                        verticalAlignment = Alignment.CenterVertically,
++                    ) {
++                        Text(
++                            text = label,
++                            modifier = Modifier.weight(1f),
++                            color = if (id == selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
++                            fontWeight = if (id == selected) FontWeight.SemiBold else FontWeight.Normal,
++                        )
++                    }
++                }
++            }
++        },
++        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
++    )
++}
++
+ @Composable
+ private fun YouTubeTabsSection(isTablet: Boolean) {
+     val order by YouTubeSettings.tabOrder.value.collectAsState()
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeDeArrow.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeDeArrow.kt
+new file mode 100644
+index 000000000..fb9f4dcf1
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeDeArrow.kt
+@@ -0,0 +1,78 @@
++package com.nuvio.app.features.youtube
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.collectAsState
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.produceState
++import com.nuvio.app.features.addons.httpGetTextWithHeaders
++import kotlinx.coroutines.sync.Semaphore
++import kotlinx.coroutines.sync.withPermit
++import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.JsonArray
++import kotlinx.serialization.json.JsonObject
++import kotlinx.serialization.json.booleanOrNull
++import kotlinx.serialization.json.contentOrNull
++import kotlinx.serialization.json.doubleOrNull
++import kotlinx.serialization.json.intOrNull
++import kotlinx.serialization.json.jsonArray
++import kotlinx.serialization.json.jsonObject
++import kotlinx.serialization.json.jsonPrimitive
++
++/** Community-written titles and thumbnails picked from the video itself (DeArrow, sponsor.ajay.app). */
++data class YtBranding(val title: String?, val thumb: String?)
++
++object YouTubeDeArrow {
++    private val cache = HashMap<String, YtBranding>()
++    private val gate = Semaphore(4)
++
++    fun cached(videoId: String): YtBranding? = cache[videoId]
++
++    suspend fun get(videoId: String): YtBranding {
++        cache[videoId]?.let { return it }
++        val result = gate.withPermit {
++            cache[videoId] ?: runCatching { fetch(videoId) }.getOrDefault(YtBranding(null, null))
++        }
++        cache[videoId] = result
++        return result
++    }
++
++    private suspend fun fetch(videoId: String): YtBranding {
++        val text = httpGetTextWithHeaders(
++            url = "https://sponsor.ajay.app/api/branding?videoID=$videoId",
++            headers = mapOf("accept" to "application/json"),
++        )
++        val root = Json.parseToJsonElement(text).jsonObject
++        val title = (root["titles"] as? JsonArray)?.firstNotNullOfOrNull { entry ->
++            val obj = entry as? JsonObject ?: return@firstNotNullOfOrNull null
++            val original = obj["original"]?.jsonPrimitive?.booleanOrNull == true
++            val votes = obj["votes"]?.jsonPrimitive?.intOrNull ?: 0
++            val locked = obj["locked"]?.jsonPrimitive?.booleanOrNull == true
++            val name = obj["title"]?.jsonPrimitive?.contentOrNull
++            name?.takeIf { !original && it.isNotBlank() && (votes >= 0 || locked) }
++        }?.replace(Regex("(^|\\s)>(?=\\S)"), "$1")
++        val thumb = (root["thumbnails"] as? JsonArray)?.firstNotNullOfOrNull { entry ->
++            val obj = entry as? JsonObject ?: return@firstNotNullOfOrNull null
++            val original = obj["original"]?.jsonPrimitive?.booleanOrNull == true
++            val votes = obj["votes"]?.jsonPrimitive?.intOrNull ?: 0
++            val locked = obj["locked"]?.jsonPrimitive?.booleanOrNull == true
++            val time = obj["timestamp"]?.jsonPrimitive?.doubleOrNull
++            time?.takeIf { !original && (votes >= 0 || locked) }
++        }?.let { "https://dearrow-thumb.ajay.app/api/v1/getThumbnail?videoID=$videoId&time=$it" }
++        return YtBranding(title, thumb)
++    }
++}
++
++/** Title and thumbnail to draw for [item]: DeArrow's when those settings are on and it has them, else the originals. */
++@Composable
++fun rememberBrandedItem(item: YtItem, thumbnails: Boolean = true): Pair<String, String> {
++    YouTubeSettings.ensureLoaded()
++    val titlesOn by YouTubeSettings.deArrowTitles.value.collectAsState()
++    val thumbsOn by YouTubeSettings.deArrowThumbnails.value.collectAsState()
++    val wantThumb = thumbsOn && thumbnails
++    if (item.kind != YtKind.VIDEO || item.id.length != 11 || (!titlesOn && !wantThumb)) return item.title to item.thumb
++    val branding by produceState(YouTubeDeArrow.cached(item.id), item.id) {
++        value = YouTubeDeArrow.get(item.id)
++    }
++    return (if (titlesOn) branding?.title else null).orEmpty().ifBlank { item.title } to
++        (if (wantThumb) branding?.thumb else null).orEmpty().ifBlank { item.thumb }
++}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
 index e2c97bbf8..506e8fd27 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
@@ -440,7 +721,7 @@ index e2c97bbf8..506e8fd27 100644
      }
  
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
-index 206bbcbdb..0d260284d 100644
+index 206bbcbdb..24e3eb8fc 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
 @@ -51,6 +51,7 @@ import androidx.compose.runtime.Composable
@@ -476,6 +757,85 @@ index 206bbcbdb..0d260284d 100644
      CompositionLocalProvider(LocalFullPlayer provides onOpenInPlayer) {
          Box(Modifier.fillMaxSize().background(tokens.colors.background)) {
              Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
+@@ -732,6 +740,7 @@ private fun PagedPage(
+ @Composable
+ private fun ShortCard(item: YtItem, siblings: List<YtItem>) {
+     val tokens = MaterialTheme.nuvio
++    val (shownTitle, _) = rememberBrandedItem(item, thumbnails = false)
+     Box(
+         modifier = Modifier
+             .width(130.dp)
+@@ -747,7 +756,7 @@ private fun ShortCard(item: YtItem, siblings: List<YtItem>) {
+             modifier = Modifier.fillMaxSize(),
+         )
+         Text(
+-            text = item.title,
++            text = shownTitle,
+             color = Color.White,
+             style = MaterialTheme.typography.labelMedium,
+             maxLines = 2,
+@@ -786,6 +795,7 @@ private fun ItemCard(
+         }
+         return
+     }
++    val (shownTitle, shownThumb) = rememberBrandedItem(item)
+     Column(modifier = modifier.clickable { openItem(item, siblings) }) {
+         Box(
+             modifier = Modifier
+@@ -795,7 +805,7 @@ private fun ItemCard(
+                 .background(tokens.colors.surfaceCard),
+         ) {
+             AsyncImage(
+-                model = item.thumb,
++                model = shownThumb,
+                 contentDescription = null,
+                 contentScale = ContentScale.Crop,
+                 modifier = Modifier.fillMaxSize(),
+@@ -831,7 +841,7 @@ private fun ItemCard(
+         Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.Top) {
+             Column(Modifier.weight(1f)) {
+                 Text(
+-                    text = item.title,
++                    text = shownTitle,
+                     color = tokens.colors.textPrimary,
+                     style = MaterialTheme.typography.bodyMedium,
+                     fontWeight = FontWeight.Medium,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeSettings.kt
+index 063607dd5..93e0341c5 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeSettings.kt
+@@ -35,6 +35,18 @@ class ForkStringPref(val path: String, private val default: String) {
+     }
+ }
+ 
++val youTubeQualityChoices = listOf("auto", "2160", "1440", "1080", "720", "480", "360")
++val youTubeCodecChoices = listOf("auto", "avc", "vp9", "av1")
++
++fun youTubeQualityLabel(choice: String) = if (choice == "auto") "Auto (best, up to 4K)" else "${choice}p"
++
++fun youTubeCodecLabel(codec: String) = when (codec) {
++    "avc" -> "H.264 (most compatible)"
++    "vp9" -> "VP9"
++    "av1" -> "AV1"
++    else -> "Auto"
++}
++
+ data class YtSponsorCategory(val id: String, val label: String)
+ 
+ /** YouTube settings of the fork: SponsorBlock, feeds, tabs and hidden words (same groups as the 1T reference app). */
+@@ -42,6 +54,12 @@ object YouTubeSettings {
+     val sponsorNotice = ForkBoolPref("settings/youtube_sb_notice", true)
+     val sponsorAsk = ForkBoolPref("settings/youtube_sb_ask", false)
+     val sponsorCategories = ForkStringPref("settings/youtube_sb_categories", "sponsor,selfpromo,interaction")
++    /** Height the full player starts at: "auto" is the best offered (4K), else 2160, 1440, 1080, 720, 480, 360. */
++    val startQuality = ForkStringPref("settings/youtube_start_quality", "auto")
++    /** Video codec to prefer at the chosen height: auto, avc, vp9 or av1. */
++    val codecPreference = ForkStringPref("settings/youtube_codec", "auto")
++    val deArrowTitles = ForkBoolPref("settings/youtube_dearrow_titles", false)
++    val deArrowThumbnails = ForkBoolPref("settings/youtube_dearrow_thumbs", false)
+     val hideWatched = ForkBoolPref("settings/youtube_hide_watched", false)
+     val hideUpcoming = ForkBoolPref("settings/youtube_hide_upcoming", true)
+     val rememberLastTab = ForkBoolPref("settings/youtube_remember_tab", true)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeStartTrace.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeStartTrace.kt
 new file mode 100644
 index 000000000..8deed955f
@@ -516,8 +876,29 @@ index 000000000..8deed955f
 +        log.i { "$label at ${ms} ms ($videoId)" }
 +    }
 +}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeStreamQuality.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeStreamQuality.kt
+index e3112aae5..2dd42a194 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeStreamQuality.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeStreamQuality.kt
+@@ -24,5 +24,16 @@ object YouTubeStreamQuality {
+         capHeight = height ?: 0
+     }
+ 
++    private var codecVideoId: String = ""
++    private var codecPref: String = "auto"
++
++    /** Codec the viewer prefers for that one video ("auto", "avc", "vp9", "av1"). */
++    fun setCodec(videoId: String, codec: String) {
++        codecVideoId = videoId
++        codecPref = codec
++    }
++
++    fun codecFor(videoId: String): String = if (videoId == codecVideoId) codecPref else "auto"
++
+     fun capFor(videoId: String): Int? = capHeight.takeIf { it > 0 && videoId == capVideoId }
+ }
 diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
-index 3ff0cebd2..a69012e9f 100644
+index 3ff0cebd2..dcb3b6445 100644
 --- a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
 +++ b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
 @@ -1,7 +1,11 @@
@@ -541,7 +922,16 @@ index 3ff0cebd2..a69012e9f 100644
  
  private val VIDEO_ID_REGEX = Regex("^[a-zA-Z0-9_-]{11}$")
  private val API_KEY_REGEX = Regex("\"INNERTUBE_API_KEY\":\"([^\"]+)\"")
-@@ -167,19 +173,25 @@ class InAppYouTubeExtractor {
+@@ -48,6 +54,8 @@ internal data class StreamCandidate(
+     // alternate-language dub track, not the video's original/default audio.
+     // Always true for video/progressive candidates, so it never affects them.
+     val isDefaultAudioTrack: Boolean = true,
++    // "avc", "vp9", "av1" or "" when unknown. Only set for adaptive video.
++    val codec: String = "",
+ )
+ 
+ private data class ManifestBestVariant(
+@@ -167,19 +175,25 @@ class InAppYouTubeExtractor {
      ): TrailerPlaybackSource? {
          val videoId = extractVideoId(youtubeUrl) ?: return null
  
@@ -579,7 +969,7 @@ index 3ff0cebd2..a69012e9f 100644
          val apiKey = watchConfig.apiKey
              ?: throw IllegalStateException("Unable to extract INNERTUBE_API_KEY")
  
-@@ -188,7 +200,11 @@ class InAppYouTubeExtractor {
+@@ -188,7 +202,11 @@ class InAppYouTubeExtractor {
          val adaptiveAudio = mutableListOf<StreamCandidate>()
          val manifestUrls = mutableListOf<Triple<String, Int, String>>()
  
@@ -592,7 +982,7 @@ index 3ff0cebd2..a69012e9f 100644
              runCatching {
                  val playerResponse = fetchPlayerResponse(
                      apiKey = apiKey,
-@@ -196,7 +212,7 @@ class InAppYouTubeExtractor {
+@@ -196,7 +214,7 @@ class InAppYouTubeExtractor {
                      client = client,
                      visitorData = watchConfig.visitorData,
                  )
@@ -601,7 +991,15 @@ index 3ff0cebd2..a69012e9f 100644
                  val streamingData = playerResponse.objectValue("streamingData") ?: return@runCatching
                  val hlsManifestUrl = streamingData.stringValue("hlsManifestUrl")
                  if (!hlsManifestUrl.isNullOrBlank()) {
-@@ -282,32 +298,48 @@ class InAppYouTubeExtractor {
+@@ -256,6 +274,7 @@ class InAppYouTubeExtractor {
+                             height = height,
+                             fps = fps,
+                             ext = if (mimeType.contains("webm")) "webm" else "mp4",
++                            codec = codecOf(mimeType),
+                         )
+                     } else if (hasAudio) {
+                         val bitrate = format.numberValue("bitrate")
+@@ -282,32 +301,48 @@ class InAppYouTubeExtractor {
                          )
                      }
                  }
@@ -668,8 +1066,12 @@ index 3ff0cebd2..a69012e9f 100644
              }
          }
  
-@@ -322,12 +354,13 @@ class InAppYouTubeExtractor {
-         val bestVideo = pickBestForClient(pool, PREFERRED_SEPARATE_CLIENT)
+@@ -319,15 +354,16 @@ class InAppYouTubeExtractor {
+         if (heights.isNotEmpty()) com.nuvio.app.features.youtube.YouTubeStreamQuality.publish(videoId, heights)
+         val cap = com.nuvio.app.features.youtube.YouTubeStreamQuality.capFor(videoId)
+         val pool = if (cap != null) adaptiveVideo.filter { it.height in 1..cap }.ifEmpty { adaptiveVideo } else adaptiveVideo
+-        val bestVideo = pickBestForClient(pool, PREFERRED_SEPARATE_CLIENT)
++        val bestVideo = pickBestForClient(preferCodec(pool, com.nuvio.app.features.youtube.YouTubeStreamQuality.codecFor(videoId)), PREFERRED_SEPARATE_CLIENT)
          val bestAudio = pickBestForClient(adaptiveAudio, PREFERRED_SEPARATE_CLIENT)
  
 +        com.nuvio.app.features.youtube.YouTubeStartTrace.mark("formats picked: video ${bestVideo?.height}p ${bestVideo?.ext}, audio ${bestAudio?.ext}")
@@ -683,3 +1085,26 @@ index 3ff0cebd2..a69012e9f 100644
      }
  
      private suspend fun singleUrlSource(
+@@ -551,6 +587,22 @@ class InAppYouTubeExtractor {
+         return parseUrl(url)?.query?.get("n")?.firstOrNull()?.isNotBlank() == true
+     }
+ 
++    private fun codecOf(mimeType: String): String = when {
++        mimeType.contains("avc1") -> "avc"
++        mimeType.contains("vp09") || mimeType.contains("vp9") -> "vp9"
++        mimeType.contains("av01") -> "av1"
++        else -> ""
++    }
++
++    /** Keeps the best height, but narrows that height to the preferred codec when it is offered there. */
++    private fun preferCodec(pool: List<StreamCandidate>, codec: String): List<StreamCandidate> {
++        if (codec.isBlank() || codec == "auto") return pool
++        val top = pool.maxOfOrNull { it.height } ?: return pool
++        val atTop = pool.filter { it.height == top }
++        val match = atTop.filter { it.codec == codec }
++        return if (match.isEmpty()) pool else match
++    }
++
+     private fun videoScore(height: Int, fps: Int, bitrate: Double): Double {
+         return height * 1_000_000_000.0 + fps * 1_000_000.0 + bitrate
+     }
