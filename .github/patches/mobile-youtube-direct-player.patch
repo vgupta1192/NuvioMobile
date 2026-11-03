@@ -245,7 +245,7 @@ index c061ea657..d7d0c5e34 100644
 +private var toolbarExpandedMemory = false
 +private var toolbarScrollMemory = 0
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerQualityModal.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerQualityModal.kt
-index 6ebd4c61f..462ba3bd2 100644
+index 6ebd4c61f..55a8b83d4 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerQualityModal.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerQualityModal.kt
 @@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.items
@@ -267,13 +267,12 @@ index 6ebd4c61f..462ba3bd2 100644
  
  /** Fork: pick an HLS/DASH video variant (or Auto) from the player's quality button. */
  @Composable
-@@ -61,12 +66,41 @@ internal fun VideoQualityModal(
+@@ -61,12 +66,40 @@ internal fun VideoQualityModal(
                      style = MaterialTheme.typography.headlineMedium,
                      modifier = Modifier.padding(bottom = 8.dp),
                  )
 +                val ytSession = YouTubePlayerSession.state.collectAsState().value
-+                val ytHeights = YouTubeStreamQuality.heights.collectAsState().value
-+                    .let { if (it.first == ytSession.videoId) it.second else emptyList() }
++                val ytHeights = YouTubeStreamQuality.heights.collectAsState().value[ytSession.videoId].orEmpty()
                  val pinned = qualities.any { it.isSelected }
                  LazyColumn(
                      modifier = Modifier.fillMaxWidth().heightIn(max = railMaxHeight),
@@ -652,7 +651,7 @@ index 000000000..fb9f4dcf1
 +        (if (wantThumb) branding?.thumb else null).orEmpty().ifBlank { item.thumb }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
-index e2c97bbf8..506e8fd27 100644
+index e2c97bbf8..369b7a597 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
 @@ -4,6 +4,8 @@ import androidx.compose.foundation.background
@@ -664,6 +663,15 @@ index e2c97bbf8..506e8fd27 100644
  import androidx.compose.foundation.layout.Column
  import androidx.compose.foundation.layout.Row
  import androidx.compose.foundation.layout.fillMaxSize
+@@ -284,7 +286,7 @@ fun YouTubePlayerOptions(
+ 
+     if (session.showInfo) {
+         val saved by YouTubeRepository.saved.collectAsState()
+-        val heights = YouTubeStreamQuality.heights.collectAsState().value.let { if (it.first == videoId) it.second else emptyList() }
++        val heights = YouTubeStreamQuality.heights.collectAsState().value[videoId].orEmpty()
+         val cap = YouTubeStreamQuality.capFor(videoId)
+         val subscribed = session.channelId.isNotBlank() && saved.subscriptions.any { it.id == session.channelId }
+         val later = saved.watchLater.any { it.id == videoId }
 @@ -310,13 +312,27 @@ fun YouTubePlayerOptions(
                  busy = false
              }
@@ -1014,19 +1022,28 @@ index 000000000..8deed955f
 +    }
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeStreamQuality.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeStreamQuality.kt
-index e3112aae5..a52ae32c0 100644
+index e3112aae5..00af6caec 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeStreamQuality.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeStreamQuality.kt
-@@ -12,17 +12,31 @@ object YouTubeStreamQuality {
-     private val _heights = MutableStateFlow<Pair<String, List<Int>>>("" to emptyList())
-     val heights: StateFlow<Pair<String, List<Int>>> = _heights.asStateFlow()
+@@ -9,20 +9,37 @@ import kotlinx.coroutines.flow.asStateFlow
+  * viewer picked for that one video. The cap applies to that video id only, so trailers stay on best.
+  */
+ object YouTubeStreamQuality {
+-    private val _heights = MutableStateFlow<Pair<String, List<Int>>>("" to emptyList())
+-    val heights: StateFlow<Pair<String, List<Int>>> = _heights.asStateFlow()
++    // One entry per video id: warming other videos must not replace the list of the one that plays.
++    private val _heights = MutableStateFlow<Map<String, List<Int>>>(emptyMap())
++    val heights: StateFlow<Map<String, List<Int>>> = _heights.asStateFlow()
  
 -    private var capVideoId: String = ""
 -    private var capHeight: Int = 0
 +    private val caps = HashMap<String, Int>()
  
      fun publish(videoId: String, list: List<Int>) {
-         _heights.value = videoId to list
+-        _heights.value = videoId to list
++        _heights.value = (_heights.value - videoId + (videoId to list)).let { m ->
++            if (m.size > 32) m.entries.drop(m.size - 32).associate { it.key to it.value } else m
++        }
      }
  
      fun setCap(videoId: String, height: Int?) {
