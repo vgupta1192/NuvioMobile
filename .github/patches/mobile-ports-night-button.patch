@@ -1,0 +1,141 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxSoundModes.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxSoundModes.kt
+index d6a06f73c..7b6d23780 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxSoundModes.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/DxSoundModes.kt
+@@ -75,11 +75,15 @@ internal object DxSound {
+     /** What the player applies right now: the chosen mode, or [DxSoundMode.NORMAL] while the row is switched off. */
+     val effective: DxSoundMode get() = if (_rowEnabled.value) _mode.value else DxSoundMode.NORMAL
+ 
++    /** Player toolbar moon button that flips Night mode on and off. Off also switches Night mode off. */
++    val nightButton = com.nuvio.app.features.settings.ForkBoolPref("settings/dx_night_button", true)
++
+     private var loaded = false
+ 
+     fun ensureLoaded() {
+         if (loaded) return
+         loaded = true
++        nightButton.ensureLoaded()
+         val values = HashMap<String, String>()
+         AppFileCache.read(PATH)?.lineSequence()?.forEach { line ->
+             val at = line.indexOf('=')
+@@ -100,6 +104,15 @@ internal object DxSound {
+         save()
+     }
+ 
++    /** Toolbar button action: Night mode on, or back to Normal when it is already on. */
++    fun toggleNight() = setMode(if (_mode.value == DxSoundMode.NIGHT) DxSoundMode.NORMAL else DxSoundMode.NIGHT)
++
++    fun setNightButton(enabled: Boolean) {
++        ensureLoaded()
++        nightButton.set(enabled)
++        if (!enabled && _mode.value == DxSoundMode.NIGHT) setMode(DxSoundMode.NORMAL)
++    }
++
+     fun setRowEnabled(enabled: Boolean) {
+         ensureLoaded()
+         _rowEnabled.value = enabled
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt
+index e6286a628..2aa5ec4ea 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt
+@@ -84,6 +84,7 @@ object ForkPlayerToolbar : ForkButtonLayout(
+         ForkToolbarButton("next_episode", "Next episode"),
+         ForkToolbarButton("subtitles", "Subtitles"),
+         ForkToolbarButton("audio", "Audio"),
++        ForkToolbarButton("night", "Night mode"),
+         ForkToolbarButton("chapters", "Chapters"),
+         ForkToolbarButton("sources", "Sources"),
+         ForkToolbarButton("episodes", "Episodes"),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
+index 75ed9941d..3549c86df 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
+@@ -18,6 +18,7 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
+ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+ import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+ import androidx.compose.material.icons.automirrored.rounded.Toc
++import androidx.compose.material.icons.rounded.Bedtime
+ import androidx.compose.material.icons.rounded.Build
+ import androidx.compose.material.icons.rounded.Cast
+ import androidx.compose.material.icons.rounded.CastConnected
+@@ -244,6 +245,7 @@ internal fun PlayerControlActions(
+                         icon = action.icon,
+                         painter = action.painter,
+                         iconSize = action.iconSize,
++                        tint = action.tint,
+                     )
+                 }
+                 if (hasOverflow) {
+@@ -320,8 +322,14 @@ internal fun playerControlActions(
+     onQualityClick: (() -> Unit)? = null,
+     onRateClick: (() -> Unit)? = null,
+     userRating: Int? = null,
+-): List<PlayerControlAction> =
+-    listOfNotNull(
++): List<PlayerControlAction> {
++    androidx.compose.runtime.LaunchedEffect(Unit) { DxSound.ensureLoaded() }
++    val nightMode by DxSound.mode.collectAsStateWithLifecycle()
++    val soundRow by DxSound.rowEnabled.collectAsStateWithLifecycle()
++    val nightButton by DxSound.nightButton.value.collectAsStateWithLifecycle()
++    val audioAvailable by PlayerEffects.audioAvailable.collectAsStateWithLifecycle()
++    val nightOn = nightMode == DxSoundMode.NIGHT
++    return listOfNotNull(
+         onNextEpisodeClick?.let {
+             PlayerControlAction(
+                 stringResource(Res.string.player_next_episode), it,
+@@ -339,6 +347,14 @@ internal fun playerControlActions(
+             painter = appIconPainter(AppIconResource.PlayerAudioFilled),
+                 id = "audio",
+             ),
++        if (soundRow && nightButton && audioAvailable) {
++            PlayerControlAction(
++                if (nightOn) "Night mode on" else "Night mode", { DxSound.toggleNight() },
++                icon = Icons.Rounded.Bedtime,
++                id = "night",
++                tint = if (nightOn) MaterialTheme.colorScheme.primary else Color.White,
++            )
++        } else null,
+         onChaptersClick?.let {
+             PlayerControlAction(
+                 stringResource(Res.string.compose_player_chapters), it,
+@@ -413,6 +429,7 @@ internal fun playerControlActions(
+             )
+         },
+     )
++}
+ 
+ internal data class PlayerControlAction(
+     val description: String,
+@@ -421,4 +438,5 @@ internal data class PlayerControlAction(
+     val painter: Painter? = null,
+     val iconSize: Dp = 24.dp,
+     val id: String = "",
++    val tint: Color = Color.White,
+ )
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxSoundSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxSoundSettings.kt
+index fe7e5e1fe..43c5695ff 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxSoundSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/DxSoundSettings.kt
+@@ -14,6 +14,7 @@ internal fun DxSoundSettingsSection(isTablet: Boolean) {
+     LaunchedEffect(Unit) { DxSound.ensureLoaded() }
+     val enabled by DxSound.rowEnabled.collectAsStateWithLifecycle()
+     val mode by DxSound.mode.collectAsStateWithLifecycle()
++    val nightButton by DxSound.nightButton.value.collectAsStateWithLifecycle()
+     SettingsSection(title = "Dialogue boost & Night mode", isTablet = isTablet) {
+         SettingsGroup(isTablet = isTablet) {
+             SettingsSwitchRow(
+@@ -24,6 +25,14 @@ internal fun DxSoundSettingsSection(isTablet: Boolean) {
+                 onCheckedChange = DxSound::setRowEnabled,
+             )
+             SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Night Mode Button",
++                description = "Show a player button that evens out loud and quiet scenes, for listening at a low volume. Turning it off also turns night mode off.",
++                checked = nightButton,
++                isTablet = isTablet,
++                onCheckedChange = DxSound::setNightButton,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
+             SettingsChipRow(
+                 title = "Mode",
+                 description = "Dialogue boost lifts voices and softens booming lows. Night mode also evens out loud and quiet scenes.",
