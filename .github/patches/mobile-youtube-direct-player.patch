@@ -1721,10 +1721,10 @@ index e2c97bbf8..08cb1fe73 100644
  
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt
 new file mode 100644
-index 000000000..7565fc96d
+index 000000000..1ba4ec2c2
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt
-@@ -0,0 +1,129 @@
+@@ -0,0 +1,135 @@
 +package com.nuvio.app.features.youtube
 +
 +import com.nuvio.app.features.streams.YouTubeStreamResolver
@@ -1845,8 +1845,14 @@ index 000000000..7565fc96d
 +                    previews[item.id] = Entry("", it, TimeSource.Monotonic.markNow())
 +                }
 +        }
-+        val source = runCatching { deferred.await() }.onFailure { lastError = "await: ${it::class.simpleName}: ${it.message?.take(120)}" }.getOrNull()
-+        if (source == null) synchronized(lock) { previews.remove(item.id) }
++        var source = runCatching { deferred.await() }.onFailure { lastError = "await: ${it::class.simpleName}: ${it.message?.take(120)}" }.getOrNull()
++        if (source == null) {
++            synchronized(lock) { previews.remove(item.id) }
++            // The capped resolve found nothing: fall back to the stream the full player would use.
++            source = take(item.id)
++                ?: runCatching { YouTubeRepository.resolve(item.id) }.getOrNull()
++            lastError = "$lastError; fallback ${if (source == null) "null" else "ok"}"
++        }
 +        return source
 +    }
 +
