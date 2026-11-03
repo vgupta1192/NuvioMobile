@@ -1,0 +1,287 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
+index a3491c577..bad95623d 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinDetailScreen.kt
+@@ -34,7 +34,11 @@ import nuvio.composeapp.generated.resources.rating_trakt
+ import nuvio.composeapp.generated.resources.simkl_logo_glyph
+ import nuvio.composeapp.generated.resources.Res
+ import org.jetbrains.compose.resources.painterResource
+-import com.nuvio.app.features.details.components.rememberRatingAction
++import com.nuvio.app.features.ratings.UserRatingSheet
++import com.nuvio.app.features.ratings.UserRatingStars
++import com.nuvio.app.features.ratings.rememberCanRate
++import com.nuvio.app.features.ratings.rememberUserRating
++import com.nuvio.app.features.ratings.userRatingTarget
+ import com.nuvio.app.features.mdblist.MdbListMetadataService
+ import com.nuvio.app.features.mdblist.MdbListSettingsRepository
+ import kotlinx.coroutines.withTimeoutOrNull
+@@ -211,7 +215,11 @@ private fun JellyfinDetailContent(
+     val extraRatings = EpisodeExtraRatings.current
+     var similar by remember(item.id) { mutableStateOf<List<JellyfinItem>>(emptyList()) }
+     LaunchedEffect(item.id) { similar = JellyfinRepository.similarTo(item.id) }
+-    val rateAction = rememberRatingAction(enrichedMeta)
++    // Same rating entry as the main details page: stars that open the multi-service rating sheet.
++    val ratingTarget = remember(enrichedMeta) { enrichedMeta.userRatingTarget() }
++    val canRate = rememberCanRate(ratingTarget)
++    val userRating = rememberUserRating(ratingTarget.takeIf { canRate })
++    var showRatingSheet by remember(ratingTarget) { mutableStateOf(false) }
+     var showGoTo by remember(item.id) { mutableStateOf(false) }
+     var goTo by remember(item.id) { mutableStateOf<Pair<Int, Int>?>(null) }
+     val episodesListState = rememberLazyListState()
+@@ -286,21 +294,13 @@ private fun JellyfinDetailContent(
+                 )
+             }
+             val showGoToChip = item.isSeries && state.seasons.isNotEmpty()
+-            if (rateAction != null || item.tvdbId != null || showGoToChip) {
++            if (item.tvdbId != null || showGoToChip) {
+                 Spacer(modifier = Modifier.height(10.dp))
+                 Row(
+                     horizontalArrangement = Arrangement.spacedBy(8.dp),
+                     verticalAlignment = Alignment.CenterVertically,
+                     modifier = Modifier.horizontalScroll(rememberScrollState()),
+                 ) {
+-                    if (rateAction != null) {
+-                        JellyfinActionChip(
+-                            label = rateAction.label,
+-                            icon = rateAction.icon,
+-                            highlighted = rateAction.isActive,
+-                            onClick = rateAction.onClick,
+-                        )
+-                    }
+                     if (showGoToChip) {
+                         JellyfinActionChip(label = "Go to episode", onClick = { showGoTo = true })
+                     }
+@@ -309,6 +309,18 @@ private fun JellyfinDetailContent(
+                     }
+                 }
+             }
++            if (canRate) {
++                Box(modifier = Modifier.fillMaxWidth().padding(top = 12.dp), contentAlignment = Alignment.Center) {
++                    UserRatingStars(rating = userRating, onClick = { showRatingSheet = true })
++                }
++                if (showRatingSheet) {
++                    UserRatingSheet(
++                        target = ratingTarget,
++                        title = enrichedMeta.name,
++                        onDismiss = { showRatingSheet = false },
++                    )
++                }
++            }
+             Spacer(modifier = Modifier.height(14.dp))
+             JellyfinMediaBadgesRow(item = item)
+         }
+@@ -319,7 +331,8 @@ private fun JellyfinDetailContent(
+         )
+         DetailCastSection(
+             cast = meta.cast,
+-            modifier = Modifier.padding(top = 12.dp),
++            modifier = Modifier.padding(top = 12.dp).padding(horizontal = 24.dp),
++            horizontalScrollPadding = 24.dp,
+             onCastClick = { person, _ ->
+                 castScope.launch {
+                     val knownId = person.tmdbId?.takeIf { it > 0 }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt
+index fbbb62cb6..875e3eab3 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/jellyfin/JellyfinScreen.kt
+@@ -26,7 +26,6 @@ import androidx.compose.foundation.rememberScrollState
+ import androidx.compose.foundation.shape.RoundedCornerShape
+ import androidx.compose.foundation.verticalScroll
+ import androidx.compose.material.icons.Icons
+-import androidx.compose.material.icons.rounded.Logout
+ import androidx.compose.material.icons.rounded.Refresh
+ import androidx.compose.material.icons.rounded.Tune
+ import androidx.compose.material.icons.rounded.Visibility
+@@ -159,13 +158,6 @@ fun JellyfinScreen(
+                             tint = tokens.colors.textPrimary,
+                         )
+                     }
+-                    IconButton(onClick = { JellyfinRepository.signOut() }) {
+-                        Icon(
+-                            imageVector = Icons.Rounded.Logout,
+-                            contentDescription = "Sign out",
+-                            tint = tokens.colors.textPrimary,
+-                        )
+-                    }
+                 },
+             )
+             if (gridOpen) {
+@@ -238,7 +230,6 @@ fun JellyfinScreen(
+                         horizontalArrangement = Arrangement.spacedBy(4.dp),
+                     ) {
+                         JellyfinFloatingAction(Icons.Rounded.Refresh, "Refresh") { JellyfinRepository.refresh() }
+-                        JellyfinFloatingAction(Icons.Rounded.Logout, "Sign out") { JellyfinRepository.signOut() }
+                     }
+                 }
+             }
+@@ -265,8 +256,10 @@ private fun JellyfinHome(
+     onOpenDetails: (String) -> Unit,
+     modifier: Modifier = Modifier,
+ ) {
+-    LaunchedEffect(session.sessionKey) {
+-        JellyfinRepository.loadHome(silent = true)
++    // Refresh every time the home screen comes back into view, not only on first open.
++    val screenActive = com.nuvio.app.core.ui.LocalScreenActive.current
++    LaunchedEffect(session.sessionKey, screenActive) {
++        if (screenActive) JellyfinRepository.loadHome(silent = true)
+     }
+     val heroItems = remember(state.resumeItems, state.homeRows) {
+         buildList {
+@@ -289,10 +282,14 @@ private fun JellyfinHome(
+         }
+         return
+     }
+-    Column(modifier = modifier.verticalScroll(rememberScrollState())) {
++    BoxWithConstraints(modifier = modifier) {
++    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+         if (heroItems.isNotEmpty()) {
++            // Tall artwork: the hero fills the screen except for one peeking row.
+             HomeHeroSection(
+                 items = heroItems,
++                viewportHeight = maxHeight,
++                mobileBelowSectionHeightHint = 250.dp,
+                 onItemClick = { preview -> onOpenDetails(preview.id.stripJellyfinPrefix()) },
+             )
+         }
+@@ -329,6 +326,7 @@ private fun JellyfinHome(
+         }
+         Spacer(modifier = Modifier.height(24.dp))
+     }
++    }
+ }
+ 
+ private fun String.stripJellyfinPrefix(): String = removePrefix(JELLYFIN_META_ID_PREFIX)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt
+index 0fa5b9ded..933eae59e 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt
+@@ -19,6 +19,8 @@ import coil3.compose.AsyncImage
+ import androidx.compose.ui.window.Dialog
+ import androidx.compose.ui.window.DialogProperties
+ import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.height
+ import androidx.compose.foundation.layout.Column
+ import androidx.compose.foundation.layout.Row
+ import androidx.compose.foundation.layout.fillMaxWidth
+@@ -402,8 +404,13 @@ fun YouTubeSettingsSheet(onDismiss: () -> Unit) {
+                     )
+                     TextButton(onClick = onDismiss) { Text("Done") }
+                 }
+-                Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
++                // Same side margin as the title row, with room between the group headers.
++                Column(
++                    Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
++                    verticalArrangement = Arrangement.spacedBy(14.dp),
++                ) {
+                     ExtraYouTubeSection(isTablet = false, showTabToggle = false)
++                    Spacer(Modifier.height(24.dp))
+                 }
+             }
+         }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
+index cebeec900..6ef1a3715 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
+@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
+ import androidx.compose.foundation.layout.PaddingValues
+ import androidx.compose.foundation.layout.Row
+ import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.statusBarsPadding
+ import androidx.compose.foundation.layout.WindowInsets
+ import androidx.compose.foundation.layout.aspectRatio
+ import androidx.compose.foundation.layout.fillMaxSize
+@@ -139,21 +140,17 @@ fun YouTubeScreen(
+     CompositionLocalProvider(LocalFullPlayer provides onOpenInPlayer) {
+         Box(Modifier.fillMaxSize().background(tokens.colors.background)) {
+             Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
+-                NuvioScreenHeader(
++                if (page == null) {
++                    YouTubeRootHeader(
++                        title = title,
++                        onBack = { if (!YouTubeRepository.popPage()) onBack() },
++                        onSettings = { showSettings = true },
++                        onAccount = { showAccounts = true },
++                    )
++                } else NuvioScreenHeader(
+                     title = title,
+                     modifier = Modifier.padding(horizontal = tokens.spacing.screenHorizontal),
+                     onBack = { if (!YouTubeRepository.popPage()) onBack() },
+-                    actions = {
+-                        if (page == null) {
+-                            TextButton(onClick = { showSettings = true }) { Text("Settings") }
+-                            val headerAccount by YouTubeAccount.state.collectAsState()
+-                            if (headerAccount.signedIn) {
+-                                OutlinedButton(onClick = { showAccounts = true }) {
+-                                    Text(headerAccount.label.ifBlank { "Account" }, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 140.dp))
+-                                }
+-                            }
+-                        }
+-                    },
+                 )
+                 when (page) {
+                     null -> RootContent(tab = tab, onTab = { tab = it })
+@@ -191,6 +188,63 @@ fun YouTubeScreen(
+     }
+ }
+ 
++/** Compact root header: back, small title, Settings and the active profile's avatar. */
++@Composable
++private fun YouTubeRootHeader(title: String, onBack: () -> Unit, onSettings: () -> Unit, onAccount: () -> Unit) {
++    val tokens = MaterialTheme.nuvio
++    val account by YouTubeAccount.state.collectAsState()
++    LaunchedEffect(account.signedIn, account.profiles.isEmpty()) {
++        if (account.signedIn && account.profiles.isEmpty()) runCatching { YouTubeAccount.refreshProfiles() }
++    }
++    val active = account.profiles.firstOrNull { it.selected } ?: account.profiles.firstOrNull()
++    val avatar = active?.avatar.orEmpty()
++    Row(
++        modifier = Modifier
++            .fillMaxWidth()
++            .statusBarsPadding()
++            .padding(horizontal = tokens.spacing.screenHorizontal, vertical = 4.dp),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        IconButton(onClick = onBack) {
++            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = tokens.colors.textPrimary)
++        }
++        Text(
++            text = title,
++            style = MaterialTheme.typography.titleLarge,
++            fontWeight = FontWeight.SemiBold,
++            maxLines = 1,
++            modifier = Modifier.weight(1f),
++        )
++        TextButton(onClick = onSettings) { Text("Settings", maxLines = 1) }
++        if (account.signedIn) {
++            Box(
++                modifier = Modifier
++                    .padding(start = 4.dp)
++                    .size(34.dp)
++                    .clip(CircleShape)
++                    .background(MaterialTheme.colorScheme.primary)
++                    .clickable(onClick = onAccount),
++                contentAlignment = Alignment.Center,
++            ) {
++                if (avatar.isNotBlank()) {
++                    AsyncImage(
++                        model = if (avatar.startsWith("//")) "https:$avatar" else avatar,
++                        contentDescription = "Switch profile",
++                        contentScale = ContentScale.Crop,
++                        modifier = Modifier.fillMaxSize(),
++                    )
++                } else {
++                    Text(
++                        text = (active?.name ?: account.label).ifBlank { "?" }.take(1).uppercase(),
++                        color = MaterialTheme.colorScheme.onPrimary,
++                        style = MaterialTheme.typography.titleSmall,
++                    )
++                }
++            }
++        }
++    }
++}
++
+ @Composable
+ private fun RootContent(tab: Int, onTab: (Int) -> Unit) {
+     val tokens = MaterialTheme.nuvio
