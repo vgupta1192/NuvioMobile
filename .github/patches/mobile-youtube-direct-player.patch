@@ -1286,7 +1286,7 @@ index 000000000..fb9f4dcf1
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
 new file mode 100644
-index 000000000..9704b3812
+index 000000000..c7c0bf3c5
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
 @@ -0,0 +1,259 @@
@@ -1407,7 +1407,7 @@ index 000000000..9704b3812
 +
 +    LaunchedEffect(item.id) {
 +        source = YouTubePrewarm.previewSource(item)
-+        if (source == null) { note = "preview: no stream"; failed = true }
++        if (source == null) { note = "preview: no stream (${YouTubePrewarm.lastError})"; failed = true }
 +    }
 +    // A preview that has not started after this long gives way to the plain thumbnail.
 +    LaunchedEffect(source) {
@@ -1721,10 +1721,10 @@ index e2c97bbf8..08cb1fe73 100644
  
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt
 new file mode 100644
-index 000000000..9e3e67ad2
+index 000000000..7565fc96d
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt
-@@ -0,0 +1,121 @@
+@@ -0,0 +1,129 @@
 +package com.nuvio.app.features.youtube
 +
 +import com.nuvio.app.features.streams.YouTubeStreamResolver
@@ -1733,6 +1733,7 @@ index 000000000..9e3e67ad2
 +import kotlin.time.Duration.Companion.minutes
 +import kotlin.time.TimeMark
 +import kotlin.time.TimeSource
++import kotlin.concurrent.Volatile
 +import kotlinx.coroutines.CoroutineScope
 +import kotlinx.coroutines.Deferred
 +import kotlinx.coroutines.Dispatchers
@@ -1807,6 +1808,10 @@ index 000000000..9e3e67ad2
 +        return source
 +    }
 +
++    /** Why the last preview resolve gave nothing; shown on the card while previews are being debugged. */
++    @Volatile
++    var lastError: String? = null
++
 +    private val previews = LinkedHashMap<String, Entry>()
 +    private val capLock = Mutex()
 +
@@ -1825,7 +1830,10 @@ index 000000000..9e3e67ad2
 +                            YouTubeStreamQuality.setCap(item.id, PREVIEW_HEIGHT)
 +                            YouTubeStreamQuality.setCodec(item.id, "avc")
 +                            try {
-+                                runCatching { TrailerPlaybackResolver.resolveFromYouTubeUrl(YouTubeStreamResolver.watchUrl(item.id)) }.getOrNull()
++                                runCatching { TrailerPlaybackResolver.resolveFromYouTubeUrl(YouTubeStreamResolver.watchUrl(item.id)) }
++                                    .onFailure { lastError = "${it::class.simpleName}: ${it.message?.take(120)}" }
++                                    .onSuccess { if (it == null) lastError = "resolver returned null" }
++                                    .getOrNull()
 +                            } finally {
 +                                YouTubeStreamQuality.setCap(item.id, YouTubeSettings.startQuality.current().toIntOrNull())
 +                                YouTubeStreamQuality.setCodec(item.id, YouTubeSettings.codecPreference.current())
@@ -1837,7 +1845,7 @@ index 000000000..9e3e67ad2
 +                    previews[item.id] = Entry("", it, TimeSource.Monotonic.markNow())
 +                }
 +        }
-+        val source = runCatching { deferred.await() }.getOrNull()
++        val source = runCatching { deferred.await() }.onFailure { lastError = "await: ${it::class.simpleName}: ${it.message?.take(120)}" }.getOrNull()
 +        if (source == null) synchronized(lock) { previews.remove(item.id) }
 +        return source
 +    }
