@@ -1,0 +1,1119 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.android.kt
+index 80a3169a4..85cddc16b 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.android.kt
+@@ -86,9 +86,24 @@ internal actual object LiveTvPlatform {
+ 
+ internal actual object LiveTvStorage {
+     private var preferences: SharedPreferences? = null
++    private var blobDir: java.io.File? = null
+ 
+     fun initialize(context: Context) {
+         preferences = context.getSharedPreferences("nuvio_livetv", Context.MODE_PRIVATE)
++        blobDir = context.filesDir
++    }
++
++    actual fun loadBlob(name: String): String? = runCatching {
++        blobDir?.let { java.io.File(it, name).takeIf { file -> file.isFile }?.readText() }
++    }.getOrNull()
++
++    actual fun saveBlob(name: String, value: String) {
++        runCatching {
++            val dir = blobDir ?: return
++            val tmp = java.io.File(dir, "$name.tmp")
++            tmp.writeText(value)
++            if (!tmp.renameTo(java.io.File(dir, name))) tmp.delete()
++        }
+     }
+ 
+     actual fun loadString(key: String): String? = preferences?.getString(key, null)
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/settings/ForkHealthPlatform.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/settings/ForkHealthPlatform.android.kt
+new file mode 100644
+index 000000000..1bec2abfb
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/settings/ForkHealthPlatform.android.kt
+@@ -0,0 +1,29 @@
++package com.nuvio.app.features.settings
++
++import android.app.ActivityManager
++import android.content.Context
++import com.nuvio.app.core.storage.AppContextHolder
++import java.io.File
++
++internal actual object ForkHealthPlatform {
++    private fun dirSize(file: File): Long =
++        if (file.isFile) file.length() else file.listFiles()?.sumOf { dirSize(it) } ?: 0L
++
++    private fun mb(bytes: Long): String = "%.1f MB".format(bytes / (1024.0 * 1024.0))
++
++    actual fun systemLines(): List<String> {
++        val context = AppContextHolder.get() ?: return listOf("Device facts are not ready yet.")
++        val runtime = Runtime.getRuntime()
++        val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
++        val info = ActivityManager.MemoryInfo().also { manager?.getMemoryInfo(it) }
++        return buildList {
++            add("App memory: ${mb(runtime.totalMemory() - runtime.freeMemory())} used of ${mb(runtime.maxMemory())}")
++            if (manager != null) {
++                add("Device memory: ${mb(info.availMem)} free of ${mb(info.totalMem)}" + if (info.lowMemory) " (low)" else "")
++            }
++            add("Free storage: ${mb(context.filesDir.usableSpace)}")
++            add("Cache folder: ${mb(dirSize(context.cacheDir))}")
++            add("Saved data: ${mb(dirSize(context.filesDir))}")
++        }
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/HostOutage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/HostOutage.kt
+new file mode 100644
+index 000000000..b5cba0e2b
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/HostOutage.kt
+@@ -0,0 +1,25 @@
++package com.nuvio.app.features.details
++
++import com.nuvio.app.features.library.LibraryClock
++
++/**
++ * Remembers that a host could not be reached, so it is not asked again on every page. When another host answered
++ * at the same time the network is fine and the host is taken as gone for [GONE_MS]; otherwise the device may just be
++ * offline for a moment, and the host is tried again after [OFFLINE_MS].
++ */
++internal class HostOutage(
++    private val now: () -> Long = { LibraryClock.nowEpochMs() },
++) {
++    private var downUntilMs = 0L
++
++    fun isDown(): Boolean = now() < downUntilMs
++
++    fun markDown(networkUp: Boolean) {
++        downUntilMs = now() + if (networkUp) GONE_MS else OFFLINE_MS
++    }
++
++    private companion object {
++        const val GONE_MS = 24L * 60L * 60L * 1000L
++        const val OFFLINE_MS = 10L * 60L * 1000L
++    }
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/ImdbEpisodeRatingsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/ImdbEpisodeRatingsRepository.kt
+index 6a32a8747..25d704c40 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/ImdbEpisodeRatingsRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/ImdbEpisodeRatingsRepository.kt
+@@ -66,6 +66,8 @@ object ImdbEpisodeRatingsRepository {
+         return deferred.await()
+     }
+ 
++    private val primaryOutage = HostOutage()
++
+     fun clearCache() {
+         cache.clear()
+         inFlight.clear()
+@@ -75,16 +77,25 @@ object ImdbEpisodeRatingsRepository {
+         imdbId: String?,
+         tmdbId: Int?,
+     ): Map<Pair<Int, Int>, Double> {
+-        if (!imdbId.isNullOrBlank()) {
+-            val primary = toRatingsMap(ImdbTapframeApi.getSeasonRatings(imdbId))
+-            if (primary.isNotEmpty()) return primary
+-            log.w { "Primary episode ratings empty for imdbId=$imdbId, trying fallback" }
++        var primaryUnreachable = false
++        if (!imdbId.isNullOrBlank() && !primaryOutage.isDown()) {
++            val payload = ImdbTapframeApi.getSeasonRatingsOrNull(imdbId)
++            if (payload == null) {
++                primaryUnreachable = true
++            } else {
++                val primary = toRatingsMap(payload)
++                if (primary.isNotEmpty()) return primary
++                log.w { "Primary episode ratings empty for imdbId=$imdbId, trying fallback" }
++            }
+         }
+ 
+         if (tmdbId != null) {
+-            return toRatingsMap(SeriesGraphApi.getSeasonRatings(tmdbId))
++            val fallback = toRatingsMap(SeriesGraphApi.getSeasonRatings(tmdbId))
++            if (primaryUnreachable) primaryOutage.markDown(networkUp = fallback.isNotEmpty())
++            return fallback
+         }
+ 
++        if (primaryUnreachable) primaryOutage.markDown(networkUp = false)
+         return emptyMap()
+     }
+ 
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/SeriesGraphApi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/SeriesGraphApi.kt
+index c46996ee9..e16e4a575 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/SeriesGraphApi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/SeriesGraphApi.kt
+@@ -12,7 +12,7 @@ internal object SeriesGraphApi {
+         requestSeasonRatings(
+             baseUrl = ImdbEpisodeRatingsConfig.IMDB_RATINGS_API_BASE_URL,
+             showId = tmdbId.toString(),
+-        )
++        ).orEmpty()
+ }
+ 
+ internal object ImdbTapframeApi {
+@@ -20,6 +20,14 @@ internal object ImdbTapframeApi {
+         requestSeasonRatings(
+             baseUrl = ImdbEpisodeRatingsConfig.IMDB_TAPFRAME_API_BASE_URL,
+             showId = imdbId,
++        ).orEmpty()
++
++    /** Null when the request itself failed (host unreachable), empty when the host answered without ratings. */
++    suspend fun getSeasonRatingsOrNull(imdbId: String): List<SeriesGraphSeasonRatingsDto>? =
++        requestSeasonRatings(
++            baseUrl = ImdbEpisodeRatingsConfig.IMDB_TAPFRAME_API_BASE_URL,
++            showId = imdbId,
++            nullOnError = true,
+         )
+ }
+ 
+@@ -43,7 +51,8 @@ private val seriesGraphJson = Json { ignoreUnknownKeys = true }
+ private suspend fun requestSeasonRatings(
+     baseUrl: String,
+     showId: String,
+-): List<SeriesGraphSeasonRatingsDto> {
++    nullOnError: Boolean = false,
++): List<SeriesGraphSeasonRatingsDto>? {
+     val resolvedBaseUrl = baseUrl.trim().trimEnd('/')
+     if (resolvedBaseUrl.isBlank()) return emptyList()
+ 
+@@ -61,5 +70,5 @@ private suspend fun requestSeasonRatings(
+         seriesGraphJson.decodeFromString<List<SeriesGraphSeasonRatingsDto>>(response.body)
+     }.onFailure { error ->
+         seriesGraphLog.w(error) { "Season ratings request failed for $showId" }
+-    }.getOrDefault(emptyList())
++    }.getOrElse { if (nullOnError) null else emptyList() }
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/ForkHomeRows.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/ForkHomeRows.kt
+index 63f51fdb5..33bb302a9 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/ForkHomeRows.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/home/ForkHomeRows.kt
+@@ -61,10 +61,17 @@ internal fun ForkHomeLibraryRows(
+         ForkPrefs.homeUpNextTonight.ensureLoaded()
+         ForkPrefs.homeAiringWeek.ensureLoaded()
+         ForkPrefs.homeFinishSeries.ensureLoaded()
++        ForkPrefs.homeWatchLater.ensureLoaded()
++        ForkPrefs.homeTop10.ensureLoaded()
++        ForkPrefs.homeBecauseWatched.ensureLoaded()
+     }
+     val showTonight by ForkPrefs.homeUpNextTonight.value.collectAsStateWithLifecycle()
+     val showWeek by ForkPrefs.homeAiringWeek.value.collectAsStateWithLifecycle()
+     val showFinish by ForkPrefs.homeFinishSeries.value.collectAsStateWithLifecycle()
++    val showWatchLater by ForkPrefs.homeWatchLater.value.collectAsStateWithLifecycle()
++    val showTop10 by ForkPrefs.homeTop10.value.collectAsStateWithLifecycle()
++    val showBecause by ForkPrefs.homeBecauseWatched.value.collectAsStateWithLifecycle()
++    val homeState by HomeRepository.uiState.collectAsStateWithLifecycle()
+     val libraryState by LibraryRepository.uiState.collectAsStateWithLifecycle()
+     val progress by WatchProgressRepository.uiState.collectAsStateWithLifecycle()
+     val profileId = ProfileRepository.activeProfileId
+@@ -138,6 +145,74 @@ internal fun ForkHomeLibraryRows(
+         finish = result.toList()
+     }
+ 
++    // Watch later: saved titles that were never started.
++    val startedIds = progress.entries.map { it.parentMetaId }.toSet()
++    val watchLater = if (showWatchLater) {
++        libraryState.items
++            .filter { it.id !in startedIds }
++            .sortedByDescending { it.savedAtEpochMs }
++            .take(20)
++            .map { it.toForkPreview() }
++    } else {
++        emptyList()
++    }
++    // Top 10: the first ten cards of the first loaded catalog that has that many.
++    val top10Section = if (showTop10) {
++        homeState.sections.firstOrNull { !it.key.startsWith("fork_") && it.items.size >= 10 }
++    } else {
++        null
++    }
++    // Because you watched: cards from the loaded catalogs that share genres with the last finished title.
++    val lastDone = progress.entries.filter { it.isCompleted }.maxByOrNull { it.lastUpdatedEpochMs }
++    var because by remember { mutableStateOf<List<MetaPreview>>(emptyList()) }
++    val loadedItemCount = homeState.sections.sumOf { it.items.size }
++    LaunchedEffect(lastDone?.parentMetaId, loadedItemCount > 0, showBecause) {
++        if (!showBecause || lastDone == null || loadedItemCount == 0) {
++            because = emptyList()
++            return@LaunchedEffect
++        }
++        val meta = withTimeoutOrNull(15_000L) {
++            runCatching { MetaDetailsRepository.fetch(lastDone.parentMetaType, lastDone.parentMetaId) }.getOrNull()
++        } ?: return@LaunchedEffect
++        val genres = meta.genres.map { it.lowercase() }.toSet()
++        if (genres.isEmpty()) return@LaunchedEffect
++        val seen = progress.entries.map { it.parentMetaId }.toSet()
++        because = homeState.sections
++            .filter { !it.key.startsWith("fork_") }
++            .flatMap { it.items }
++            .distinctBy { it.id }
++            .filter { it.id != lastDone.parentMetaId && it.id !in seen }
++            .map { item -> item to item.genres.count { it.lowercase() in genres } }
++            .filter { it.second > 0 }
++            .sortedByDescending { it.second }
++            .take(20)
++            .map { it.first }
++    }
++
++    if (top10Section != null) {
++        HomeCatalogRowSection(
++            section = forkSection("fork_top10", "Top 10 in ${top10Section.title}", top10Section.items.take(10)),
++            modifier = Modifier.padding(bottom = 12.dp),
++            sectionPadding = sectionPadding,
++            onPosterClick = onPosterClick,
++        )
++    }
++    if (showBecause && because.isNotEmpty() && lastDone != null) {
++        HomeCatalogRowSection(
++            section = forkSection("fork_because_watched", "Because you watched ${lastDone.title}", because),
++            modifier = Modifier.padding(bottom = 12.dp),
++            sectionPadding = sectionPadding,
++            onPosterClick = onPosterClick,
++        )
++    }
++    if (watchLater.isNotEmpty()) {
++        HomeCatalogRowSection(
++            section = forkSection("fork_watch_later", "Watch later", watchLater),
++            modifier = Modifier.padding(bottom = 12.dp),
++            sectionPadding = sectionPadding,
++            onPosterClick = onPosterClick,
++        )
++    }
+     if (showTonight && tonight.isNotEmpty()) {
+         HomeCatalogRowSection(
+             section = forkSection("fork_up_next_tonight", "Up next tonight", tonight),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvModels.kt
+index 248b0b985..4f43c6b26 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvModels.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvModels.kt
+@@ -1,6 +1,7 @@
+ package com.nuvio.app.features.livetv
+ 
+ import com.nuvio.app.features.streams.StreamItem
++import kotlinx.serialization.Serializable
+ import kotlin.math.max
+ 
+ /**
+@@ -8,6 +9,7 @@ import kotlin.math.max
+  * the user's installed addons, grouped into categories, with XMLTV programme guide data matched
+  * by channel name.
+  */
++@Serializable
+ data class LiveTvChannel(
+     val id: String,
+     val type: String,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.kt
+index 4c8596c16..830a18fee 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.kt
+@@ -17,4 +17,8 @@ internal expect object LiveTvPlatform {
+ internal expect object LiveTvStorage {
+     fun loadString(key: String): String?
+     fun saveString(key: String, value: String?)
++
++    /** Large payloads (the channel list cache) live in a file, not in the preferences store. */
++    fun loadBlob(name: String): String?
++    fun saveBlob(name: String, value: String)
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvRepository.kt
+index 8299099f8..755e68aaa 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvRepository.kt
+@@ -27,14 +27,26 @@ import kotlinx.coroutines.flow.distinctUntilChanged
+ import kotlinx.coroutines.flow.map
+ import kotlinx.coroutines.flow.update
+ import kotlinx.coroutines.launch
++import kotlinx.coroutines.sync.Mutex
+ import kotlinx.coroutines.sync.Semaphore
++import kotlinx.coroutines.sync.withLock
+ import kotlinx.coroutines.sync.withPermit
++import kotlinx.serialization.Serializable
++import kotlinx.serialization.json.Json
++import kotlin.time.TimeSource
++
++@Serializable
++private data class ChannelCache(val key: String, val channels: List<LiveTvChannel>)
+ 
+ object LiveTvRepository {
+     private const val SELECTED_ADDONS_KEY = "selected_addons"
+     private const val FAVORITES_KEY = "favorite_channels"
+     private const val HIDE_ADULT_KEY = "hide_adult"
+     private const val MAX_CATALOG_PAGES = 15
++    private const val PAGE_BATCH = 4
++    private const val PUBLISH_INTERVAL_MS = 800L
++    private const val CHANNEL_CACHE_FILE = "livetv_channels_cache.json"
++    private val cacheJson = Json { ignoreUnknownKeys = true }
+ 
+     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+     private val _uiState = MutableStateFlow(LiveTvUiState())
+@@ -215,75 +227,140 @@ object LiveTvRepository {
+         }
+         addonLoading = true
+         _uiState.update { it.copy(isLoadingChannels = true, channelsErrorMessage = null) }
++        val cacheKey = selectedUrls.sorted().joinToString("|")
+         loadJob = scope.launch {
++            // Show the last full list at once; the fresh load replaces it when it finishes.
++            if (addonChannels.isEmpty()) {
++                readChannelCache(cacheKey)?.let { cached ->
++                    addonChannels = cached
++                    publishChannels()
++                }
++            }
++            val hadList = addonChannels.isNotEmpty()
+             val gate = Semaphore(6)
+-            val results = coroutineScope {
+-                addons.flatMap { addon -> addon.tvCatalogs().map { addon to it } }
+-                    .map { (addon, catalog) ->
+-                        async {
+-                            gate.withPermit {
+-                                val items = try {
+-                                    fetchWholeCatalog(addon.manifestUrl, catalog, forceReload)
+-                                } catch (error: CancellationException) {
+-                                    throw error
+-                                } catch (_: Throwable) {
+-                                    emptyList()
+-                                }
+-                                Triple(addon, catalog, items)
++            val catalogs = addons.flatMap { addon -> addon.tvCatalogs().map { addon to it } }
++            val done = arrayOfNulls<List<LiveTvChannel>>(catalogs.size)
++            val lock = Mutex()
++            val clock = TimeSource.Monotonic.markNow()
++            var lastPublishMs = -PUBLISH_INTERVAL_MS
++            var remaining = catalogs.size
++            coroutineScope {
++                catalogs.forEachIndexed { index, (addon, catalog) ->
++                    launch {
++                        val channels = gate.withPermit {
++                            val items = try {
++                                fetchWholeCatalog(addon.manifestUrl, catalog, forceReload)
++                            } catch (error: CancellationException) {
++                                throw error
++                            } catch (_: Throwable) {
++                                emptyList()
+                             }
++                            items.toChannels(addon, catalog)
+                         }
+-                    }
+-                    .awaitAll()
+-            }
+-            val seen = mutableSetOf<String>()
+-            val channels = buildList {
+-                for ((addon, catalog, items) in results) {
+-                    val catalogName = catalog.name.ifBlank { catalog.id }
+-                    for (meta in items) {
+-                        if (meta.id.isBlank() || meta.name.isBlank()) continue
+-                        val genres = meta.genres.filter { it.isNotBlank() }.ifEmpty {
+-                            if (catalogName.isNotBlank() && !catalogName.equals("tv", ignoreCase = true)) listOf(catalogName) else emptyList()
++                        lock.withLock {
++                            done[index] = channels
++                            remaining--
++                            val now = clock.elapsedNow().inWholeMilliseconds
++                            if (remaining > 0 && !hadList && channels.isNotEmpty() && now - lastPublishMs >= PUBLISH_INTERVAL_MS) {
++                                lastPublishMs = now
++                                addonChannels = dedupeChannels(done.filterNotNull().flatten())
++                                publishChannels()
++                            }
+                         }
+-                        val channel = LiveTvChannel(
+-                            id = meta.id,
+-                            type = meta.type.ifBlank { catalog.type },
+-                            name = meta.name,
+-                            poster = meta.poster,
+-                            logo = meta.logo ?: meta.poster,
+-                            genres = genres,
+-                            description = meta.description,
+-                            addonName = addon.displayTitle,
+-                            manifestUrl = addon.manifestUrl,
+-                            addonLogo = addon.manifest?.logoUrl,
+-                            catalogId = catalog.id,
+-                            catalogName = catalogName,
+-                        )
+-                        if (seen.add(channel.stableKey())) add(channel)
+                     }
+                 }
+             }
++            val channels = dedupeChannels(done.filterNotNull().flatten())
+             addonLoading = false
+-            addonChannels = channels
++            // A reload that got nothing keeps the list that was already on screen.
++            if (channels.isNotEmpty() || !hadList) addonChannels = channels
+             publishChannels()
++            if (channels.isNotEmpty()) writeChannelCache(cacheKey, channels)
++        }
++    }
++
++    private fun List<MetaPreview>.toChannels(addon: ManagedAddon, catalog: AddonCatalog): List<LiveTvChannel> {
++        val catalogName = catalog.name.ifBlank { catalog.id }
++        return mapNotNull { meta ->
++            if (meta.id.isBlank() || meta.name.isBlank()) return@mapNotNull null
++            val genres = meta.genres.filter { it.isNotBlank() }.ifEmpty {
++                if (catalogName.isNotBlank() && !catalogName.equals("tv", ignoreCase = true)) listOf(catalogName) else emptyList()
++            }
++            LiveTvChannel(
++                id = meta.id,
++                type = meta.type.ifBlank { catalog.type },
++                name = meta.name,
++                poster = meta.poster,
++                logo = meta.logo ?: meta.poster,
++                genres = genres,
++                description = meta.description,
++                addonName = addon.displayTitle,
++                manifestUrl = addon.manifestUrl,
++                addonLogo = addon.manifest?.logoUrl,
++                catalogId = catalog.id,
++                catalogName = catalogName,
++            )
+         }
+     }
+ 
++    private fun dedupeChannels(channels: List<LiveTvChannel>): List<LiveTvChannel> {
++        val seen = mutableSetOf<String>()
++        return channels.filter { seen.add(it.stableKey()) }
++    }
++
++    private fun readChannelCache(key: String): List<LiveTvChannel>? = runCatching {
++        val text = LiveTvStorage.loadBlob(CHANNEL_CACHE_FILE) ?: return@runCatching null
++        val cache = cacheJson.decodeFromString(ChannelCache.serializer(), text)
++        cache.channels.takeIf { cache.key == key && it.isNotEmpty() }
++    }.getOrNull()
++
++    private fun writeChannelCache(key: String, channels: List<LiveTvChannel>) {
++        runCatching {
++            LiveTvStorage.saveBlob(CHANNEL_CACHE_FILE, cacheJson.encodeToString(ChannelCache.serializer(), ChannelCache(key, channels)))
++        }
++    }
++
++    /** Page 0 alone (it tells the page size), then the rest in parallel batches. */
+     private suspend fun fetchWholeCatalog(manifestUrl: String, catalog: AddonCatalog, forceRefresh: Boolean): List<MetaPreview> {
++        val first = fetchCatalogPage(
++            manifestUrl = manifestUrl,
++            type = catalog.type,
++            catalogId = catalog.id,
++            skip = null,
++            forceRefresh = forceRefresh,
++        )
+         val items = mutableListOf<MetaPreview>()
+         val ids = mutableSetOf<String>()
+-        var skip: Int? = null
+-        repeat(MAX_CATALOG_PAGES) {
+-            val page = fetchCatalogPage(
+-                manifestUrl = manifestUrl,
+-                type = catalog.type,
+-                catalogId = catalog.id,
+-                skip = skip,
+-                forceRefresh = forceRefresh,
+-            )
+-            val added = page.items.count { ids.add(it.id) && items.add(it) }
+-            val supportsSkip = catalog.extra.any { it.name == "skip" }
+-            if (added == 0 || !supportsSkip || page.nextSkip == null) return items
+-            skip = page.nextSkip
++        first.items.forEach { if (ids.add(it.id)) items.add(it) }
++        val pageSize = first.items.size
++        if (items.isEmpty() || pageSize == 0 || first.nextSkip == null || catalog.extra.none { it.name == "skip" }) return items
++        var page = 1
++        while (page < MAX_CATALOG_PAGES) {
++            val batch = (page until minOf(page + PAGE_BATCH, MAX_CATALOG_PAGES)).toList()
++            val fetched = coroutineScope {
++                batch.map { index ->
++                    async {
++                        try {
++                            fetchCatalogPage(
++                                manifestUrl = manifestUrl,
++                                type = catalog.type,
++                                catalogId = catalog.id,
++                                skip = index * pageSize,
++                                forceRefresh = forceRefresh,
++                            ).items
++                        } catch (error: CancellationException) {
++                            throw error
++                        } catch (_: Throwable) {
++                            emptyList()
++                        }
++                    }
++                }.awaitAll()
++            }
++            for (pageItems in fetched) {
++                val added = pageItems.count { ids.add(it.id) && items.add(it) }
++                if (added == 0 || pageItems.size < pageSize) return items
++            }
++            page += batch.size
+         }
+         return items
+     }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/FeaturesSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/FeaturesSettingsPage.kt
+index f853c5908..843d75938 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/FeaturesSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/FeaturesSettingsPage.kt
+@@ -112,6 +112,7 @@ internal fun LazyListScope.featuresHomeSettingsContent(isTablet: Boolean) {
+ }
+ 
+ internal fun LazyListScope.featuresToolsSettingsContent(isTablet: Boolean) {
++    item { ForkHealthSettingsSection(isTablet = isTablet) }
+     item { SettingsConfigBackupSection(isTablet = isTablet) }
+     item {
+         SettingsSection(title = "Network", isTablet = isTablet) {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHealthPlatform.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHealthPlatform.kt
+new file mode 100644
+index 000000000..772865989
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHealthPlatform.kt
+@@ -0,0 +1,6 @@
++package com.nuvio.app.features.settings
++
++/** Nuvio fork: device facts for the App health dialog (memory, storage, cache sizes). */
++internal expect object ForkHealthPlatform {
++    fun systemLines(): List<String>
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHealthSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHealthSettings.kt
+new file mode 100644
+index 000000000..7bf263de0
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHealthSettings.kt
+@@ -0,0 +1,118 @@
++package com.nuvio.app.features.settings
++
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.verticalScroll
++import androidx.compose.material3.AlertDialog
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.material3.TextButton
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.dp
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import com.nuvio.app.features.addons.AddonRepository
++import com.nuvio.app.features.addons.fetchAddonResponseText
++import com.nuvio.app.features.addons.enabledAddons
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.async
++import kotlinx.coroutines.awaitAll
++import kotlinx.coroutines.coroutineScope
++import kotlinx.coroutines.withContext
++import kotlinx.coroutines.withTimeoutOrNull
++import kotlin.time.Clock
++
++private data class AddonHealth(val name: String, val ok: Boolean, val detail: String)
++
++private suspend fun checkAddon(name: String, manifestUrl: String): AddonHealth {
++    val start = Clock.System.now().toEpochMilliseconds()
++    return try {
++        val answer = withTimeoutOrNull(5_000L) { fetchAddonResponseText(url = manifestUrl, forceRefresh = true) }
++        val elapsed = Clock.System.now().toEpochMilliseconds() - start
++        if (answer == null) AddonHealth(name, false, "timed out") else AddonHealth(name, true, "$elapsed ms")
++    } catch (error: CancellationException) {
++        throw error
++    } catch (error: Throwable) {
++        AddonHealth(name, false, error.message?.take(40) ?: "no answer")
++    }
++}
++
++/** Nuvio fork: Settings health dialog with memory, storage, cache sizes and addon reachability. */
++@Composable
++internal fun ForkHealthSettingsSection(isTablet: Boolean) {
++    var show by remember { mutableStateOf(false) }
++    SettingsSection(title = "App health", isTablet = isTablet) {
++        SettingsGroup(isTablet = isTablet) {
++            SettingsNavigationRow(
++                title = "App health",
++                description = "Memory, storage, cache sizes and whether every addon answers.",
++                isTablet = isTablet,
++                onClick = { show = true },
++            )
++        }
++    }
++    if (show) ForkHealthDialog(onDismiss = { show = false })
++}
++
++@Composable
++private fun ForkHealthDialog(onDismiss: () -> Unit) {
++    val addonsState by AddonRepository.uiState.collectAsStateWithLifecycle()
++    var lines by remember { mutableStateOf<List<String>>(emptyList()) }
++    var addons by remember { mutableStateOf<List<AddonHealth>?>(null) }
++    var nonce by remember { mutableStateOf(0) }
++
++    LaunchedEffect(nonce) {
++        lines = withContext(Dispatchers.Default) { ForkHealthPlatform.systemLines() }
++        addons = null
++        val targets = addonsState.addons.enabledAddons().map { addon ->
++            (addon.manifest?.name ?: addon.manifestUrl) to addon.manifestUrl
++        }
++        addons = coroutineScope {
++            targets.map { (name, url) -> async { checkAddon(name, url) } }.awaitAll()
++        }
++    }
++
++    AlertDialog(
++        onDismissRequest = onDismiss,
++        title = { Text("App health") },
++        text = {
++            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
++                lines.forEach { Text(it, style = MaterialTheme.typography.bodyMedium) }
++                val checked = addons
++                Text(
++                    text = if (checked == null) {
++                        "Addons: checking..."
++                    } else {
++                        val bad = checked.count { !it.ok }
++                        "Addons: ${checked.size - bad} answer, $bad do not"
++                    },
++                    style = MaterialTheme.typography.titleSmall,
++                    modifier = Modifier.padding(top = 10.dp),
++                )
++                checked.orEmpty().forEach { health ->
++                    Text(
++                        text = (if (health.ok) "OK  " else "FAIL  ") + health.name + "  (" + health.detail + ")",
++                        style = MaterialTheme.typography.bodySmall,
++                        maxLines = 1,
++                        overflow = TextOverflow.Ellipsis,
++                    )
++                }
++            }
++        },
++        confirmButton = {
++            Row {
++                TextButton(onClick = { nonce++ }) { Text("Check again") }
++                TextButton(onClick = onDismiss) { Text("Close") }
++            }
++        },
++    )
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHomeRowsSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHomeRowsSettings.kt
+index 9753bacf9..1f2af41fa 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHomeRowsSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkHomeRowsSettings.kt
+@@ -15,6 +15,9 @@ internal fun ForkHomeRowsSettingsSection(isTablet: Boolean) {
+         ForkPrefs.homeUpNextTonight.ensureLoaded()
+         ForkPrefs.homeAiringWeek.ensureLoaded()
+         ForkPrefs.homeFinishSeries.ensureLoaded()
++        ForkPrefs.homeWatchLater.ensureLoaded()
++        ForkPrefs.homeTop10.ensureLoaded()
++        ForkPrefs.homeBecauseWatched.ensureLoaded()
+         ForkPrefs.ratingMap.ensureLoaded()
+         ForkPrefs.nuvioRead.ensureLoaded()
+         ForkPrefs.fillerGuide.ensureLoaded()
+@@ -23,6 +26,9 @@ internal fun ForkHomeRowsSettingsSection(isTablet: Boolean) {
+     val tonight by ForkPrefs.homeUpNextTonight.value.collectAsStateWithLifecycle()
+     val week by ForkPrefs.homeAiringWeek.value.collectAsStateWithLifecycle()
+     val finish by ForkPrefs.homeFinishSeries.value.collectAsStateWithLifecycle()
++    val watchLater by ForkPrefs.homeWatchLater.value.collectAsStateWithLifecycle()
++    val top10 by ForkPrefs.homeTop10.value.collectAsStateWithLifecycle()
++    val becauseWatched by ForkPrefs.homeBecauseWatched.value.collectAsStateWithLifecycle()
+     val ratingMap by ForkPrefs.ratingMap.value.collectAsStateWithLifecycle()
+     val fillerGuide by ForkPrefs.fillerGuide.value.collectAsStateWithLifecycle()
+     val nuvioRead by ForkPrefs.nuvioRead.value.collectAsStateWithLifecycle()
+@@ -53,6 +59,30 @@ internal fun ForkHomeRowsSettingsSection(isTablet: Boolean) {
+                 onCheckedChange = ForkPrefs.homeFinishSeries::set,
+             )
+             SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Watch later",
++                description = "Show saved titles you have not started yet.",
++                checked = watchLater,
++                isTablet = isTablet,
++                onCheckedChange = ForkPrefs.homeWatchLater::set,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Top 10",
++                description = "Show the first ten titles of your first catalog.",
++                checked = top10,
++                isTablet = isTablet,
++                onCheckedChange = ForkPrefs.homeTop10::set,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Because you watched",
++                description = "Show titles from your catalogs that match the last thing you finished.",
++                checked = becauseWatched,
++                isTablet = isTablet,
++                onCheckedChange = ForkPrefs.homeBecauseWatched::set,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
+             SettingsSwitchRow(
+                 title = "Episode rating map",
+                 description = "Show a season grid of episode ratings on series pages.",
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
+index 3bf270ffd..9896da508 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
+@@ -35,6 +35,9 @@ object ForkPrefs {
+     val homeUpNextTonight = ForkBoolPref("settings/home_up_next_tonight", true)
+     val homeAiringWeek = ForkBoolPref("settings/home_airing_week", true)
+     val homeFinishSeries = ForkBoolPref("settings/home_finish_series", true)
++    val homeWatchLater = ForkBoolPref("settings/home_watch_later", true)
++    val homeTop10 = ForkBoolPref("settings/home_top10", true)
++    val homeBecauseWatched = ForkBoolPref("settings/home_because_watched", true)
+     val ratingMap = ForkBoolPref("settings/rating_map", true)
+     val fillerGuide = ForkBoolPref("settings/filler_guide", true)
+     val homeVideoRowsOnly = ForkBoolPref("settings/home_video_rows_only", true)
+@@ -47,7 +50,8 @@ object ForkPrefs {
+     val cloudStreamDiagnostics = ForkBoolPref("settings/cs3_diagnostics", true)
+ 
+     val all: List<ForkBoolPref> = listOf(
+-        swipeToSeek, homeUpNextTonight, homeAiringWeek, homeFinishSeries, ratingMap, fillerGuide,
++        swipeToSeek, homeUpNextTonight, homeAiringWeek, homeFinishSeries, homeWatchLater, homeTop10,
++        homeBecauseWatched, ratingMap, fillerGuide,
+         homeVideoRowsOnly, cloudStreamGroupTab, nuvioRead, subtitleShadow, subtitlesStartOff,
+         hidePlayerLock, speedPopup, cloudStreamDiagnostics,
+     )
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/ProviderFilterRow.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/ProviderFilterRow.kt
+index 7d259a843..1c2560366 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/ProviderFilterRow.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/ProviderFilterRow.kt
+@@ -87,7 +87,9 @@ internal fun ProviderFilterRow(
+     val chip: @Composable (AddonStreamGroup?, Boolean, () -> Unit) -> Unit =
+         filterChip ?: { group, isSelected, onClick ->
+             FilterChip(
+-                label = group?.addonName ?: stringResource(Res.string.collections_tab_all),
++                // Nuvio fork: link count next to the provider name
++                label = group?.let { if (it.streams.isNotEmpty()) "${it.addonName} ${it.streams.size}" else it.addonName }
++                    ?: stringResource(Res.string.collections_tab_all),
+                 isSelected = isSelected,
+                 isPinned = group != null && group.soleSourcePin()?.key in pinnedSourceIds,
+                 onClick = onClick,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamModels.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamModels.kt
+index 28bee257e..5ea97364d 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamModels.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamModels.kt
+@@ -325,6 +325,14 @@ data class StreamsUiState(
+     val isDirectAutoPlayFlow: Boolean = false,
+     val showDirectAutoPlayOverlay: Boolean = false,
+     val overlayMessage: String? = null,
++    // Nuvio fork (stream auto refresh status): 0 waiting for the first load, 1 checking, 2 idle.
++    val autoRefreshPhase: Int = 0,
++    val autoRefreshRounds: Int = 0,
++    val autoRefreshAdded: Int = 0,
++    // Rounds in a row (after the sixth) that added no links; lives here so it survives a visit to the player.
++    val autoRefreshDryRounds: Int = 0,
++    val autoRefreshLastAtMs: Long = 0L,
++    val autoRefreshLastOk: Boolean = true,
+ ) {
+     val filteredGroups: List<AddonStreamGroup>
+         get() = if (selectedFilter == null) groups
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamRefreshStatus.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamRefreshStatus.kt
+new file mode 100644
+index 000000000..ce947a01b
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamRefreshStatus.kt
+@@ -0,0 +1,57 @@
++package com.nuvio.app.features.streams
++
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableLongStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.unit.dp
++import kotlinx.coroutines.delay
++import kotlin.time.Clock
++
++private const val STATUS_MIN_ROUNDS = 6
++private const val STATUS_MAX_DRY_ROUNDS = 5
++
++/** Nuvio fork: one small line that shows what the background link refresh is doing. */
++@Composable
++internal fun StreamRefreshStatusLine(
++    uiState: StreamsUiState,
++    modifier: Modifier = Modifier,
++) {
++    if (uiState.autoRefreshRounds >= STATUS_MIN_ROUNDS && uiState.autoRefreshDryRounds >= STATUS_MAX_DRY_ROUNDS) return
++    if (uiState.groups.isEmpty() && uiState.autoRefreshRounds == 0) return
++
++    var nowMs by remember { mutableLongStateOf(Clock.System.now().toEpochMilliseconds()) }
++    LaunchedEffect(uiState.autoRefreshLastAtMs) {
++        while (true) {
++            nowMs = Clock.System.now().toEpochMilliseconds()
++            delay(1_000L)
++        }
++    }
++
++    val text = when {
++        uiState.autoRefreshPhase == 1 ->
++            "Auto refresh: checking addons now \u00b7 round ${uiState.autoRefreshRounds + 1} \u00b7 +${uiState.autoRefreshAdded} links so far"
++        uiState.autoRefreshRounds == 0 ->
++            "Auto refresh: waiting for the load to finish"
++        else -> {
++            val seconds = ((nowMs - uiState.autoRefreshLastAtMs) / 1_000L).coerceAtLeast(0L)
++            val result = if (uiState.autoRefreshLastOk) "ok" else "timed out"
++            "Auto refresh: last check ${seconds}s ago ($result) \u00b7 ${uiState.autoRefreshRounds} rounds \u00b7 +${uiState.autoRefreshAdded} links added"
++        }
++    }
++    Text(
++        text = text,
++        style = MaterialTheme.typography.labelSmall,
++        color = MaterialTheme.colorScheme.onSurfaceVariant,
++        modifier = modifier
++            .fillMaxWidth()
++            .padding(horizontal = 12.dp, vertical = 2.dp),
++    )
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
+index e919579bf..0274fe9e1 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
+@@ -18,9 +18,13 @@ import com.nuvio.app.features.plugins.PluginsUiState
+ import com.nuvio.app.features.cloudstream.CloudStreamRepository
+ import com.nuvio.app.features.cloudstream.parseCloudStreamRouteId
+ import com.nuvio.app.features.servers.ServerStreams
++import kotlinx.coroutines.CancellationException
+ import kotlinx.coroutines.CoroutineScope
+ import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.Job
++import kotlinx.coroutines.async
++import kotlinx.coroutines.awaitAll
++import kotlinx.coroutines.coroutineScope
+ import kotlinx.coroutines.SupervisorJob
+ import kotlinx.coroutines.channels.Channel
+ import kotlinx.coroutines.delay
+@@ -34,6 +38,7 @@ import kotlinx.coroutines.sync.withPermit
+ import kotlinx.coroutines.withTimeoutOrNull
+ import nuvio.composeapp.generated.resources.*
+ import org.jetbrains.compose.resources.getString
++import kotlin.time.Clock
+ 
+ object StreamsRepository {
+     private val log = Logger.withTag("StreamsRepo")
+@@ -46,6 +51,10 @@ object StreamsRepository {
+ 
+     private var activeJob: Job? = null
+     private var activeRequestKey: String? = null
++    private var refreshContext: AutoRefreshContext? = null
++    private const val AUTO_REFRESH_INTERVAL_MS = 10_000L
++    private const val AUTO_REFRESH_TIMEOUT_MS = 45_000L
++    private const val AUTO_REFRESH_MIN_ROUNDS = 6
+ 
+     fun requestToken(
+         type: String,
+@@ -150,6 +159,11 @@ object StreamsRepository {
+             (currentState.groups.isNotEmpty() || currentState.emptyStateReason != null || currentState.isAnyLoading)
+         ) {
+             log.d { "Skipping stream reload for unchanged request type=$type id=$videoId" }
++            // Back from the player: cancelLoading() stopped the refresh loop, start it again.
++            val resumeContext = refreshContext
++            if (activeJob == null && resumeContext != null && resumeContext.token == currentState.requestToken && !currentState.isAnyLoading) {
++                activeJob = scope.launch { autoRefreshLoop(resumeContext) }
++            }
+             return
+         }
+ 
+@@ -755,7 +769,156 @@ object StreamsRepository {
+                 settleAutoPlay(evaluateAutoPlay())
+             }
+             timeoutJob?.cancel()
++
++            // Nuvio fork: keep asking the addons for new links while the list is on screen.
++            val context = AutoRefreshContext(
++                token = requestToken,
++                addons = streamAddons,
++                type = type,
++                videoId = videoId,
++                serverLoaders = serverSources.map { source -> suspend { source.load() } },
++                installedOrder = installedAddonOrder,
++                preferredGroupIds = preferredGroupIds,
++                present = { group ->
++                    val badged = StreamBadgePresentation.apply(listOf(group), streamBadgeRules).firstOrNull() ?: group
++                    val presented = DebridStreamPresentation.apply(listOf(badged), debridSettings).firstOrNull() ?: badged
++                    connectionFit?.apply(presented) ?: presented
++                },
++            )
++            refreshContext = context
++            if (!isDirectAutoPlayFlow) autoRefreshLoop(context)
++        }
++    }
++
++    private class AutoRefreshContext(
++        val token: String,
++        val addons: List<InstalledStreamAddonTarget>,
++        val type: String,
++        val videoId: String,
++        val serverLoaders: List<suspend () -> AddonStreamGroup>,
++        val installedOrder: List<String>,
++        val preferredGroupIds: Set<String>,
++        val present: (AddonStreamGroup) -> AddonStreamGroup,
++    )
++
++    private fun StreamItem.refreshKey(): String =
++        listOf(url, infoHash, fileIdx?.toString(), externalUrl, ytId, name, description, title).joinToString("|")
++
++    private suspend fun autoRefreshLoop(context: AutoRefreshContext) {
++        while (true) {
++            delay(AUTO_REFRESH_INTERVAL_MS)
++            val state = _uiState.value
++            if (state.requestToken != context.token) return
++            val idle = !state.isAnyLoading && !state.isDirectAutoPlayFlow && !state.showDirectAutoPlayOverlay &&
++                state.autoPlayStream == null
++            if (!idle) {
++                if (state.autoRefreshPhase != 0) _uiState.update { it.copy(autoRefreshPhase = 0) }
++                continue
++            }
++            _uiState.update { it.copy(autoRefreshPhase = 1) }
++            var roundOk = false
++            var roundAdded = 0
++            try {
++                roundOk = withTimeoutOrNull(AUTO_REFRESH_TIMEOUT_MS) {
++                    val fetched = coroutineScope {
++                        val addonJobs = context.addons.map { addon ->
++                            async {
++                                runCatchingUnlessCancelled {
++                                    val payload = fetchAddonResponseText(
++                                        url = buildAddonResourceUrl(
++                                            manifestUrl = addon.manifest.transportUrl,
++                                            resource = "stream",
++                                            type = context.type,
++                                            id = context.videoId,
++                                        ),
++                                        forceRefresh = true,
++                                    )
++                                    AddonStreamGroup(
++                                        addonName = addon.addonName,
++                                        addonId = addon.addonId,
++                                        streams = StreamParser.parse(
++                                            payload = payload,
++                                            addonName = addon.addonName,
++                                            addonId = addon.addonId,
++                                            addonLogo = addon.manifest.logoUrl,
++                                        ),
++                                    )
++                                }.getOrNull()
++                            }
++                        }
++                        val serverJobs = context.serverLoaders.map { load ->
++                            async { runCatchingUnlessCancelled { load() }.getOrNull() }
++                        }
++                        (addonJobs + serverJobs).awaitAll()
++                    }
++                    fetched.filterNotNull().forEach { roundAdded += mergeRefreshedGroup(context, it) }
++                    true
++                } == true
++            } catch (error: CancellationException) {
++                throw error
++            } catch (_: Throwable) {
++                // A failed refresh keeps the list as it is; the next round tries again.
++            }
++            val finishedAt = Clock.System.now().toEpochMilliseconds()
++            _uiState.update { current ->
++                if (current.requestToken != context.token) {
++                    current
++                } else {
++                    val rounds = current.autoRefreshRounds + 1
++                    current.copy(
++                        autoRefreshPhase = 2,
++                        autoRefreshRounds = rounds,
++                        autoRefreshDryRounds = when {
++                            roundAdded > 0 -> 0
++                            rounds > AUTO_REFRESH_MIN_ROUNDS -> current.autoRefreshDryRounds + 1
++                            else -> 0
++                        },
++                        // Never more than the list holds.
++                        autoRefreshAdded = (current.autoRefreshAdded + roundAdded)
++                            .coerceAtMost(current.groups.sumOf { it.streams.size }),
++                        autoRefreshLastAtMs = finishedAt,
++                        autoRefreshLastOk = roundOk,
++                    )
++                }
++            }
++        }
++    }
++
++    /** Takes the fresh list only when it holds something new and does not lose links. Returns the new link count. */
++    private fun mergeRefreshedGroup(context: AutoRefreshContext, fresh: AddonStreamGroup): Int {
++        if (fresh.streams.isEmpty()) return 0
++        var added = 0
++        _uiState.update { current ->
++            added = 0
++            if (current.requestToken != context.token) return@update current
++            val old = current.groups.firstOrNull { it.addonId == fresh.addonId }
++            val presented = context.present(fresh)
++            val oldByKey = old?.streams.orEmpty().associateBy { it.refreshKey() }
++            val newKeys = presented.streams.map { it.refreshKey() }.toSet()
++            val oldKeys = oldByKey.keys
++            if (old != null && !(newKeys.size >= oldKeys.size && newKeys != oldKeys)) return@update current
++            added = newKeys.count { it !in oldKeys }
++            // Links that were already there keep their badges and cache status.
++            val merged = presented.copy(
++                streams = presented.streams.map { oldByKey[it.refreshKey()] ?: it },
++                isLoading = false,
++                error = null,
++            )
++            val groups = if (old == null) {
++                current.groups + merged
++            } else {
++                current.groups.map { if (it.addonId == fresh.addonId) merged else it }
++            }
++            current.copy(
++                groups = StreamAutoPlaySelector.orderAddonStreams(
++                    groups = groups,
++                    installedOrder = context.installedOrder,
++                    preferredGroupIds = context.preferredGroupIds,
++                ),
++                activeAddonIds = current.activeAddonIds + merged.addonId,
++            )
+         }
++        return added
+     }
+ 
+     fun selectFilter(addonId: String?) {
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt
+index 557bf80cc..00292fd7c 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsScreen.kt
+@@ -535,6 +535,7 @@ private fun MobileStreamsLayout(
+                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                         )
+                     }
++                    StreamRefreshStatusLine(uiState = uiState)
+                     ProviderFilterRow(
+                         groups = uiState.groups,
+                         selectedFilter = uiState.selectedFilter,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsTabletLayout.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsTabletLayout.kt
+index 7631107f7..305de0371 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsTabletLayout.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsTabletLayout.kt
+@@ -203,6 +203,7 @@ internal fun TabletStreamsLayout(
+                             )
+                         }
+ 
++                        StreamRefreshStatusLine(uiState = uiState)
+                         ProviderFilterRow(
+                             groups = uiState.groups,
+                             selectedFilter = uiState.selectedFilter,
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt
+index c51d57a0c..8fc7229e8 100644
+--- a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt
+@@ -20,4 +20,10 @@ internal actual object LiveTvStorage {
+     actual fun saveString(key: String, value: String?) {
+         if (value == null) values.remove(key) else values[key] = value
+     }
++
++    actual fun loadBlob(name: String): String? = values["blob:$name"]
++
++    actual fun saveBlob(name: String, value: String) {
++        values["blob:$name"] = value
++    }
+ }
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/settings/ForkHealthPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/settings/ForkHealthPlatform.ios.kt
+new file mode 100644
+index 000000000..97866a56e
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/settings/ForkHealthPlatform.ios.kt
+@@ -0,0 +1,5 @@
++package com.nuvio.app.features.settings
++
++internal actual object ForkHealthPlatform {
++    actual fun systemLines(): List<String> = listOf("Device facts are not available on this platform.")
++}
