@@ -4522,10 +4522,10 @@ index 000000000..f2937070d
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubeViewModel.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubeViewModel.kt
 new file mode 100644
-index 000000000..bdc810af3
+index 000000000..c6628fd84
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubeViewModel.kt
-@@ -0,0 +1,811 @@
+@@ -0,0 +1,833 @@
 +package com.nuvio.app.youtube
 +
 +import android.content.Context
@@ -5248,16 +5248,35 @@ index 000000000..bdc810af3
 +        return items.firstOrNull()
 +    }
 +
-+    /** Where to start: if your account says you stopped part-way through, resume from there. */
-+    private fun resumeMs(item: YtItem): Long {
++    /**
++     * Where your account says you are in this video right now (0..100), or -1 if unknown.
++     * The card in a feed can be stale when you watched on another device, so ask YouTube again.
++     */
++    private fun accountPercent(item: YtItem): Int {
++        if (item.isLive) return -1
++        val signedIn = runCatching { service.signInService.isSigned }.getOrDefault(false)
++        if (!signedIn) return -1
++        val id = item.videoId ?: return -1
++        return runCatching {
++            service.mediaItemService.getMetadataObserve(id).blockingFirst().percentWatched
++        }.getOrDefault(-1)
++    }
++
++    /** Where to start: the account's fresh place wins (set on any device), then this device's, then the card's. */
++    private fun resumeMs(item: YtItem, freshPercent: Int): Long {
 +        val durationMs = item.source.durationMs
 +        if (item.isLive || durationMs <= 0) return 0L
-+        // This device's own place wins (nearly finished or barely started means from the top); then the account's.
-+        YouTubeProgress.localState(context, item.videoId)?.let { (pos, dur) ->
-+            return if ((pos * 100 / dur).toInt() in 3..94) pos else 0L
++        val percent = when {
++            freshPercent > 0 -> freshPercent
++            else -> {
++                YouTubeProgress.localState(context, item.videoId)?.let { (pos, dur) ->
++                    return if ((pos * 100 / dur).toInt() in 3..94) pos else 0L
++                }
++                item.percentWatched
++            }
 +        }
-+        if (item.percentWatched !in 3..94) return 0L
-+        return durationMs * item.percentWatched / 100
++        if (percent !in 3..94) return 0L
++        return durationMs * percent / 100
 +    }
 +
 +    /** Plays a video, or opens a channel or playlist. [onReady] runs on the main thread. */
@@ -5266,12 +5285,15 @@ index 000000000..bdc810af3
 +            open(item)
 +            return
 +        }
-+        val startMs = resumeMs(item)
 +        // What was on screen with it becomes the list that plays on from here.
 +        queue = from.filter { it.kind == YtKind.VIDEO }
 +        played.clear()
 +        prefetchJob?.cancel()
 +        viewModelScope.launch {
++            val fresh = withContext(Dispatchers.IO) {
++                kotlinx.coroutines.withTimeoutOrNull(4000L) { accountPercent(item) } ?: -1
++            }
++            val startMs = resumeMs(item, fresh)
 +            lookup(item).await().fold(
 +                onSuccess = { onReady(it.copy(startPositionMs = startMs)) },
 +                onFailure = { _error.value = it.message ?: "Couldn't play this video" }
