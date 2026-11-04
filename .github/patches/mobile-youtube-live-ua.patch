@@ -1,0 +1,52 @@
+diff --git a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt
+index 668a884cb..ae3af7aca 100644
+--- a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt
++++ b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt
+@@ -97,6 +97,10 @@ class YoutubeChunkedDataSourceFactory(
+                 uri.getQueryParameter("source") != "yt_live_broadcast"
+ 
+             if (!isYouTubeStream) {
++                // Live playlists and segments only answer the user-agent of the client that issued the manifest.
++                if (host.contains("googlevideo.com") || host.contains("youtube.com")) {
++                    YouTubeLiveUserAgent.value?.let { upstream.setRequestProperty("User-Agent", it) }
++                }
+                 return upstream.open(dataSpec)
+             }
+ 
+diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
+index 1c3d671f8..a861e5b5d 100644
+--- a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
++++ b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
+@@ -93,6 +93,12 @@ private data class ManifestBestVariant(
+     val bandwidth: Long,
+ )
+ 
++/** The user-agent of the client that gave the live manifest: googlevideo ties live playlists and segments to it. */
++object YouTubeLiveUserAgent {
++    @Volatile
++    var value: String? = null
++}
++
+ internal data class ManifestCandidate(
+     val client: String,
+     val priority: Int,
+@@ -384,7 +390,18 @@ class InAppYouTubeExtractor {
+             } }.awaitAll().filterNotNull()
+         }
+         var bestManifest: ManifestCandidate? = null
+-        for (candidate in manifestCandidates) {
++        // A live stream has only a manifest. Pick the iOS client's (the standard HLS one) every time instead of whichever client answered first.
++        val liveOnly = progressive.isEmpty() && adaptiveVideo.isEmpty() && adaptiveAudio.isEmpty()
++        YouTubeLiveUserAgent.value = null
++        if (liveOnly) {
++            val liveCandidate = manifestCandidates.firstOrNull { it.client == "ios" }
++                ?: manifestCandidates.maxByOrNull { it.priority }
++            if (liveCandidate != null) {
++                YouTubeLiveUserAgent.value = CLIENTS.firstOrNull { it.key == liveCandidate.client }?.userAgent
++                bestManifest = liveCandidate
++            }
++        }
++        if (bestManifest == null) for (candidate in manifestCandidates) {
+             if (
+                 bestManifest == null ||
+                 candidate.height > bestManifest.height ||
