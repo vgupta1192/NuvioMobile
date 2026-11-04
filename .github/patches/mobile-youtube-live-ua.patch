@@ -14,7 +14,7 @@ index 668a884cb..ae3af7aca 100644
              }
  
 diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
-index 1c3d671f8..a861e5b5d 100644
+index 1c3d671f8..346c410bd 100644
 --- a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
 +++ b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
 @@ -93,6 +93,12 @@ private data class ManifestBestVariant(
@@ -30,7 +30,7 @@ index 1c3d671f8..a861e5b5d 100644
  internal data class ManifestCandidate(
      val client: String,
      val priority: Int,
-@@ -384,7 +390,18 @@ class InAppYouTubeExtractor {
+@@ -384,7 +390,23 @@ class InAppYouTubeExtractor {
              } }.awaitAll().filterNotNull()
          }
          var bestManifest: ManifestCandidate? = null
@@ -38,15 +38,52 @@ index 1c3d671f8..a861e5b5d 100644
 +        // A live stream has only a manifest. Pick the iOS client's (the standard HLS one) every time instead of whichever client answered first.
 +        val liveOnly = progressive.isEmpty() && adaptiveVideo.isEmpty() && adaptiveAudio.isEmpty()
 +        YouTubeLiveUserAgent.value = null
-+        if (liveOnly) {
-+            val liveCandidate = manifestCandidates.firstOrNull { it.client == "ios" }
-+                ?: manifestCandidates.maxByOrNull { it.priority }
-+            if (liveCandidate != null) {
-+                YouTubeLiveUserAgent.value = CLIENTS.firstOrNull { it.key == liveCandidate.client }?.userAgent
-+                bestManifest = liveCandidate
++        if (liveOnly && manifestCandidates.isNotEmpty()) {
++            // Not every client's live playlist can be read from here: fetch playlist, variant and one segment with each client's own user-agent and keep the first that answers.
++            val ordered = manifestCandidates.sortedWith(compareBy({ if (it.client == "ios") 0 else 1 }, { -it.priority }))
++            val notes = mutableListOf<String>()
++            val probed = kotlinx.coroutines.coroutineScope {
++                ordered.map { c -> async { c to probeLiveManifest(c) } }.awaitAll()
 +            }
++            probed.forEach { (c, note) -> notes += "${c.client}: $note" }
++            val liveCandidate = probed.firstOrNull { it.second == "ok" }?.first ?: ordered.first()
++            YouTubeLiveUserAgent.value = CLIENTS.firstOrNull { it.key == liveCandidate.client }?.userAgent
++            bestManifest = liveCandidate
++            com.nuvio.app.features.youtube.YouTubeWarmupHooks.lastExtractFailure = "live probe ${notes.joinToString(" | ")}".take(300)
 +        }
 +        if (bestManifest == null) for (candidate in manifestCandidates) {
              if (
                  bestManifest == null ||
                  candidate.height > bestManifest.height ||
+@@ -480,6 +502,31 @@ class InAppYouTubeExtractor {
+         return parsed as? JsonObject ?: JsonObject(emptyMap())
+     }
+ 
++    /** Returns "ok" when the live playlist, a variant and a segment all load with the client's own user-agent, else what failed. */
++    private suspend fun probeLiveManifest(candidate: ManifestCandidate): String {
++        val ua = CLIENTS.firstOrNull { it.key == candidate.client }?.userAgent ?: return "no client"
++        val headers = mapOf("User-Agent" to ua)
++        suspend fun get(url: String, range: Boolean = false) = TrailerExtractionPlatform.performRequest(
++            url = url,
++            method = "GET",
++            headers = if (range) headers + ("Range" to "bytes=0-1023") else headers,
++            body = null,
++            timeoutMillis = TRAILER_REQUEST_TIMEOUT_MS,
++        )
++        return runCatching {
++            val master = get(candidate.manifestUrl)
++            if (!master.ok) return@runCatching "master ${master.status}"
++            val variantLine = master.body.lines().map { it.trim() }.firstOrNull { it.isNotEmpty() && !it.startsWith("#") }
++                ?: return@runCatching "master empty"
++            val variant = get(absolutizeUrl(candidate.manifestUrl, variantLine))
++            if (!variant.ok) return@runCatching "variant ${variant.status}"
++            val segLine = variant.body.lines().map { it.trim() }.lastOrNull { it.isNotEmpty() && !it.startsWith("#") }
++                ?: return@runCatching "variant empty"
++            val seg = get(absolutizeUrl(variant.url.ifBlank { candidate.manifestUrl }, segLine), range = true)
++            if (seg.ok) "ok" else "segment ${seg.status}"
++        }.getOrElse { "${it::class.simpleName} ${it.message?.take(40)}" }
++    }
++
+     private suspend fun parseHlsManifest(manifestUrl: String): ManifestBestVariant? {
+         val response = TrailerExtractionPlatform.performRequest(
+             url = manifestUrl,
