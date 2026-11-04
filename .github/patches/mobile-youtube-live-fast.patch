@@ -1,0 +1,162 @@
+diff --git a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/TrailerExtractionPlatform.android.kt b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/TrailerExtractionPlatform.android.kt
+index 05005d17c..eb068f66f 100644
+--- a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/TrailerExtractionPlatform.android.kt
++++ b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/TrailerExtractionPlatform.android.kt
+@@ -19,6 +19,8 @@ internal object TrailerExtractionPlatform {
+     init {
+         com.nuvio.app.features.youtube.YouTubeWarmupHooks.prefetchFirstBytes = { YoutubeFirstChunkCache.prefetch(it) }
+         com.nuvio.app.features.youtube.YouTubeWarmupHooks.hardwareCodecs = { hardwareVideoCodecs }
++        com.nuvio.app.features.youtube.YouTubeWarmupHooks.liveUserAgentGet = { YouTubeLiveUserAgent.value }
++        com.nuvio.app.features.youtube.YouTubeWarmupHooks.liveUserAgentSet = { YouTubeLiveUserAgent.value = it }
+     }
+ 
+     /** Video codecs this device decodes in hardware, from the platform codec list. */
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+index ef66c6970..2f05894f6 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+@@ -495,7 +495,16 @@ private fun ExoPlayerSurface(
+             fastStart = useYoutubeChunkedPlayback,
+         )
+ 
++        val liveHlsStart = sourceUrl.contains("googlevideo.com") && sourceUrl.contains(".m3u8")
+         val playerBuilder = ExoPlayer.Builder(context)
++            .also {
++                // A live YouTube playlist starts on a low variant so the first picture shows sooner; adaptive bitrate then climbs.
++                if (liveHlsStart) it.setBandwidthMeter(
++                    androidx.media3.exoplayer.upstream.DefaultBandwidthMeter.Builder(context)
++                        .setInitialBitrateEstimate(1_200_000L)
++                        .build()
++                )
++            }
+             .setAudioAttributes(playbackAudioAttributes, true)
+             .setTrackSelector(trackSelector)
+             .setLoadControl(loadControl)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+index 13e8d3838..d473cc50f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+@@ -966,7 +966,8 @@ internal fun MainAppContent(
+             coroutineScope.launch {
+                 val watchUrl = com.nuvio.app.features.streams.YouTubeStreamResolver.watchUrl(item.id)
+                 // A card that was pressed or sat at the top of a feed is usually resolved already.
+-                val source = com.nuvio.app.features.youtube.YouTubePrewarm.take(item.id)
++                val source = (if (item.isLive) com.nuvio.app.features.youtube.YouTubePrewarm.liveSource(item.id) else null)
++                    ?: com.nuvio.app.features.youtube.YouTubePrewarm.take(item.id)
+                     ?: runCatching {
+                         com.nuvio.app.features.trailer.TrailerPlaybackResolver.resolveFromYouTubeUrl(watchUrl)
+                     }.getOrNull()
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt
+index fa753c397..8567cdbe6 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt
+@@ -37,6 +37,30 @@ object YouTubePrewarm {
+     private fun fresh(entry: Entry, key: String): Boolean =
+         entry.key == key && entry.mark.elapsedNow() < MAX_AGE
+ 
++    private class LiveEntry(val source: TrailerPlaybackSource, val userAgent: String?, val mark: TimeMark)
++
++    private val liveEntries = LinkedHashMap<String, LiveEntry>()
++    private val liveMutex = Mutex()
++
++    /**
++     * The stream of a live video, resolved once and reused by the card preview, the warm-up and the
++     * full player. The client user-agent that issued the playlist is kept with it and put back on reuse.
++     */
++    suspend fun liveSource(videoId: String): TrailerPlaybackSource? = liveMutex.withLock {
++        synchronized(lock) { liveEntries[videoId]?.takeIf { it.mark.elapsedNow() < LIVE_MAX_AGE } }?.let {
++            YouTubeWarmupHooks.liveUserAgentSet?.invoke(it.userAgent)
++            YouTubeLiveLog.add("live", "cache hit $videoId")
++            return@withLock it.source
++        }
++        val source = runCatching { YouTubeRepository.resolve(videoId) }.getOrNull() ?: return@withLock null
++        val ua = YouTubeWarmupHooks.liveUserAgentGet?.invoke()
++        synchronized(lock) {
++            while (liveEntries.size >= MAX_ENTRIES) liveEntries.remove(liveEntries.keys.first())
++            liveEntries[videoId] = LiveEntry(source, ua, TimeSource.Monotonic.markNow())
++        }
++        source
++    }
++
+     /** Fetches the page key and visitor id in the background; cheap when they are still fresh. */
+     fun warmConfig() {
+         scope.launch { runCatching { TrailerPlaybackResolver.warmUp() } }
+@@ -44,8 +68,12 @@ object YouTubePrewarm {
+ 
+     /** Starts resolving [item] in the background unless a fresh result is already on its way. */
+     fun warm(item: YtItem) {
+-        if (item.kind != YtKind.VIDEO || item.isShort || item.isLive || item.id.isBlank()) return
++        if (item.kind != YtKind.VIDEO || item.isShort || item.id.isBlank()) return
+         warmConfig()
++        if (item.isLive) {
++            scope.launch { gate.withPermit { liveSource(item.id) } }
++            return
++        }
+         val key = settingsKey()
+         synchronized(lock) {
+             entries[item.id]?.let { if (fresh(it, key)) return }
+@@ -65,7 +93,7 @@ object YouTubePrewarm {
+     /** Warms the first few playable videos of a list the viewer is looking at. */
+     fun warmFirst(items: List<YtItem>, count: Int = 4) {
+         items.asSequence()
+-            .filter { it.kind == YtKind.VIDEO && !it.isShort && !it.isLive }
++            .filter { it.kind == YtKind.VIDEO && !it.isShort }
+             .take(count)
+             .forEach { warm(it) }
+     }
+@@ -99,9 +127,7 @@ object YouTubePrewarm {
+         // A live stream has no 480p file to pick: it plays the same stream the full player would.
+         if (item.isLive) {
+             YouTubeLiveLog.add("prev", "live ${item.id} resolve start")
+-            return runCatching { YouTubeRepository.resolve(item.id) }
+-                .onFailure { lastError = "live ${it::class.simpleName}: ${it.message?.take(120)}"; YouTubeLiveLog.add("prev", lastError.orEmpty()) }
+-                .getOrNull()
++            return liveSource(item.id)
+                 .also {
+                     if (it == null && lastError == null) lastError = "live: no stream ${YouTubeWarmupHooks.lastExtractFailure.orEmpty()}"
+                     YouTubeLiveLog.add("prev", if (it == null) "no source: ${lastError.orEmpty()}" else "source ${YouTubeLiveLog.shortUrl(it.videoUrl)} audio=${it.audioUrl != null}")
+@@ -146,4 +172,5 @@ object YouTubePrewarm {
+     private const val PREVIEW_HEIGHT = 480
+     private val MAX_AGE = 20.minutes
+     private const val MAX_ENTRIES = 8
++    private val LIVE_MAX_AGE = 10.minutes
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeWarmupHooks.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeWarmupHooks.kt
+index 0d06be8b4..4005cb9e8 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeWarmupHooks.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeWarmupHooks.kt
+@@ -11,6 +11,13 @@ object YouTubeWarmupHooks {
+     @Volatile
+     var hardwareCodecs: (() -> Set<String>)? = null
+ 
++    /** Reads and sets the user-agent of the client that issued the current live playlist. */
++    @Volatile
++    var liveUserAgentGet: (() -> String?)? = null
++
++    @Volatile
++    var liveUserAgentSet: ((String?) -> Unit)? = null
++
+     /** Last reason the extractor returned nothing; shown by the preview debug label. */
+     @Volatile
+     var lastExtractFailure: String? = null
+diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
+index 993412326..6bf892ed7 100644
+--- a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
++++ b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
+@@ -406,11 +406,14 @@ class InAppYouTubeExtractor {
+             // Not every client's live playlist can be read from here: fetch playlist, variant and one segment with each client's own user-agent and keep the first that answers.
+             val ordered = manifestCandidates.sortedWith(compareBy({ if (it.client == "ios") 0 else 1 }, { -it.priority }))
+             val notes = mutableListOf<String>()
+-            val probed = kotlinx.coroutines.coroutineScope {
++            // One candidate leaves nothing to choose: skip the probe (it costs about a second).
++            val probed = if (ordered.size == 1) {
++                listOf(ordered.first() to "ok (single client, not probed)")
++            } else kotlinx.coroutines.coroutineScope {
+                 ordered.map { c -> async { c to probeLiveManifest(c) } }.awaitAll()
+             }
+             probed.forEach { (c, note) -> notes += "${c.client}: $note" }
+-            val liveCandidate = probed.firstOrNull { it.second == "ok" }?.first ?: ordered.first()
++            val liveCandidate = probed.firstOrNull { it.second.startsWith("ok") }?.first ?: ordered.first()
+             YouTubeLiveUserAgent.value = CLIENTS.firstOrNull { it.key == liveCandidate.client }?.userAgent
+             bestManifest = liveCandidate
+             com.nuvio.app.features.youtube.YouTubeWarmupHooks.lastExtractFailure = "live probe ${notes.joinToString(" | ")}".take(300)
