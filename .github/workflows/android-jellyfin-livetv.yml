@@ -174,6 +174,19 @@ jobs:
             fi
           done
 
+      # 1Tube swap (mandatory): YouTube engine and UI come from zoga2o3-ops/NuvioM-IPTV-1T, which builds on
+      # SmartTube's MediaServiceCore (MIT). Fetch the engine modules at a pinned commit, then replace the
+      # old YouTube code with the patch.
+      - name: Apply 1Tube YouTube swap
+        if: steps.ver.outputs.should_build == 'true'
+        run: |
+          set -e
+          git clone https://github.com/zoga2o3-ops/NuvioM-IPTV-1T.git /tmp/onetube
+          git -C /tmp/onetube checkout 754594c77d92ad62a3be07ef728f45c15885f75d
+          cp -r /tmp/onetube/mediaservicecore ./mediaservicecore
+          git apply --whitespace=nowarn fork-src/.github/patches/mobile-youtube-1tube-swap.patch
+          echo "applied mobile-youtube-1tube-swap.patch"
+
       - name: Fixed signing key
         id: signkey
         if: steps.ver.outputs.should_build == 'true'
