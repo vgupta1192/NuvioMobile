@@ -1502,10 +1502,10 @@ index 000000000..123dc3ffd
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubeFeedCards.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubeFeedCards.kt
 new file mode 100644
-index 000000000..e0591f1fd
+index 000000000..68d968b6e
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubeFeedCards.kt
-@@ -0,0 +1,354 @@
+@@ -0,0 +1,368 @@
 +package com.nuvio.app.youtube
 +
 +import android.view.TextureView
@@ -1548,6 +1548,7 @@ index 000000000..e0591f1fd
 +import androidx.compose.ui.draw.alpha
 +import androidx.compose.ui.draw.clip
 +import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.graphics.asImageBitmap
 +import androidx.compose.ui.layout.ContentScale
 +import androidx.compose.ui.platform.LocalContext
 +import androidx.compose.ui.text.style.TextOverflow
@@ -1650,7 +1651,10 @@ index 000000000..e0591f1fd
 +    }
 +    val details = item.author.orEmpty()
 +    val channelName = details.substringBefore(" • ").trim()
-+    Column(modifier.fillMaxWidth().clickable(onClick = onClick)) {
++    Column(modifier.fillMaxWidth().clickable(onClick = {
++        if (active) previewPlayer.captureFrame(item.videoId)
++        onClick()
++    })) {
 +        Box(
 +            Modifier.fillMaxWidth().aspectRatio(if (item.isShorts) 9f / 16f else 16f / 9f)
 +                .clip(RoundedCornerShape(12.dp)).background(Color(0xFF222222)),
@@ -1753,6 +1757,16 @@ index 000000000..e0591f1fd
 +            setAudioAttributes(androidx.media3.common.AudioAttributes.DEFAULT, true)
 +        }
 +
++    @Volatile var textureView: TextureView? = null
++
++    /** Hands the preview's current picture to the full-screen player, so opening it looks like the same video growing. */
++    fun captureFrame(videoId: String?) {
++        if (videoId == null || !showing) return
++        val bmp = runCatching { textureView?.bitmap }.getOrNull() ?: return
++        com.nuvio.app.features.youtube.YouTubeHost.handoffFrame = bmp.asImageBitmap()
++        com.nuvio.app.features.youtube.YouTubeHost.handoffVideoId = videoId
++    }
++
 +    /** True once the current preview has drawn its first picture. */
 +    var showing by mutableStateOf(false)
 +        private set
@@ -1839,7 +1853,7 @@ index 000000000..e0591f1fd
 +    Box(modifier) {
 +        AndroidView(
 +            modifier = Modifier.fillMaxSize(),
-+            factory = { ctx -> TextureView(ctx).also { view -> view.alpha = 0f; shared.player.setVideoTextureView(view) } },
++            factory = { ctx -> TextureView(ctx).also { view -> shared.textureView = view; view.alpha = 0f; shared.player.setVideoTextureView(view) } },
 +            update = { view -> view.alpha = if (shared.showing) 1f else 0f },
 +            onRelease = { view -> shared.player.clearVideoTextureView(view) },
 +        )
@@ -5784,6 +5798,33 @@ index 55a8b83d4..cf7fff057 100644
                      item(key = "auto") {
                          QualityRow(
                              label = stringResource(Res.string.player_video_quality_auto),
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt
+index 09e237004..2f40f1877 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenContent.kt
+@@ -191,5 +191,22 @@ internal fun PlayerScreenContent(args: PlayerScreenArgs) {
+             if (introFirstFrameReady) PlaybackIntroState.onVideoFrameReady()
+         }
+         PlaybackIntroHost()
++
++        // YouTube feed preview -> full screen: keep the preview's last picture up until this player draws its own.
++        val handoff = com.nuvio.app.features.youtube.YouTubeHost.handoffFrame
++        val handoffFor = com.nuvio.app.features.youtube.YouTubeHost.handoffVideoId
++        val frameReady = runtime.playbackSnapshot.videoWidth > 0 && !runtime.playbackSnapshot.isLoading
++        if (handoff != null && handoffFor != null && handoffFor == runtime.videoId) {
++            LaunchedEffect(frameReady) {
++                if (frameReady) kotlinx.coroutines.delay(200) else kotlinx.coroutines.delay(10_000)
++                com.nuvio.app.features.youtube.YouTubeHost.handoffFrame = null
++            }
++            androidx.compose.foundation.Image(
++                bitmap = handoff,
++                contentDescription = null,
++                modifier = Modifier.fillMaxSize(),
++                contentScale = androidx.compose.ui.layout.ContentScale.Fit,
++            )
++        }
+     }
+ }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeAudioPreferences.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeAudioPreferences.kt
 index df442ec2c..00381c0a8 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeAudioPreferences.kt
@@ -7876,10 +7917,10 @@ index fb9f4dcf1..000000000
 -}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeHost.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeHost.kt
 new file mode 100644
-index 000000000..a8dbf8e3a
+index 000000000..5cd5ad8fb
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeHost.kt
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,88 @@
 +package com.nuvio.app.features.youtube
 +
 +import androidx.compose.runtime.Composable
@@ -7921,6 +7962,10 @@ index 000000000..a8dbf8e3a
 +val LocalYouTubePlayerAction = androidx.compose.runtime.compositionLocalOf<YouTubePlayerAction?> { null }
 +
 +object YouTubeHost {
++    /** The last picture of a feed preview, shown over the player until its own first frame is ready (set just before opening). */
++    var handoffFrame: androidx.compose.ui.graphics.ImageBitmap? by androidx.compose.runtime.mutableStateOf(null)
++    var handoffVideoId: String? by androidx.compose.runtime.mutableStateOf(null)
++
 +    /** True while a YouTube panel is open; the player keeps its controls up meanwhile. */
 +    var panelOpen by androidx.compose.runtime.mutableStateOf(false)
 +
