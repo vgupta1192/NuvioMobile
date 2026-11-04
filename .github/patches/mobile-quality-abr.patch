@@ -1,0 +1,165 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+index 4dded75be..b26d7493f 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+@@ -419,6 +419,16 @@ private fun ExoPlayerSurface(
+         }
+     }
+ 
++    // Nuvio fork: one bandwidth meter per source, shared by the player and the fast quality climb.
++    val abrBandwidthMeter = remember(sourceUrl) {
++        if (sourceUrl.contains("googlevideo.com") && sourceUrl.contains(".m3u8")) {
++            androidx.media3.exoplayer.upstream.DefaultBandwidthMeter.Builder(context)
++                .setInitialBitrateEstimate(2_500_000L)
++                .build()
++        } else {
++            androidx.media3.exoplayer.upstream.DefaultBandwidthMeter.getSingletonInstance(context)
++        }
++    }
+     val exoPlayer = remember(
+         sourceUrl,
+         sourceAudioUrl,
+@@ -453,17 +463,16 @@ private fun ExoPlayerSurface(
+             .setEnableDecoderFallback(true)
+             .setMapDV7ToHevc(playerSettings.mapDV7ToHevc)
+ 
+-        // A live playlist keeps only a few seconds ahead of the player, so the stock 10 s buffer needed before a quality increase is never reached and the stream stays on its lowest rendition.
+-        val liveAdaptive = sourceUrl.contains("googlevideo.com") && sourceUrl.contains(".m3u8")
+-        val trackSelector = (if (liveAdaptive) DefaultTrackSelector(
++        // A live playlist keeps only a few seconds ahead, so the stock 10 s buffer needed before a quality increase is never reached. Every source gets a 1 s threshold and a higher bandwidth fraction so quality climbs fast.
++        val trackSelector = DefaultTrackSelector(
+             context,
+             androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection.Factory(
+-                2_500,
++                1_000,
+                 androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection.DEFAULT_MAX_DURATION_FOR_QUALITY_DECREASE_MS,
+                 androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection.DEFAULT_MIN_DURATION_TO_RETAIN_AFTER_DISCARD_MS,
+-                androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection.DEFAULT_BANDWIDTH_FRACTION,
++                0.9f,
+             ),
+-        ) else DefaultTrackSelector(context)).apply {
++        ).apply {
+             var parameters = buildUponParameters()
+                 .setAllowInvalidateSelectionsOnRendererCapabilitiesChange(true)
+             if (playerSettings.tunnelingEnabled) {
+@@ -505,16 +514,8 @@ private fun ExoPlayerSurface(
+             fastStart = useYoutubeChunkedPlayback,
+         )
+ 
+-        val liveHlsStart = sourceUrl.contains("googlevideo.com") && sourceUrl.contains(".m3u8")
+         val playerBuilder = ExoPlayer.Builder(context)
+-            .also {
+-                // A live YouTube playlist starts on a low variant so the first picture shows sooner; adaptive bitrate then climbs.
+-                if (liveHlsStart) it.setBandwidthMeter(
+-                    androidx.media3.exoplayer.upstream.DefaultBandwidthMeter.Builder(context)
+-                        .setInitialBitrateEstimate(1_200_000L)
+-                        .build()
+-                )
+-            }
++            .setBandwidthMeter(abrBandwidthMeter)
+             .setAudioAttributes(playbackAudioAttributes, true)
+             .setTrackSelector(trackSelector)
+             .setLoadControl(loadControl)
+@@ -935,11 +936,92 @@ private fun ExoPlayerSurface(
+             }
+         }
+         exoPlayer.addAnalyticsListener(autoQualityAnalyticsListener)
++
++        // Nuvio fork: quality message, log lines and a fast climb for every adaptive stream.
++        val abrHandler = android.os.Handler(android.os.Looper.getMainLooper())
++        var abrLastHeight = 0
++        var abrCooldownUntil = 0L
++        var abrFloor = 0
++        var abrLastLog = 0L
++        fun abrLog(message: String) {
++            Log.d(TAG, "abr $message")
++            com.nuvio.app.features.youtube.YouTubeLiveLog.add("abr", message)
++        }
++        val abrListener = object : androidx.media3.exoplayer.analytics.AnalyticsListener {
++            override fun onVideoInputFormatChanged(
++                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
++                format: androidx.media3.common.Format,
++                decoderReuseEvaluation: androidx.media3.exoplayer.DecoderReuseEvaluation?,
++            ) {
++                val height = format.height
++                abrLog("video ${format.width}x$height ${format.bitrate / 1000}k")
++                if (height <= 0 || height == abrLastHeight) return
++                val previous = abrLastHeight
++                abrLastHeight = height
++                val message = when {
++                    previous == 0 -> "Quality: ${height}p"
++                    height > previous -> "Quality up: ${height}p"
++                    else -> "Quality down: ${height}p"
++                }
++                com.nuvio.app.core.ui.NuvioToastController.show(message, 1800L)
++            }
++
++            override fun onPlaybackStateChanged(
++                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
++                state: Int,
++            ) {
++                // A stall while the climb floor is set means the link cannot hold that rendition: drop the floor.
++                if (state == Player.STATE_BUFFERING && abrFloor > 0 && abrLastHeight > 0) {
++                    abrFloor = 0
++                    abrCooldownUntil = SystemClock.elapsedRealtime() + 10_000L
++                    exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon().setMinVideoBitrate(0).build()
++                    abrLog("stall, floor cleared")
++                }
++            }
++        }
++        exoPlayer.addAnalyticsListener(abrListener)
++        val abrTick = object : Runnable {
++            override fun run() {
++                runCatching {
++                    val now = SystemClock.elapsedRealtime()
++                    val pinned = exoPlayer.trackSelectionParameters.overrides.values.any { it.mediaTrackGroup.type == C.TRACK_TYPE_VIDEO }
++                    if (exoPlayer.playbackState == Player.STATE_READY && !pinned) {
++                        val ladder = ArrayList<Int>()
++                        for (group in exoPlayer.currentTracks.groups) {
++                            if (group.type != C.TRACK_TYPE_VIDEO) continue
++                            for (i in 0 until group.length) {
++                                val bitrate = group.getTrackFormat(i).bitrate
++                                if (group.isTrackSupported(i) && bitrate > 0) ladder.add(bitrate)
++                            }
++                        }
++                        ladder.sort()
++                        val current = exoPlayer.videoFormat?.bitrate ?: 0
++                        val estimate = abrBandwidthMeter.bitrateEstimate
++                        val ahead = exoPlayer.bufferedPosition - exoPlayer.currentPosition
++                        if (now - abrLastLog >= 3_000L) {
++                            abrLastLog = now
++                            abrLog("est=${estimate / 1000}k cur=${current / 1000}k ahead=${ahead}ms rungs=${ladder.size} floor=${abrFloor / 1000}k")
++                        }
++                        val next = ladder.firstOrNull { it > current }
++                        if (next != null && current > 0 && now >= abrCooldownUntil && estimate >= next * 1.15 && ahead >= 800L) {
++                            abrFloor = next
++                            abrCooldownUntil = now + 2_500L
++                            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon().setMinVideoBitrate(next).build()
++                            abrLog("climb to >=${next / 1000}k est=${estimate / 1000}k")
++                        }
++                    }
++                }
++                abrHandler.postDelayed(this, 1_500L)
++            }
++        }
++        abrHandler.postDelayed(abrTick, 1_500L)
+         onDispose {
+             PlayerPictureInPictureManager.registerPausePlaybackCallback(null)
+             PlayerPictureInPictureManager.registerTogglePlaybackCallback(null)
+             exoPlayer.removeListener(listener)
+             exoPlayer.removeAnalyticsListener(autoQualityAnalyticsListener)
++            abrHandler.removeCallbacks(abrTick)
++            exoPlayer.removeAnalyticsListener(abrListener)
+             playerViewRef?.keepScreenOn = false
+             subtitleSelectionJob?.cancel()
+             sidecarController.stopSidecarAddonSubtitle(clearView = true)
+@@ -2695,7 +2777,8 @@ private fun ExoPlayer.applySmartEnhance(enabled: Boolean) {
+ }
+ 
+ private fun ExoPlayer.applyVideoQuality(heightPx: Int?) {
+-    val builder = trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_VIDEO)
++    // Also drops the fast-climb bitrate floor so a pinned or auto choice is not fought by it.
++    val builder = trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_VIDEO).setMinVideoBitrate(0)
+     if (heightPx != null) {
+         var best: Pair<Tracks.Group, Int>? = null
+         for (group in currentTracks.groups) {
