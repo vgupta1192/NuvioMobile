@@ -1,0 +1,23 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+index a68c905ea..4dded75be 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+@@ -453,7 +453,17 @@ private fun ExoPlayerSurface(
+             .setEnableDecoderFallback(true)
+             .setMapDV7ToHevc(playerSettings.mapDV7ToHevc)
+ 
+-        val trackSelector = DefaultTrackSelector(context).apply {
++        // A live playlist keeps only a few seconds ahead of the player, so the stock 10 s buffer needed before a quality increase is never reached and the stream stays on its lowest rendition.
++        val liveAdaptive = sourceUrl.contains("googlevideo.com") && sourceUrl.contains(".m3u8")
++        val trackSelector = (if (liveAdaptive) DefaultTrackSelector(
++            context,
++            androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection.Factory(
++                2_500,
++                androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection.DEFAULT_MAX_DURATION_FOR_QUALITY_DECREASE_MS,
++                androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection.DEFAULT_MIN_DURATION_TO_RETAIN_AFTER_DISCARD_MS,
++                androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection.DEFAULT_BANDWIDTH_FRACTION,
++            ),
++        ) else DefaultTrackSelector(context)).apply {
+             var parameters = buildUponParameters()
+                 .setAllowInvalidateSelectionsOnRendererCapabilitiesChange(true)
+             if (playerSettings.tunnelingEnabled) {
