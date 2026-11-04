@@ -1,0 +1,225 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+index 84cc2ed60..ef66c6970 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+@@ -701,8 +701,12 @@ private fun ExoPlayerSurface(
+             latestOnError.value(error.localizedMessage ?: runBlocking { getString(Res.string.player_unable_to_play_stream) })
+         }
+ 
++        val ytLog = sourceUrl.contains("googlevideo.com") || sourceUrl.contains("youtube.com")
++        if (ytLog) com.nuvio.app.features.youtube.YouTubeLiveLog.add("play", "prepare ${com.nuvio.app.features.youtube.YouTubeLiveLog.shortUrl(sourceUrl)} audio=${sourceAudioUrl != null}")
++        var ytLoadCount = 0
+         val listener = object : Player.Listener {
+             override fun onPlayerError(error: PlaybackException) {
++                if (ytLog) com.nuvio.app.features.youtube.YouTubeLiveLog.add("play", "ERROR ${error.errorCodeName} ${diagnosticThrowableChain(error)}")
+                 syncPlayerViewKeepScreenOn()
+                 Log.e(
+                     PLAYER_DIAGNOSTIC_TAG,
+@@ -766,6 +770,7 @@ private fun ExoPlayerSurface(
+                     else -> "UNKNOWN($playbackState)"
+                 }
+                 Log.d(TAG, "onPlaybackStateChanged: $stateName")
++                if (ytLog) com.nuvio.app.features.youtube.YouTubeLiveLog.add("play", "state=$stateName pos=${exoPlayer.currentPosition.coerceAtLeast(0L)} buf=${exoPlayer.bufferedPosition.coerceAtLeast(0L)} live=${exoPlayer.isCurrentMediaItemLive}")
+                 Log.i(
+                     PLAYER_DIAGNOSTIC_TAG,
+                     "state=$stateName attempt=${playbackDiagnostics.attempt} " +
+@@ -872,6 +877,34 @@ private fun ExoPlayerSurface(
+                 com.nuvio.app.features.youtube.YouTubeStartTrace.mark("first frame")
+             }
+ 
++            override fun onLoadStarted(
++                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
++                loadEventInfo: androidx.media3.exoplayer.source.LoadEventInfo,
++                mediaLoadData: androidx.media3.exoplayer.source.MediaLoadData,
++            ) {
++                if (ytLog && ytLoadCount++ < 8) com.nuvio.app.features.youtube.YouTubeLiveLog.add("net", "start type=${mediaLoadData.dataType} ${com.nuvio.app.features.youtube.YouTubeLiveLog.shortUrl(loadEventInfo.uri.toString())}")
++            }
++
++            override fun onLoadCompleted(
++                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
++                loadEventInfo: androidx.media3.exoplayer.source.LoadEventInfo,
++                mediaLoadData: androidx.media3.exoplayer.source.MediaLoadData,
++            ) {
++                if (ytLog && ytLoadCount < 24) { ytLoadCount++; com.nuvio.app.features.youtube.YouTubeLiveLog.add("net", "ok type=${mediaLoadData.dataType} bytes=${loadEventInfo.bytesLoaded} ${loadEventInfo.loadDurationMs}ms") }
++            }
++
++            override fun onLoadError(
++                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
++                loadEventInfo: androidx.media3.exoplayer.source.LoadEventInfo,
++                mediaLoadData: androidx.media3.exoplayer.source.MediaLoadData,
++                error: java.io.IOException,
++                wasCanceled: Boolean,
++            ) {
++                if (!ytLog) return
++                val code = (error as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode
++                com.nuvio.app.features.youtube.YouTubeLiveLog.add("net", "FAIL type=${mediaLoadData.dataType} http=${code ?: "-"} ${error.javaClass.simpleName} ${error.message?.take(60)} ${com.nuvio.app.features.youtube.YouTubeLiveLog.shortUrl(loadEventInfo.uri.toString())}")
++            }
++
+             override fun onBandwidthEstimate(
+                 eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                 elapsedMs: Int,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+index 455d4d9f3..13e8d3838 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+@@ -951,6 +951,7 @@ internal fun MainAppContent(
+ 
+         fun openYouTubeVideo(item: com.nuvio.app.features.youtube.YtItem, positionMs: Long) {
+             com.nuvio.app.features.youtube.YouTubeStartTrace.begin(item.id)
++            com.nuvio.app.features.youtube.YouTubeLiveLog.add("open", "${item.id} live=${item.isLive} start")
+             if (item.isLive) {
+                 com.nuvio.app.features.youtube.YouTubePlayerHooks.liveItems[item.id] = item
+             } else {
+@@ -970,6 +971,7 @@ internal fun MainAppContent(
+                         com.nuvio.app.features.trailer.TrailerPlaybackResolver.resolveFromYouTubeUrl(watchUrl)
+                     }.getOrNull()
+                 com.nuvio.app.features.youtube.YouTubeStartTrace.mark("stream resolved")
++                com.nuvio.app.features.youtube.YouTubeLiveLog.add("open", if (source == null) "no source (extractor: ${com.nuvio.app.features.youtube.YouTubeWarmupHooks.lastExtractFailure.orEmpty()}) -> external player" else "source ${com.nuvio.app.features.youtube.YouTubeLiveLog.shortUrl(source.videoUrl)} audio=${source.audioUrl != null}")
+                 val playerLaunch = PlayerLaunch(
+                     profileId = activePlaybackProfileId,
+                     title = item.title,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+index 04276c2fc..4aa2b133f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+@@ -791,6 +791,9 @@ private fun BoxScope.RenderPlaybackOverlays(
+                 args.onBack()
+             },
+         )
++        if (activeProviderName == "YouTube" && (!playbackSnapshot.isPlaying || playbackSnapshot.isLoading)) {
++            com.nuvio.app.features.youtube.YouTubeLogPanel(maxLines = 18, modifier = Modifier.padding(bottom = 64.dp))
++        }
+     }
+ }
+ 
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
+index dbbc985a9..8be762059 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
+@@ -294,6 +294,9 @@ internal fun InlinePreviewOverlay(item: YtItem, modifier: Modifier = Modifier, o
+                 }
+             }
+         }
++        if (item.isLive && !(snapshot.isPlaying && !snapshot.isLoading)) {
++            YouTubeLogPanel(maxLines = 7)
++        }
+     }
+ }
+ 
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeLiveLog.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeLiveLog.kt
+new file mode 100644
+index 000000000..50cdb357b
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeLiveLog.kt
+@@ -0,0 +1,68 @@
++package com.nuvio.app.features.youtube
++
++import androidx.compose.foundation.background
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.BoxScope
++import androidx.compose.foundation.layout.padding
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.collectAsState
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import kotlin.time.TimeSource
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++
++/**
++ * Nuvio fork: short in-memory log of one YouTube start (extractor, preview, full player, load errors),
++ * drawn on screen so a stuck live stream can be diagnosed from a screenshot.
++ */
++object YouTubeLiveLog {
++    private const val MAX_LINES = 80
++    private val origin = TimeSource.Monotonic.markNow()
++    private val _lines = MutableStateFlow<List<String>>(emptyList())
++    val lines: StateFlow<List<String>> = _lines
++
++    fun add(tag: String, message: String) {
++        val secs = origin.elapsedNow().inWholeMilliseconds / 1000.0
++        val stamp = (kotlin.math.round(secs * 10) / 10.0).toString()
++        val line = "$stamp $tag ${message.replace('\n', ' ').take(170)}"
++        while (true) {
++            val old = _lines.value
++            val next = (old + line).takeLast(MAX_LINES)
++            if (_lines.compareAndSet(old, next)) break
++        }
++    }
++
++    fun clear() { _lines.value = emptyList() }
++
++    /** Host and the tail of the path of an address, without query strings that carry tokens. */
++    fun shortUrl(url: String?): String {
++        if (url.isNullOrBlank()) return "-"
++        val noQuery = url.substringBefore('?')
++        val host = noQuery.substringAfter("://").substringBefore('/')
++        val path = noQuery.substringAfter("://").substringAfter('/', "")
++        return host + "/" + path.takeLast(28)
++    }
++}
++
++/** Last lines of [YouTubeLiveLog] over a dark strip. */
++@Composable
++fun BoxScope.YouTubeLogPanel(maxLines: Int = 14, modifier: Modifier = Modifier) {
++    val lines by YouTubeLiveLog.lines.collectAsState()
++    if (lines.isEmpty()) return
++    Text(
++        text = lines.takeLast(maxLines).joinToString("\n"),
++        color = Color.White,
++        fontSize = 8.sp,
++        lineHeight = 10.sp,
++        modifier = modifier
++            .align(Alignment.BottomStart)
++            .background(Color.Black.copy(alpha = 0.7f))
++            .padding(4.dp),
++    )
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt
+index d48d81116..fa753c397 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt
+@@ -98,10 +98,14 @@ object YouTubePrewarm {
+         lastError = null
+         // A live stream has no 480p file to pick: it plays the same stream the full player would.
+         if (item.isLive) {
++            YouTubeLiveLog.add("prev", "live ${item.id} resolve start")
+             return runCatching { YouTubeRepository.resolve(item.id) }
+-                .onFailure { lastError = "live ${it::class.simpleName}: ${it.message?.take(120)}" }
++                .onFailure { lastError = "live ${it::class.simpleName}: ${it.message?.take(120)}"; YouTubeLiveLog.add("prev", lastError.orEmpty()) }
+                 .getOrNull()
+-                .also { if (it == null && lastError == null) lastError = "live: no stream ${YouTubeWarmupHooks.lastExtractFailure.orEmpty()}" }
++                .also {
++                    if (it == null && lastError == null) lastError = "live: no stream ${YouTubeWarmupHooks.lastExtractFailure.orEmpty()}"
++                    YouTubeLiveLog.add("prev", if (it == null) "no source: ${lastError.orEmpty()}" else "source ${YouTubeLiveLog.shortUrl(it.videoUrl)} audio=${it.audioUrl != null}")
++                }
+         }
+         val deferred = synchronized(lock) {
+             previews[item.id]?.takeIf { it.mark.elapsedNow() < MAX_AGE }?.source
+diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
+index 346c410bd..a90dff5ef 100644
+--- a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
++++ b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
+@@ -368,6 +368,8 @@ class InAppYouTubeExtractor {
+         }
+ 
+         com.nuvio.app.features.youtube.YouTubeStartTrace.mark(if (earlyExit) "clients done (early)" else "clients done (all)")
++        com.nuvio.app.features.youtube.YouTubeLiveLog.add("ext", "$videoId clients: hls=${manifestUrls.joinToString(",") { it.first }.ifEmpty { "none" }} prog=${progressive.size} vid=${adaptiveVideo.size} aud=${adaptiveAudio.size}")
++        clientNotes.forEach { com.nuvio.app.features.youtube.YouTubeLiveLog.add("ext", it) }
+         if (manifestUrls.isEmpty() && progressive.isEmpty() && adaptiveVideo.isEmpty() && adaptiveAudio.isEmpty()) {
+             com.nuvio.app.features.youtube.YouTubeWarmupHooks.lastExtractFailure = "no streams: ${clientNotes.joinToString(" | ").take(300)}"
+             return null
+@@ -405,6 +407,8 @@ class InAppYouTubeExtractor {
+             YouTubeLiveUserAgent.value = CLIENTS.firstOrNull { it.key == liveCandidate.client }?.userAgent
+             bestManifest = liveCandidate
+             com.nuvio.app.features.youtube.YouTubeWarmupHooks.lastExtractFailure = "live probe ${notes.joinToString(" | ")}".take(300)
++            notes.forEach { com.nuvio.app.features.youtube.YouTubeLiveLog.add("probe", it) }
++            com.nuvio.app.features.youtube.YouTubeLiveLog.add("probe", "chose ${liveCandidate.client} ua=${YouTubeLiveUserAgent.value?.take(40)} ${com.nuvio.app.features.youtube.YouTubeLiveLog.shortUrl(liveCandidate.manifestUrl)}")
+         }
+         if (bestManifest == null) for (candidate in manifestCandidates) {
+             if (
