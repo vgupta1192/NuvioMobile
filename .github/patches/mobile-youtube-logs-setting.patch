@@ -1,0 +1,79 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt
+index b2d570e13..3a7a73e6c 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraYouTubeSettings.kt
+@@ -78,6 +78,7 @@ internal fun ExtraYouTubeSection(isTablet: Boolean, showTabToggle: Boolean = tru
+     val hideWatched by YouTubeSettings.hideWatched.value.collectAsState()
+     val hideUpcoming by YouTubeSettings.hideUpcoming.value.collectAsState()
+     val inlinePreview by YouTubeSettings.inlinePreview.value.collectAsState()
++    val showLogs by YouTubeSettings.showLogs.value.collectAsState()
+     val account by YouTubeAccount.state.collectAsState()
+     var showAccounts by remember { mutableStateOf(false) }
+     val startQuality by YouTubeSettings.startQuality.value.collectAsState()
+@@ -222,6 +223,14 @@ internal fun ExtraYouTubeSection(isTablet: Boolean, showTabToggle: Boolean = tru
+                 onCheckedChange = { YouTubeSettings.inlinePreview.set(it) },
+             )
+             SettingsGroupDivider(isTablet = isTablet)
++            SettingsSwitchRow(
++                title = "Show debug logs",
++                description = "Log strip over stalled previews and the full player, with quality and load details.",
++                checked = showLogs,
++                isTablet = isTablet,
++                onCheckedChange = { YouTubeSettings.showLogs.set(it) },
++            )
++            SettingsGroupDivider(isTablet = isTablet)
+             SettingsSwitchRow(
+                 title = "Better titles (DeArrow)",
+                 description = "Community-written titles in place of clickbait.",
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
+index 8be762059..75dbeeaaa 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
+@@ -180,7 +180,9 @@ internal fun InlinePreviewOverlay(item: YtItem, modifier: Modifier = Modifier, o
+ 
+     Box(modifier = modifier.fillMaxSize()) {
+         val src = source
+-        if (failed && note != null) {
++        val logsOn by YouTubeSettings.showLogs.value.collectAsState()
++        LaunchedEffect(Unit) { YouTubeSettings.showLogs.ensureLoaded() }
++        if (failed && note != null && logsOn) {
+             Text(
+                 text = note.orEmpty(),
+                 color = Color.White,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeLiveLog.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeLiveLog.kt
+index 50cdb357b..093a45a76 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeLiveLog.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeLiveLog.kt
+@@ -54,7 +54,9 @@ object YouTubeLiveLog {
+ @Composable
+ fun BoxScope.YouTubeLogPanel(maxLines: Int = 14, modifier: Modifier = Modifier) {
+     val lines by YouTubeLiveLog.lines.collectAsState()
+-    if (lines.isEmpty()) return
++    androidx.compose.runtime.LaunchedEffect(Unit) { YouTubeSettings.showLogs.ensureLoaded() }
++    val logsOn by YouTubeSettings.showLogs.value.collectAsState()
++    if (!logsOn || lines.isEmpty()) return
+     Text(
+         text = lines.takeLast(maxLines).joinToString("\n"),
+         color = Color.White,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeSettings.kt
+index 7004f3115..94ac2ee41 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeSettings.kt
+@@ -61,6 +61,8 @@ object YouTubeSettings {
+     val deArrowTitles = ForkBoolPref("settings/youtube_dearrow_titles", false)
+     val deArrowThumbnails = ForkBoolPref("settings/youtube_dearrow_thumbs", false)
+     val hideWatched = ForkBoolPref("settings/youtube_hide_watched", false)
++    /** Debug log strip over stalled YouTube previews and the full player, plus the preview error note. */
++    val showLogs = ForkBoolPref("settings/youtube_show_logs", false)
+     val hideUpcoming = ForkBoolPref("settings/youtube_hide_upcoming", true)
+     /** Feed cards play a muted preview while they are in view. */
+     val inlinePreview = ForkBoolPref("settings/youtube_inline_preview", true)
+@@ -157,7 +159,7 @@ object YouTubeSettings {
+     }
+ 
+     fun ensureLoaded() {
+-        listOf(sponsorNotice, sponsorAsk, hideWatched, hideUpcoming, inlinePreview, rememberLastTab).forEach { it.ensureLoaded() }
++        listOf(sponsorNotice, sponsorAsk, hideWatched, hideUpcoming, inlinePreview, rememberLastTab, showLogs).forEach { it.ensureLoaded() }
+         listOf(sponsorCategories, lastTab, tabOrder, hiddenTabs, hiddenWords, hiddenChannels).forEach { it.ensureLoaded() }
+         YouTubePrefs.tabEnabled.ensureLoaded()
+         YouTubePrefs.autoplay.ensureLoaded()
