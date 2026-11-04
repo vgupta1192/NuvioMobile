@@ -1502,10 +1502,10 @@ index 000000000..123dc3ffd
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubeFeedCards.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubeFeedCards.kt
 new file mode 100644
-index 000000000..408c29952
+index 000000000..e833808a9
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubeFeedCards.kt
-@@ -0,0 +1,348 @@
+@@ -0,0 +1,349 @@
 +package com.nuvio.app.youtube
 +
 +import android.view.TextureView
@@ -1773,7 +1773,8 @@ index 000000000..408c29952
 +
 +    fun play(playable: YtPlayable) {
 +        showing = false
-+        player.setMediaItem(MediaItem.fromUri(playable.url))
++        if (playable.startPositionMs > 0) player.setMediaItem(MediaItem.fromUri(playable.url), playable.startPositionMs)
++        else player.setMediaItem(MediaItem.fromUri(playable.url))
 +        player.playWhenReady = true
 +        player.prepare()
 +    }
@@ -4522,10 +4523,10 @@ index 000000000..f2937070d
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubeViewModel.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubeViewModel.kt
 new file mode 100644
-index 000000000..c554d825e
+index 000000000..a96a7916a
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubeViewModel.kt
-@@ -0,0 +1,830 @@
+@@ -0,0 +1,834 @@
 +package com.nuvio.app.youtube
 +
 +import android.content.Context
@@ -5170,7 +5171,11 @@ index 000000000..c554d825e
 +    /** The stream for a feed preview, or null when it can't be had (live streams are never previewed). */
 +    suspend fun previewStream(item: YtItem): YtPlayable? {
 +        if (item.kind != YtKind.VIDEO || item.isLive || item.videoId == null) return null
-+        return lookup(item).await().getOrNull()
++        val fresh = withContext(Dispatchers.IO) {
++            kotlinx.coroutines.withTimeoutOrNull(2500L) { accountState(item) } ?: (-1 to 0L)
++        }
++        val startMs = resumeMs(item, fresh)
++        return lookup(item).await().getOrNull()?.copy(startPositionMs = startMs)
 +    }
 +
 +    /**
