@@ -1,5 +1,5 @@
 diff --git a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/TrailerExtractionPlatform.android.kt b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/TrailerExtractionPlatform.android.kt
-index c1b3aa97a..7f91358d0 100644
+index c1b3aa97a..05005d17c 100644
 --- a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/TrailerExtractionPlatform.android.kt
 +++ b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/TrailerExtractionPlatform.android.kt
 @@ -16,6 +16,36 @@ import okhttp3.RequestBody.Companion.toRequestBody
@@ -39,7 +39,18 @@ index c1b3aa97a..7f91358d0 100644
      val defaultHeaders: Map<String, String> = mapOf(
          "accept-language" to "en-US,en;q=0.9",
          "user-agent" to
-@@ -90,11 +120,12 @@ internal object TrailerExtractionPlatform {
+@@ -81,6 +111,10 @@ internal object TrailerExtractionPlatform {
+         bestVideo: StreamCandidate?,
+         bestAudio: StreamCandidate?,
+     ): TrailerPlaybackSource? = withContext(Dispatchers.IO) {
++        // A live stream has only an HLS manifest: play the master manifest so the player picks video and audio itself.
++        if (bestVideo == null && bestProgressive == null && bestManifest != null) {
++            return@withContext TrailerPlaybackSource(videoUrl = bestManifest.manifestUrl)
++        }
+         val bestCombinedIsManifest = bestManifest != null &&
+             (bestProgressive == null || bestManifest.height > bestProgressive.height)
+ 
+@@ -90,11 +124,12 @@ internal object TrailerExtractionPlatform {
              bestProgressive?.url
          }
  
@@ -525,7 +536,7 @@ index db2776747..0487698f1 100644
  }
 \ No newline at end of file
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index 218394f06..f8243901f 100644
+index 218394f06..dca7978c6 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 @@ -950,11 +950,21 @@ internal fun MainAppContent(
@@ -553,7 +564,17 @@ index 218394f06..f8243901f 100644
                  val playerLaunch = PlayerLaunch(
                      profileId = activePlaybackProfileId,
                      title = item.title,
-@@ -977,6 +987,7 @@ internal fun MainAppContent(
+@@ -968,7 +978,8 @@ internal fun MainAppContent(
+                     parentMetaId = item.id,
+                     parentMetaType = "other",
+                     // 0 means "no position given": pick up where either player left this video.
+-                    initialPositionMs = positionMs.takeIf { it > 0L }
++                    initialPositionMs = if (item.isLive) 0L else positionMs.takeIf { it > 0L }
++                        ?: com.nuvio.app.features.youtube.InlinePreview.positions[item.id]
+                         ?: com.nuvio.app.features.youtube.YouTubeRepository.savedPositionMs(item.id),
+                 )
+                 if (source == null || playerSettingsUiState.externalPlayerEnabled) {
+@@ -977,6 +988,7 @@ internal fun MainAppContent(
                  }
                  val launchId = PlayerLaunchStore.put(playerLaunch)
                  navController.navigate(PlayerRoute(launchId = launchId, title = playerLaunch.title))
@@ -561,7 +582,7 @@ index 218394f06..f8243901f 100644
              }
          }
  
-@@ -988,6 +999,22 @@ internal fun MainAppContent(
+@@ -988,6 +1000,22 @@ internal fun MainAppContent(
              }
          }
  
@@ -584,7 +605,7 @@ index 218394f06..f8243901f 100644
          // Jellyfin fork feature: nav entry opens the Jellyfin route
          LaunchedEffect(navController) {
              if (!ownsAppRuntime) return@LaunchedEffect
-@@ -1403,8 +1430,13 @@ internal fun MainAppContent(
+@@ -1403,8 +1431,13 @@ internal fun MainAppContent(
              )
          }
  
@@ -599,7 +620,7 @@ index 218394f06..f8243901f 100644
                  type = item.parentMetaType,
                  videoId = item.videoId,
                  parentMetaId = item.parentMetaId,
-@@ -1418,7 +1450,17 @@ internal fun MainAppContent(
+@@ -1418,7 +1451,17 @@ internal fun MainAppContent(
  
          val openContinueWatching: (ContinueWatchingItem, Boolean, Boolean) -> Unit = { item, manualSelection, startFromBeginning ->
              resumePromptItem = null
@@ -697,6 +718,20 @@ index e5a4e66b2..679cad68b 100644
                  Icon(action.painter, null, tint = Color.White, modifier = Modifier.size(NuvioTokens.Icon.md))
              } else if (action.icon != null) {
                  Icon(action.icon, null, tint = Color.White, modifier = Modifier.size(NuvioTokens.Icon.md))
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/MiniPlayer.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/MiniPlayer.kt
+index 48c14936d..3ec13608f 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/MiniPlayer.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/MiniPlayer.kt
+@@ -187,7 +187,8 @@ internal fun PlayerScreenRuntime.BindMiniPlayerEffects(presentation: Boolean?) {
+     // Back minimizes into the mini player (like upstream) when it is enabled; otherwise it leaves.
+     PlatformBackHandler(enabled = presentation == false) {
+         flushWatchProgress()
+-        if (MiniPlayerSetting.isEnabled()) handOffToMiniPlayer()
++        // A YouTube video leaves to the feed; its mini player starts only from the mini player button.
++        if (activeProviderName != "YouTube" && MiniPlayerSetting.isEnabled()) handOffToMiniPlayer()
+         args.onBack()
+     }
+ }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
 index c061ea657..582090602 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
@@ -1233,6 +1268,114 @@ index 933eae59e..b2d570e13 100644
  @Composable
  private fun YouTubeTabsSection(isTablet: Boolean) {
      val order by YouTubeSettings.tabOrder.value.collectAsState()
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/ProviderFilterRow.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/ProviderFilterRow.kt
+index 1c2560366..e738682be 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/ProviderFilterRow.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/ProviderFilterRow.kt
+@@ -89,7 +89,10 @@ internal fun ProviderFilterRow(
+             FilterChip(
+                 // Nuvio fork: link count next to the provider name
+                 label = group?.let { if (it.streams.isNotEmpty()) "${it.addonName} ${it.streams.size}" else it.addonName }
+-                    ?: stringResource(Res.string.collections_tab_all),
++                    ?: addonGroups.sumOf { it.streams.size }.let { total ->
++                        val all = stringResource(Res.string.collections_tab_all)
++                        if (total > 0) "$all $total" else all
++                    },
+                 isSelected = isSelected,
+                 isPinned = group != null && group.soleSourcePin()?.key in pinnedSourceIds,
+                 onClick = onClick,
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamRefreshStatus.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamRefreshStatus.kt
+index ce947a01b..ab11b6d20 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamRefreshStatus.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamRefreshStatus.kt
+@@ -15,7 +15,6 @@ import androidx.compose.ui.unit.dp
+ import kotlinx.coroutines.delay
+ import kotlin.time.Clock
+ 
+-private const val STATUS_MIN_ROUNDS = 6
+ private const val STATUS_MAX_DRY_ROUNDS = 5
+ 
+ /** Nuvio fork: one small line that shows what the background link refresh is doing. */
+@@ -24,7 +23,7 @@ internal fun StreamRefreshStatusLine(
+     uiState: StreamsUiState,
+     modifier: Modifier = Modifier,
+ ) {
+-    if (uiState.autoRefreshRounds >= STATUS_MIN_ROUNDS && uiState.autoRefreshDryRounds >= STATUS_MAX_DRY_ROUNDS) return
++    if (uiState.autoRefreshDryRounds >= STATUS_MAX_DRY_ROUNDS) return
+     if (uiState.groups.isEmpty() && uiState.autoRefreshRounds == 0) return
+ 
+     var nowMs by remember { mutableLongStateOf(Clock.System.now().toEpochMilliseconds()) }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
+index 0274fe9e1..198f70e3e 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/StreamsRepository.kt
+@@ -50,11 +50,12 @@ object StreamsRepository {
+     private const val STREAM_PROVIDER_TIMEOUT_MS = 35_000L
+ 
+     private var activeJob: Job? = null
++    // The link refresh keeps running while the player is open, so the round count carries on.
++    private var refreshJob: Job? = null
+     private var activeRequestKey: String? = null
+     private var refreshContext: AutoRefreshContext? = null
+     private const val AUTO_REFRESH_INTERVAL_MS = 10_000L
+     private const val AUTO_REFRESH_TIMEOUT_MS = 45_000L
+-    private const val AUTO_REFRESH_MIN_ROUNDS = 6
+ 
+     fun requestToken(
+         type: String,
+@@ -161,14 +162,16 @@ object StreamsRepository {
+             log.d { "Skipping stream reload for unchanged request type=$type id=$videoId" }
+             // Back from the player: cancelLoading() stopped the refresh loop, start it again.
+             val resumeContext = refreshContext
+-            if (activeJob == null && resumeContext != null && resumeContext.token == currentState.requestToken && !currentState.isAnyLoading) {
+-                activeJob = scope.launch { autoRefreshLoop(resumeContext) }
++            if (refreshJob?.isActive != true && resumeContext != null && resumeContext.token == currentState.requestToken && !currentState.isAnyLoading) {
++                refreshJob = scope.launch { autoRefreshLoop(resumeContext) }
+             }
+             return
+         }
+ 
+         activeRequestKey = requestKey
+         activeJob?.cancel()
++        refreshJob?.cancel()
++        refreshJob = null
+         _uiState.value = StreamsUiState(requestToken = requestToken)
+ 
+         PlayerSettingsRepository.ensureLoaded()
+@@ -786,7 +789,10 @@ object StreamsRepository {
+                 },
+             )
+             refreshContext = context
+-            if (!isDirectAutoPlayFlow) autoRefreshLoop(context)
++            if (!isDirectAutoPlayFlow) {
++                refreshJob?.cancel()
++                refreshJob = scope.launch { autoRefreshLoop(context) }
++            }
+         }
+     }
+ 
+@@ -868,11 +874,7 @@ object StreamsRepository {
+                     current.copy(
+                         autoRefreshPhase = 2,
+                         autoRefreshRounds = rounds,
+-                        autoRefreshDryRounds = when {
+-                            roundAdded > 0 -> 0
+-                            rounds > AUTO_REFRESH_MIN_ROUNDS -> current.autoRefreshDryRounds + 1
+-                            else -> 0
+-                        },
++                        autoRefreshDryRounds = if (roundAdded > 0) 0 else current.autoRefreshDryRounds + 1,
+                         // Never more than the list holds.
+                         autoRefreshAdded = (current.autoRefreshAdded + roundAdded)
+                             .coerceAtMost(current.groups.sumOf { it.streams.size }),
+@@ -986,6 +988,8 @@ object StreamsRepository {
+         PluginRepository.setLocalPluginSearchPaused(true)
+         activeJob?.cancel()
+         activeJob = null
++        refreshJob?.cancel()
++        refreshJob = null
+         activeRequestKey = null
+         _uiState.value = StreamsUiState()
+     }
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/trailer/TrailerPlaybackResolver.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/trailer/TrailerPlaybackResolver.kt
 index aa26505b9..0e41e03c1 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/trailer/TrailerPlaybackResolver.kt
