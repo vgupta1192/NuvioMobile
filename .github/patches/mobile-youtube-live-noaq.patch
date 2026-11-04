@@ -1,0 +1,13 @@
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerAutoQuality.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerAutoQuality.kt
+index fe9419264..98e106fa7 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerAutoQuality.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerAutoQuality.kt
+@@ -131,6 +131,8 @@ internal fun PlayerScreenRuntime.autoQualityTick(nowMs: Long) {
+     if (!playerSettingsUiState.autoQualityEnabled) return
+     // Torrent/P2P sources have no rendition ladder to hot-swap.
+     if (activeTorrentInfoHash != null) return
++    // A YouTube live playlist must not be re-prepared on a variant swap: each swap rebuilds the player at the saved position and the stream restarts.
++    if (activeProviderName == "YouTube") return
+ 
+     val state = autoQualityState
+     val streamKey = effectivePlaybackUrl.orEmpty()
