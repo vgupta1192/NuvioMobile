@@ -5448,6 +5448,26 @@ index 000000000..ae678f831
 +/** Content Nuvio keeps out of Continue Watching, the library, history and Trakt: it has its own place elsewhere. */
 +fun isUntrackedContent(type: String?): Boolean =
 +    type.equals("youtube", ignoreCase = true)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt
+index 724f5b83a..2aa5ec4ea 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/ForkPlayerToolbar.kt
+@@ -96,7 +96,7 @@ object ForkPlayerToolbar : ForkButtonLayout(
+         ForkToolbarButton("playback_info", "Stream info"),
+         ForkToolbarButton("video_settings", "Video settings"),
+         ForkToolbarButton("submit_intro", "Submit intro"),
+-    ) + YouTubeToolbarButtons,
++    ),
+ )
+ 
+ /** Top-right icons of the legacy player layout. The close button always stays. */
+@@ -130,5 +130,5 @@ object ForkLegacyBottomButtons : ForkButtonLayout(
+         ForkToolbarButton("episodes", "Episodes"),
+         ForkToolbarButton("quality", "Quality"),
+         ForkToolbarButton("rate", "Rate"),
+-    ) + YouTubeToolbarButtons,
++    ),
+ )
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
 index 582090602..6d4534310 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerControlActions.kt
@@ -5695,18 +5715,20 @@ index 9b81c6b54..fc9d34312 100644
      if (hasRequestedScrobbleStartForCurrentItem) return
      hasRequestedScrobbleStartForCurrentItem = true
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index c1b62abdf..7c19e3eaa 100644
+index c1b62abdf..53b8160f9 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -27,7 +27,6 @@ import androidx.compose.runtime.key
+@@ -26,8 +26,8 @@ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.key
  import androidx.compose.runtime.mutableStateOf
  import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
  import androidx.compose.ui.Modifier
 -import com.nuvio.app.features.youtube.YouTubeLogPanel
  import androidx.compose.ui.layout.onSizeChanged
  import androidx.lifecycle.compose.collectAsStateWithLifecycle
  import com.nuvio.app.core.ui.NuvioStatusModal
-@@ -212,7 +211,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+@@ -212,7 +212,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
                      externalSubtitles = externalSubtitles,
                      streamType = activeStreamType,
                      // googlevideo throttles long open-ended requests; chunked ranges keep 4K at full speed.
@@ -5715,7 +5737,7 @@ index c1b62abdf..7c19e3eaa 100644
                      modifier = videoModifier,
                      playWhenReady = shouldPlay,
                      initialPositionMs = activeInitialPositionMs.takeIf { it > 0L },
-@@ -369,23 +368,28 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+@@ -369,23 +369,28 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
                      .padding(end = horizontalSafePadding + 16.dp, bottom = 96.dp),
              )
          }
@@ -5761,7 +5783,7 @@ index c1b62abdf..7c19e3eaa 100644
              )
          }
          Box(modifier = videoModifier) {
-@@ -406,6 +410,19 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+@@ -406,6 +411,19 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
              RenderPlayerModals(displayedPositionMs = displayedPositionMs)
              RenderParty(runtime = runtime)
          }
@@ -5781,7 +5803,7 @@ index c1b62abdf..7c19e3eaa 100644
          }
      }
  }
-@@ -544,7 +561,9 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
+@@ -544,7 +562,9 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
                  flushWatchProgress()
                  args.onBack()
              },
@@ -5792,7 +5814,7 @@ index c1b62abdf..7c19e3eaa 100644
                  { openPartyPanel() }
              } else {
                  null
-@@ -571,7 +590,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
+@@ -571,7 +591,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
              } else {
                  null
              },
@@ -5801,7 +5823,7 @@ index c1b62abdf..7c19e3eaa 100644
              onEpisodesClick = if (isSeries) { { openEpisodesPanel() } } else null,
              chapters = chapters,
              onChaptersClick = if (chapters.isNotEmpty()) { { openChaptersPanel() } } else null,
-@@ -651,9 +670,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
+@@ -651,9 +671,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
              onQualityClick = if (!isIos) {
                  {
                      refreshTracks()
@@ -5812,7 +5834,7 @@ index c1b62abdf..7c19e3eaa 100644
                  }
              } else {
                  null
-@@ -792,9 +809,6 @@ private fun BoxScope.RenderPlaybackOverlays(
+@@ -792,9 +810,6 @@ private fun BoxScope.RenderPlaybackOverlays(
                  args.onBack()
              },
          )
@@ -6236,6 +6258,33 @@ index 77c513b4c..000000000
 -        SyncedSubtitles.log("youtube captions: saved to the account for $youtubeId: $ok")
 -    }
 -}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeChannelAvatar.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeChannelAvatar.kt
+new file mode 100644
+index 000000000..588989084
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/YouTubeChannelAvatar.kt
+@@ -0,0 +1,21 @@
++package com.nuvio.app.features.player
++
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.shape.CircleShape
++import androidx.compose.runtime.Composable
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.layout.ContentScale
++import androidx.compose.ui.unit.Dp
++import coil3.compose.AsyncImage
++
++/** Round channel picture used as a player button icon. */
++@Composable
++internal fun ChannelAvatar(url: String, size: Dp) {
++    AsyncImage(
++        model = url,
++        contentDescription = null,
++        contentScale = ContentScale.Crop,
++        modifier = Modifier.size(size).clip(CircleShape),
++    )
++}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraSettingsPage.kt
 index 644699974..22e5dfe4a 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ExtraSettingsPage.kt
@@ -6790,6 +6839,41 @@ index 84d7ff219..000000000
 -
 -/** Nuvio fork: reports how resolving a YouTube video on the device went (see YouTubeDiag on Android). */
 -internal expect fun reportYouTubeExtraction(videoId: String, elapsedMs: Long, outcome: String, detail: String?)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/YouTubeStreamResolver.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/YouTubeStreamResolver.kt
+index 80f69e400..06d32ad77 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/YouTubeStreamResolver.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/YouTubeStreamResolver.kt
+@@ -4,7 +4,6 @@ import com.nuvio.app.core.build.AppFeaturePolicy
+ import com.nuvio.app.core.build.TrailerPlaybackMode
+ import com.nuvio.app.features.trailer.TrailerPlaybackResolver
+ import kotlin.coroutines.cancellation.CancellationException
+-import kotlin.time.TimeSource
+ 
+ /**
+  * Makes streams that only carry a YouTube id ([StreamItem.ytId]) playable.
+@@ -25,22 +24,13 @@ class YouTubeStreamResolver(
+         val videoId = stream.youTubeIdToResolve ?: return stream
+         val watchUrl = watchUrl(videoId)
+         if (!inAppPlaybackEnabled) return stream.copy(externalUrl = watchUrl)
+-        val startedAt = TimeSource.Monotonic.markNow()
+         val url = try {
+             extractSingleUrl(watchUrl)?.trim()?.takeIf { it.isNotEmpty() }
+         } catch (error: CancellationException) {
+-            reportYouTubeExtraction(videoId, startedAt.elapsedNow().inWholeMilliseconds, "cancelled", null)
+             throw error
+         } catch (error: Throwable) {
+-            reportYouTubeExtraction(videoId, startedAt.elapsedNow().inWholeMilliseconds, "error", "${error::class.simpleName}: ${error.message}")
+             throw error
+         }
+-        reportYouTubeExtraction(
+-            videoId,
+-            startedAt.elapsedNow().inWholeMilliseconds,
+-            if (url == null) "empty" else "ok",
+-            url?.substringAfter("://")?.substringBefore('/'),
+-        )
+         return url?.let { stream.copy(url = it) }
+     }
+ 
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt
 index 25f6c1216..8f618830e 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/watchprogress/WatchProgressRepository.kt
