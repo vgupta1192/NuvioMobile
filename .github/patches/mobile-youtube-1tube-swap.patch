@@ -5685,7 +5685,7 @@ index 06cf52fa7..edfca1dc0 100644
      val controller = playerController ?: return
      val sourceUrl = activeSourceUrl
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
-index 2382e0432..52085fde0 100644
+index 2382e0432..bbdfc0979 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
 @@ -429,8 +429,11 @@ private fun PlayerScreenRuntime.BindPlayerUiVisibilityEffects() {
@@ -5700,16 +5700,18 @@ index 2382e0432..52085fde0 100644
              !controlsVisible ||
              isScrubbingTimeline ||
              !playbackSnapshot.isPlaying ||
-@@ -440,7 +443,7 @@ private fun PlayerScreenRuntime.BindPlayerUiVisibilityEffects() {
+@@ -440,7 +443,9 @@ private fun PlayerScreenRuntime.BindPlayerUiVisibilityEffects() {
          ) {
              return@LaunchedEffect
          }
 -        delay(if (folded) 5000 else 3500)
-+        delay(if (isYouTube) 8000 else if (folded) 5000 else 3500)
++        val hideMs = (if (isYouTube) com.nuvio.app.features.settings.ForkPrefs.youTubeControlsHideSeconds.current()
++        else com.nuvio.app.features.settings.ForkPrefs.controlsHideSeconds.current()) * 1000L
++        delay(if (folded && !isYouTube) maxOf(hideMs, 5000L) else hideMs)
          controlsVisible = false
      }
  
-@@ -575,6 +578,16 @@ private fun PlayerScreenRuntime.BindPlayerMetadataAndSkipEffects() {
+@@ -575,6 +580,16 @@ private fun PlayerScreenRuntime.BindPlayerMetadataAndSkipEffects() {
          val season = activeSeasonNumber
          val episode = activeEpisodeNumber
          val vid = activeVideoId
@@ -5726,7 +5728,7 @@ index 2382e0432..52085fde0 100644
          if (!playerSettingsUiState.skipIntroEnabled) return@LaunchedEffect
          if ((contentType ?: parentMetaType).equals("movie", ignoreCase = true)) {
              applyRemoteSkipTimes(SkipIntroRepository.getMovieSkipIntervals(parentMetaId, vid))
-@@ -633,9 +646,14 @@ private fun PlayerScreenRuntime.BindPlayerMetadataAndSkipEffects() {
+@@ -633,9 +648,14 @@ private fun PlayerScreenRuntime.BindPlayerMetadataAndSkipEffects() {
          val controller = playerController
          if (current != null && controller != null &&
              playerControllerSourceUrl == activeSourceUrl &&
@@ -6874,6 +6876,108 @@ index 3a7a73e6c..000000000
 -        }
 -    }
 -}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPlayerPrefsSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPlayerPrefsSettings.kt
+index f14dd5a15..c6c94b2fb 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPlayerPrefsSettings.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPlayerPrefsSettings.kt
+@@ -13,12 +13,16 @@ internal fun ForkPlayerPrefsSettingsSection(isTablet: Boolean) {
+         ForkPrefs.subtitleShadow.ensureLoaded()
+         ForkPrefs.hidePlayerLock.ensureLoaded()
+         ForkPrefs.speedPopup.ensureLoaded()
++        ForkPrefs.controlsHideSeconds.ensureLoaded()
++        ForkPrefs.youTubeControlsHideSeconds.ensureLoaded()
+     }
+     val swipe by ForkPrefs.swipeToSeek.value.collectAsStateWithLifecycle()
+     val subsOff by ForkPrefs.subtitlesStartOff.value.collectAsStateWithLifecycle()
+     val hideLock by ForkPrefs.hidePlayerLock.value.collectAsStateWithLifecycle()
+     val speedPopup by ForkPrefs.speedPopup.value.collectAsStateWithLifecycle()
+     val shadow by ForkPrefs.subtitleShadow.value.collectAsStateWithLifecycle()
++    val hideSecs by ForkPrefs.controlsHideSeconds.value.collectAsStateWithLifecycle()
++    val ytHideSecs by ForkPrefs.youTubeControlsHideSeconds.value.collectAsStateWithLifecycle()
+     SettingsSection(title = "Player gestures and subtitles", isTablet = isTablet) {
+         SettingsGroup(isTablet = isTablet) {
+             SettingsSwitchRow(
+@@ -60,6 +64,26 @@ internal fun ForkPlayerPrefsSettingsSection(isTablet: Boolean) {
+                 isTablet = isTablet,
+                 onCheckedChange = ForkPrefs.speedPopup::set,
+             )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSliderRow(
++                title = "Hide controls after",
++                value = hideSecs,
++                valueText = { "$it s" },
++                valueRange = 2..20,
++                step = 1,
++                isTablet = isTablet,
++                onValueChange = ForkPrefs.controlsHideSeconds::set,
++            )
++            SettingsGroupDivider(isTablet = isTablet)
++            SettingsSliderRow(
++                title = "Hide controls after (YouTube)",
++                value = ytHideSecs,
++                valueText = { "$it s" },
++                valueRange = 2..30,
++                step = 1,
++                isTablet = isTablet,
++                onValueChange = ForkPrefs.youTubeControlsHideSeconds::set,
++            )
+         }
+     }
+ }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
+index 9896da508..a0387f02b 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/ForkPrefs.kt
+@@ -30,7 +30,36 @@ class ForkBoolPref(val path: String, private val default: Boolean) {
+     }
+ }
+ 
++/** Whole-number setting kept in the app file cache. */
++class ForkIntPref(val path: String, private val default: Int) {
++    private val _value = MutableStateFlow(default)
++    val value: StateFlow<Int> = _value.asStateFlow()
++    private var loaded = false
++
++    fun ensureLoaded() {
++        if (loaded) return
++        loaded = true
++        val stored = runCatching { AppFileCache.read(path)?.trim()?.toIntOrNull() }.getOrNull()
++        if (stored != null) _value.value = stored
++    }
++
++    fun current(): Int {
++        ensureLoaded()
++        return _value.value
++    }
++
++    fun set(next: Int) {
++        ensureLoaded()
++        _value.value = next
++        runCatching { AppFileCache.write(path, next.toString()) }
++    }
++}
++
+ object ForkPrefs {
++    /** Seconds the player controls stay up before they hide by themselves. */
++    val controlsHideSeconds = ForkIntPref("settings/controls_hide_seconds", 4)
++    val youTubeControlsHideSeconds = ForkIntPref("settings/youtube_controls_hide_seconds", 8)
++
+     val swipeToSeek = ForkBoolPref("settings/swipe_to_seek", true)
+     val homeUpNextTonight = ForkBoolPref("settings/home_up_next_tonight", true)
+     val homeAiringWeek = ForkBoolPref("settings/home_airing_week", true)
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+index 5ea59a56b..fbdd459d5 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/PlaybackSettingsPage.kt
+@@ -230,7 +230,7 @@ fun ValueBox(
+ }
+ 
+ @Composable
+-private fun SettingsSliderRow(
++internal fun SettingsSliderRow(
+     title: String,
+     value: Int,
+     valueText: @Composable (Int) -> String,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/YouTubeDiagReport.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/streams/YouTubeDiagReport.kt
 deleted file mode 100644
 index 84d7ff219..000000000
