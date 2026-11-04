@@ -422,7 +422,7 @@ index 39df22650..b9bcf9cf2 100644
              backBufferMs = PlaybackBufferSettings.DEFAULT_BACK_BUFFER_MS,
          )
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
-index 85c648cbc..418affc84 100644
+index 85c648cbc..84cc2ed60 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 @@ -492,6 +492,7 @@ private fun ExoPlayerSurface(
@@ -466,6 +466,17 @@ index 85c648cbc..418affc84 100644
              override fun onBandwidthEstimate(
                  eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
                  elapsedMs: Int,
+@@ -962,6 +989,10 @@ private fun ExoPlayerSurface(
+                     exoPlayer.setPlaybackSpeed(speed)
+                 }
+ 
++                override fun setMuted(muted: Boolean) {
++                    exoPlayer.volume = if (muted) 0f else 1f
++                }
++
+                 override fun updateNowPlayingMetadata(info: PlayerNowPlayingInfo) {
+                     nowPlayingController.updateMetadata(info)
+                 }
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/YouTubeDiag.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/YouTubeDiag.kt
 index 5a549e170..867c2303e 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/YouTubeDiag.kt
@@ -843,10 +854,34 @@ index 6ebd4c61f..55a8b83d4 100644
                          QualityRow(
                              label = stringResource(Res.string.player_video_quality_auto),
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
-index 82df34dbd..0d5823099 100644
+index 82df34dbd..2382e0432 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
-@@ -470,6 +470,9 @@ private fun PlayerScreenRuntime.BindPlayerUiVisibilityEffects() {
+@@ -361,6 +361,23 @@ internal fun PlayerScreenRuntime.BindPlayerRuntimeEffects() {
+ 
+         controller.seekTo(targetPositionMs)
+         initialSeekApplied = true
++        if (activeProviderName == "YouTube") {
++            com.nuvio.app.features.youtube.YouTubeStartTrace.mark("initial seek to ${targetPositionMs / 1000}s")
++        }
++    }
++
++    // A YouTube stream can drop an early seek while it is still buffering; check a few times that playback sits at the wanted point.
++    LaunchedEffect(initialSeekApplied, playerController, activeSourceUrl) {
++        val controller = playerController ?: return@LaunchedEffect
++        val wanted = activeInitialPositionMs
++        if (!initialSeekApplied || wanted <= 0L || activeProviderName != "YouTube") return@LaunchedEffect
++        repeat(4) {
++            delay(1_500)
++            if (!playbackSnapshot.isLoading && playbackSnapshot.durationMs > 0L && playbackSnapshot.positionMs < wanted - 5_000L) {
++                controller.seekTo(wanted)
++                com.nuvio.app.features.youtube.YouTubeStartTrace.mark("seek retry ${it + 1}")
++            }
++        }
+     }
+ 
+     BindPlayerUiVisibilityEffects()
+@@ -470,6 +487,9 @@ private fun PlayerScreenRuntime.BindPlayerUiVisibilityEffects() {
              isLoading = playbackSnapshot.isLoading,
              isEnded = playbackSnapshot.isEnded,
          )
@@ -1296,7 +1331,7 @@ index 000000000..fb9f4dcf1
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
 new file mode 100644
-index 000000000..40dd6d631
+index 000000000..dbbc985a9
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
 @@ -0,0 +1,312 @@
@@ -1437,7 +1472,7 @@ index 000000000..40dd6d631
 +    LaunchedEffect(source) {
 +        if (source == null) return@LaunchedEffect
 +        delay(15_000)
-+        if (snapshot.durationMs <= 0L) {
++        if (snapshot.durationMs <= 0L && snapshot.positionMs <= 0L && !snapshot.isPlaying) {
 +            note = "preview: timeout loading=${snapshot.isLoading} playing=${snapshot.isPlaying} audio=${source?.audioUrl != null} ${source?.videoUrl?.take(60)}"
 +            failed = true
 +        }
@@ -1452,7 +1487,7 @@ index 000000000..40dd6d631
 +    var resumed by remember(item.id) { mutableStateOf(false) }
 +    LaunchedEffect(controller, snapshot.durationMs) {
 +        val c = controller ?: return@LaunchedEffect
-+        if (resumed || snapshot.durationMs <= 0L) return@LaunchedEffect
++        if (resumed || snapshot.durationMs <= 0L || item.isLive) return@LaunchedEffect
 +        resumed = true
 +        val at = InlinePreview.positions[item.id] ?: YouTubeRepository.savedPositionMs(item.id)
 +        if (at > 2_000L && at < snapshot.durationMs - 10_000L) c.seekTo(at)
@@ -1784,10 +1819,10 @@ index e2c97bbf8..08cb1fe73 100644
  
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt
 new file mode 100644
-index 000000000..0e268ffa7
+index 000000000..d48d81116
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePrewarm.kt
-@@ -0,0 +1,137 @@
+@@ -0,0 +1,145 @@
 +package com.nuvio.app.features.youtube
 +
 +import com.nuvio.app.features.streams.YouTubeStreamResolver
@@ -1884,7 +1919,15 @@ index 000000000..0e268ffa7
 +     * The full player never uses this entry.
 +     */
 +    suspend fun previewSource(item: YtItem): TrailerPlaybackSource? {
-+        if (item.kind != YtKind.VIDEO || item.isShort || item.isLive || item.id.isBlank()) return null
++        if (item.kind != YtKind.VIDEO || item.isShort || item.id.isBlank()) return null
++        lastError = null
++        // A live stream has no 480p file to pick: it plays the same stream the full player would.
++        if (item.isLive) {
++            return runCatching { YouTubeRepository.resolve(item.id) }
++                .onFailure { lastError = "live ${it::class.simpleName}: ${it.message?.take(120)}" }
++                .getOrNull()
++                .also { if (it == null && lastError == null) lastError = "live: no stream ${YouTubeWarmupHooks.lastExtractFailure.orEmpty()}" }
++        }
 +        val deferred = synchronized(lock) {
 +            previews[item.id]?.takeIf { it.mark.elapsedNow() < MAX_AGE }?.source
 +                ?: scope.async {
@@ -1925,8 +1968,21 @@ index 000000000..0e268ffa7
 +    private val MAX_AGE = 20.minutes
 +    private const val MAX_ENTRIES = 8
 +}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeRepository.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeRepository.kt
+index ce66feac7..3fd60fb37 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeRepository.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeRepository.kt
+@@ -258,6 +258,8 @@ object YouTubeRepository {
+         ended: Boolean,
+     ) {
+         if (videoId.isBlank() || durationMs <= 0L) return
++        // The feed preview of this video picks up from here when the full player closes.
++        if (ended || positionMs < 2_000L) InlinePreview.positions.remove(videoId) else InlinePreview.positions[videoId] = positionMs
+         ensureLoaded()
+         val known = _saved.value.continueWatching.firstOrNull { it.item.id == videoId }?.item
+         val item = known ?: YtItem(id = videoId, title = title, channel = channel, thumb = thumb)
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
-index 206bbcbdb..24f9f0ccb 100644
+index 206bbcbdb..99cff84e7 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
 @@ -2,6 +2,9 @@ package com.nuvio.app.features.youtube
@@ -1939,7 +1995,15 @@ index 206bbcbdb..24f9f0ccb 100644
  import androidx.compose.foundation.layout.Arrangement
  import androidx.compose.foundation.layout.Box
  import androidx.compose.foundation.layout.Column
-@@ -40,6 +43,8 @@ import androidx.compose.material3.Button
+@@ -25,6 +28,7 @@ import androidx.compose.foundation.layout.windowInsetsTopHeight
+ import androidx.compose.foundation.lazy.LazyColumn
+ import androidx.compose.foundation.lazy.LazyRow
+ import androidx.compose.foundation.lazy.items
++import androidx.compose.foundation.lazy.LazyListState
+ import androidx.compose.foundation.lazy.rememberLazyListState
+ import androidx.compose.foundation.shape.CircleShape
+ import androidx.compose.foundation.shape.RoundedCornerShape
+@@ -40,6 +44,8 @@ import androidx.compose.material3.Button
  import androidx.compose.material3.DropdownMenu
  import androidx.compose.material3.DropdownMenuItem
  import androidx.compose.material3.Icon
@@ -1948,7 +2012,7 @@ index 206bbcbdb..24f9f0ccb 100644
  import androidx.compose.material3.IconButton
  import androidx.compose.material3.MaterialTheme
  import androidx.compose.material3.OutlinedButton
-@@ -51,6 +56,7 @@ import androidx.compose.runtime.Composable
+@@ -51,6 +57,7 @@ import androidx.compose.runtime.Composable
  import androidx.compose.runtime.CompositionLocalProvider
  import androidx.compose.runtime.DisposableEffect
  import androidx.compose.runtime.LaunchedEffect
@@ -1956,7 +2020,7 @@ index 206bbcbdb..24f9f0ccb 100644
  import androidx.compose.runtime.collectAsState
  import androidx.compose.runtime.derivedStateOf
  import androidx.compose.runtime.getValue
-@@ -87,10 +93,17 @@ import kotlinx.coroutines.launch
+@@ -87,10 +94,17 @@ import kotlinx.coroutines.launch
  /** Opens a video in the app's full player: item and the position to start from. */
  private val LocalFullPlayer = staticCompositionLocalOf<(YtItem, Long) -> Unit> { { _, _ -> } }
  
@@ -1970,12 +2034,12 @@ index 206bbcbdb..24f9f0ccb 100644
          YouTubeRepository.push(YtPage.Shorts)
 +    } else if (item.kind == YtKind.VIDEO && directPlayer != null) {
 +        // The preview resumes from the full player's saved position afterwards.
-+        if (startMs > 0L) InlinePreview.positions.remove(item.id)
++        if (startMs > 0L) InlinePreview.positions[item.id] = startMs
 +        directPlayer?.invoke(item, startMs)
      } else {
          YouTubeRepository.play(item)
      }
-@@ -102,6 +115,12 @@ fun YouTubeScreen(
+@@ -102,6 +116,12 @@ fun YouTubeScreen(
      onOpenInPlayer: (item: YtItem, positionMs: Long) -> Unit,
  ) {
      val tokens = MaterialTheme.nuvio
@@ -1988,7 +2052,7 @@ index 206bbcbdb..24f9f0ccb 100644
      LaunchedEffect(Unit) {
          YouTubeRepository.ensureLoaded()
          YouTubePrefs.autoplay.ensureLoaded()
-@@ -138,6 +157,8 @@ fun YouTubeScreen(
+@@ -138,6 +158,8 @@ fun YouTubeScreen(
          YtPage.Shorts -> "Shorts"
      }
  
@@ -1997,7 +2061,7 @@ index 206bbcbdb..24f9f0ccb 100644
      CompositionLocalProvider(LocalFullPlayer provides onOpenInPlayer) {
          Box(Modifier.fillMaxSize().background(tokens.colors.background)) {
              Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
-@@ -246,8 +267,18 @@ private fun YouTubeRootHeader(title: String, onSettings: () -> Unit, onAccount:
+@@ -246,8 +268,18 @@ private fun YouTubeRootHeader(title: String, onSettings: () -> Unit, onAccount:
  }
  
  @Composable
@@ -2005,7 +2069,7 @@ index 206bbcbdb..24f9f0ccb 100644
  private fun RootContent(tab: Int, onTab: (Int) -> Unit) {
      val tokens = MaterialTheme.nuvio
 +    // Bumped by a tap on the selected tab or a pull down on the page; each tab reloads its videos when it changes.
-+    var refreshTick by remember { mutableStateOf(0) }
++    val refreshTick = FeedCache.tick.intValue
 +    var pulling by remember { mutableStateOf(false) }
 +    LaunchedEffect(pulling) {
 +        if (pulling) {
@@ -2016,13 +2080,13 @@ index 206bbcbdb..24f9f0ccb 100644
      val horizontal = tokens.spacing.screenHorizontal
      val account by YouTubeAccount.state.collectAsState()
      LaunchedEffect(Unit) { YouTubeAccount.ensureLoaded() }
-@@ -276,19 +307,31 @@ private fun RootContent(tab: Int, onTab: (Int) -> Unit) {
+@@ -276,19 +308,31 @@ private fun RootContent(tab: Int, onTab: (Int) -> Unit) {
              items(shownTabs.size) { position ->
                  val id = shownTabs[position]
                  val index = YouTubeSettings.tabs.indexOfFirst { it.first == id }
 -                Pill(text = YouTubeSettings.tabs[index].second, selected = tab == index) { onTab(index) }
 +                Pill(text = YouTubeSettings.tabs[index].second, selected = tab == index) {
-+                    if (tab == index) refreshTick++ else onTab(index)
++                    if (tab == index) FeedCache.tick.intValue++ else onTab(index)
 +                }
              }
          }
@@ -2041,7 +2105,7 @@ index 206bbcbdb..24f9f0ccb 100644
 +        } else {
 +            androidx.compose.material3.pulltorefresh.PullToRefreshBox(
 +                isRefreshing = pulling,
-+                onRefresh = { pulling = true; refreshTick++ },
++                onRefresh = { pulling = true; FeedCache.tick.intValue++ },
 +                modifier = Modifier.weight(1f).fillMaxWidth(),
 +            ) {
 +                when (val id = YouTubeSettings.tabs[tab].first) {
@@ -2058,7 +2122,7 @@ index 206bbcbdb..24f9f0ccb 100644
          }
      }
  }
-@@ -334,76 +377,72 @@ private fun SearchField(modifier: Modifier = Modifier) {
+@@ -334,76 +378,73 @@ private fun SearchField(modifier: Modifier = Modifier) {
  }
  
  @Composable
@@ -2179,11 +2243,12 @@ index 206bbcbdb..24f9f0ccb 100644
      val loading by YouTubeRepository.subsLoading.collectAsState()
      val account by YouTubeAccount.state.collectAsState()
      LaunchedEffect(saved.subscriptions, account.signedIn) { YouTubeRepository.loadSubscriptions() }
-+    LaunchedEffect(refreshTick) { if (refreshTick > 0) YouTubeRepository.loadSubscriptions(force = true) }
++    val firstTick = remember { refreshTick }
++    LaunchedEffect(refreshTick) { if (refreshTick != firstTick) YouTubeRepository.loadSubscriptions(force = true) }
      if (!account.signedIn && saved.subscriptions.isEmpty()) {
          Column(Modifier.fillMaxWidth().padding(horizontal = horizontal), verticalArrangement = Arrangement.spacedBy(12.dp)) {
              YouTubeAccountPanel()
-@@ -411,7 +450,10 @@ private fun SubscriptionsTab() {
+@@ -411,7 +452,10 @@ private fun SubscriptionsTab() {
          }
          return
      }
@@ -2194,7 +2259,7 @@ index 206bbcbdb..24f9f0ccb 100644
          modifier = Modifier.fillMaxSize(),
          contentPadding = PaddingValues(start = horizontal, end = horizontal, bottom = 24.dp),
          verticalArrangement = Arrangement.spacedBy(16.dp),
-@@ -434,7 +476,7 @@ private fun SubscriptionsTab() {
+@@ -434,7 +478,7 @@ private fun SubscriptionsTab() {
  
  /** A feed that only exists for a signed-in account: history and playlists. */
  @Composable
@@ -2203,7 +2268,7 @@ index 206bbcbdb..24f9f0ccb 100644
      val horizontal = MaterialTheme.nuvio.spacing.screenHorizontal
      val account by YouTubeAccount.state.collectAsState()
      if (!account.signedIn) {
-@@ -444,17 +486,17 @@ private fun AccountFeedTab(id: String, browseId: String, signInHint: String) {
+@@ -444,17 +488,17 @@ private fun AccountFeedTab(id: String, browseId: String, signInHint: String) {
          }
          return
      }
@@ -2224,7 +2289,7 @@ index 206bbcbdb..24f9f0ccb 100644
          if (token != null) return@PagedPage YtInnertube.continuation(token)
          val page = feed?.let { YtInnertube.browseFeed(it.first) }
          if (page != null && page.items.isNotEmpty()) page else feed?.let { YtInnertube.search(it.second, YtInnertube.VIDEOS_ONLY) } ?: page
-@@ -509,13 +551,14 @@ private fun ShortsHost(modifier: Modifier) {
+@@ -509,13 +553,15 @@ private fun ShortsHost(modifier: Modifier) {
  }
  
  @Composable
@@ -2236,11 +2301,12 @@ index 206bbcbdb..24f9f0ccb 100644
      val account by YouTubeAccount.state.collectAsState()
      val lists by YouTubeRepository.accountLists.collectAsState()
      LaunchedEffect(account.signedIn) { YouTubeRepository.loadAccountLists() }
-+    LaunchedEffect(refreshTick) { if (refreshTick > 0) YouTubeRepository.loadAccountLists(force = true) }
++    val firstTick = remember { refreshTick }
++    LaunchedEffect(refreshTick) { if (refreshTick != firstTick) YouTubeRepository.loadAccountLists(force = true) }
      LazyColumn(
          modifier = Modifier.fillMaxSize(),
          contentPadding = PaddingValues(start = horizontal, end = horizontal, bottom = 24.dp),
-@@ -659,6 +702,7 @@ private fun ChannelHeader(channelId: String, name: String) {
+@@ -659,17 +705,22 @@ private fun ChannelHeader(channelId: String, name: String) {
  private fun PagedPage(
      key: Any,
      header: (@Composable () -> Unit)?,
@@ -2248,7 +2314,48 @@ index 206bbcbdb..24f9f0ccb 100644
      load: suspend (token: String?) -> YtPageResult?,
  ) {
      val tokens = MaterialTheme.nuvio
-@@ -700,8 +744,16 @@ private fun PagedPage(
+     val horizontal = tokens.spacing.screenHorizontal
+-    var items by remember(key) { mutableStateOf<List<YtItem>>(emptyList()) }
+-    var token by remember(key) { mutableStateOf<String?>(null) }
+-    var loading by remember(key) { mutableStateOf(true) }
++    // The screen leaves composition while the full player is open; its feed is kept so coming back shows the same list and scroll spot.
++    val cached = remember(key) { FeedCache.get(key) }
++    var items by remember(key) { mutableStateOf<List<YtItem>>(cached?.items ?: emptyList()) }
++    var token by remember(key) { mutableStateOf<String?>(cached?.token) }
++    var loading by remember(key) { mutableStateOf(cached == null) }
+     var failed by remember(key) { mutableStateOf(false) }
+     val scope = rememberCoroutineScope()
+     val keep = rememberYtFilter()
+ 
++    var listStateRef: LazyListState? = null
++
+     fun startFetch(next: String?) {
+         loading = true
+         failed = false
+@@ -680,13 +731,20 @@ private fun PagedPage(
+             } else {
+                 items = (items + result.items).distinctBy { it.key }
+                 token = result.continuation
++                FeedCache.put(key, items, token, listStateRef?.firstVisibleItemIndex ?: 0, listStateRef?.firstVisibleItemScrollOffset ?: 0)
+             }
+             loading = false
+         }
+     }
+ 
+-    LaunchedEffect(key) { startFetch(null) }
+-    val listState = rememberLazyListState()
++    LaunchedEffect(key) { if (cached == null) startFetch(null) }
++    val listState = rememberLazyListState(cached?.index ?: 0, cached?.offset ?: 0)
++    listStateRef = listState
++    val itemsNow by rememberUpdatedState(items)
++    val tokenNow by rememberUpdatedState(token)
++    DisposableEffect(key) {
++        onDispose { if (itemsNow.isNotEmpty()) FeedCache.put(key, itemsNow, tokenNow, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset) }
++    }
+     val nearEnd by remember {
+         derivedStateOf {
+             val info = listState.layoutInfo
+@@ -700,8 +758,16 @@ private fun PagedPage(
      }
  
      val visible = items.filter(keep)
@@ -2266,7 +2373,7 @@ index 206bbcbdb..24f9f0ccb 100644
      LazyColumn(
          state = listState,
          modifier = Modifier.fillMaxSize(),
-@@ -709,17 +761,11 @@ private fun PagedPage(
+@@ -709,17 +775,11 @@ private fun PagedPage(
          verticalArrangement = Arrangement.spacedBy(16.dp),
      ) {
          if (header != null) item(key = "header") { header() }
@@ -2287,7 +2394,7 @@ index 206bbcbdb..24f9f0ccb 100644
          if (loading) item(key = "loading") { CenteredLoader() }
          if (failed) {
              item(key = "failed") { EmptyState("Could not load this page.", "Retry") { startFetch(null) } }
-@@ -729,9 +775,67 @@ private fun PagedPage(
+@@ -729,9 +789,67 @@ private fun PagedPage(
      }
  }
  
@@ -2355,7 +2462,7 @@ index 206bbcbdb..24f9f0ccb 100644
      Box(
          modifier = Modifier
              .width(130.dp)
-@@ -747,7 +851,7 @@ private fun ShortCard(item: YtItem, siblings: List<YtItem>) {
+@@ -747,7 +865,7 @@ private fun ShortCard(item: YtItem, siblings: List<YtItem>) {
              modifier = Modifier.fillMaxSize(),
          )
          Text(
@@ -2364,7 +2471,7 @@ index 206bbcbdb..24f9f0ccb 100644
              color = Color.White,
              style = MaterialTheme.typography.labelMedium,
              maxLines = 2,
-@@ -786,7 +890,18 @@ private fun ItemCard(
+@@ -786,7 +904,18 @@ private fun ItemCard(
          }
          return
      }
@@ -2384,7 +2491,7 @@ index 206bbcbdb..24f9f0ccb 100644
          Box(
              modifier = Modifier
                  .fillMaxWidth()
-@@ -795,15 +910,22 @@ private fun ItemCard(
+@@ -795,15 +924,22 @@ private fun ItemCard(
                  .background(tokens.colors.surfaceCard),
          ) {
              AsyncImage(
@@ -2409,7 +2516,7 @@ index 206bbcbdb..24f9f0ccb 100644
              }
              if (badge.isNotBlank()) {
                  Text(
-@@ -831,7 +953,7 @@ private fun ItemCard(
+@@ -831,7 +967,7 @@ private fun ItemCard(
          Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.Top) {
              Column(Modifier.weight(1f)) {
                  Text(
@@ -2418,6 +2525,31 @@ index 206bbcbdb..24f9f0ccb 100644
                      color = tokens.colors.textPrimary,
                      style = MaterialTheme.typography.bodyMedium,
                      fontWeight = FontWeight.Medium,
+@@ -1074,3 +1210,24 @@ private fun EmptyState(message: String, actionLabel: String?, onAction: () -> Un
+         }
+     }
+ }
++
++/** Feed pages kept across the full player, so a return does not reload the list or lose the scroll spot. */
++internal object FeedCache {
++    class Snap(val items: List<YtItem>, val token: String?, val index: Int, val offset: Int, val savedAt: Long)
++
++    /** Bumped by a tab re-tap or a pull down; feed keys carry it, so a bump means a fresh load. */
++    val tick = androidx.compose.runtime.mutableIntStateOf(0)
++    private val map = object : LinkedHashMap<Any, Snap>() {
++        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Any, Snap>?) = size > 12
++    }
++
++    fun get(key: Any): Snap? = synchronized(map) {
++        map[key]?.takeIf { nowMs() - it.savedAt < 30 * 60_000L }
++    }
++
++    fun put(key: Any, items: List<YtItem>, token: String?, index: Int, offset: Int) = synchronized(map) {
++        map[key] = Snap(items, token, index, offset, nowMs())
++    }
++
++    private fun nowMs(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
++}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeSettings.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeSettings.kt
 index 063607dd5..7004f3115 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeSettings.kt
