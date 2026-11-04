@@ -79,15 +79,23 @@ index 455d4d9f3..13e8d3838 100644
                      profileId = activePlaybackProfileId,
                      title = item.title,
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index 04276c2fc..4aa2b133f 100644
+index 04276c2fc..c1b62abdf 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-@@ -791,6 +791,9 @@ private fun BoxScope.RenderPlaybackOverlays(
+@@ -27,6 +27,7 @@ import androidx.compose.runtime.key
+ import androidx.compose.runtime.mutableStateOf
+ import androidx.compose.runtime.remember
+ import androidx.compose.ui.Modifier
++import com.nuvio.app.features.youtube.YouTubeLogPanel
+ import androidx.compose.ui.layout.onSizeChanged
+ import androidx.lifecycle.compose.collectAsStateWithLifecycle
+ import com.nuvio.app.core.ui.NuvioStatusModal
+@@ -791,6 +792,9 @@ private fun BoxScope.RenderPlaybackOverlays(
                  args.onBack()
              },
          )
 +        if (activeProviderName == "YouTube" && (!playbackSnapshot.isPlaying || playbackSnapshot.isLoading)) {
-+            com.nuvio.app.features.youtube.YouTubeLogPanel(maxLines = 18, modifier = Modifier.padding(bottom = 64.dp))
++            YouTubeLogPanel(maxLines = 18, modifier = Modifier.padding(bottom = 64.dp))
 +        }
      }
  }
