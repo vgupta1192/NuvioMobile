@@ -67,7 +67,7 @@ index c1b3aa97a..05005d17c 100644
              null
          }
 diff --git a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt
-index 79335c171..935035f94 100644
+index 79335c171..668a884cb 100644
 --- a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt
 +++ b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt
 @@ -8,7 +8,12 @@ import androidx.media3.datasource.DataSource
@@ -128,7 +128,23 @@ index 79335c171..935035f94 100644
  
          override fun addTransferListener(transferListener: TransferListener) {
              upstream.addTransferListener(transferListener)
-@@ -72,20 +93,113 @@ class YoutubeChunkedDataSourceFactory(
+@@ -65,27 +86,128 @@ class YoutubeChunkedDataSourceFactory(
+         override fun open(dataSpec: DataSpec): Long {
+             val uri = dataSpec.uri
+             val host = uri.host.orEmpty()
+-            isYouTubeStream = host.contains("googlevideo.com")
++            // Live HLS manifests and segments (and /sq/ segment URLs) must not get a range parameter: googlevideo rejects it there.
++            val path = uri.path.orEmpty()
++            isYouTubeStream = host.contains("googlevideo.com") &&
++                path.contains("/videoplayback") &&
++                !path.contains("/sq/") &&
++                !path.endsWith(".m3u8") &&
++                !path.endsWith(".ts") &&
++                uri.getQueryParameter("live") != "1" &&
++                uri.getQueryParameter("source") != "yt_live_broadcast"
+ 
+             if (!isYouTubeStream) {
+                 return upstream.open(dataSpec)
              }
  
              originalDataSpec = dataSpec
@@ -245,7 +261,7 @@ index 79335c171..935035f94 100644
              }
              currentChunkEnd = end
  
-@@ -102,6 +216,7 @@ class YoutubeChunkedDataSourceFactory(
+@@ -102,6 +224,7 @@ class YoutubeChunkedDataSourceFactory(
  
              bytesReadInChunk = 0
              upstream.open(chunkedSpec)
@@ -253,7 +269,7 @@ index 79335c171..935035f94 100644
              return if (totalContentLength != C.LENGTH_UNSET.toLong()) totalContentLength else C.LENGTH_UNSET.toLong()
          }
  
-@@ -110,6 +225,30 @@ class YoutubeChunkedDataSourceFactory(
+@@ -110,6 +233,30 @@ class YoutubeChunkedDataSourceFactory(
                  return upstream.read(buffer, offset, length)
              }
  
@@ -284,7 +300,7 @@ index 79335c171..935035f94 100644
              val bytesRead = upstream.read(buffer, offset, length)
              if (bytesRead == C.RESULT_END_OF_INPUT) {
                  // Current chunk exhausted — open the next one
-@@ -131,7 +270,7 @@ class YoutubeChunkedDataSourceFactory(
+@@ -131,7 +278,7 @@ class YoutubeChunkedDataSourceFactory(
  
                  return try {
                      openNextChunk()
@@ -293,7 +309,7 @@ index 79335c171..935035f94 100644
                  } catch (e: Exception) {
                      Log.w(TAG, "Failed to open next chunk at $currentChunkStart: ${e.message}")
                      C.RESULT_END_OF_INPUT
-@@ -145,7 +284,9 @@ class YoutubeChunkedDataSourceFactory(
+@@ -145,7 +292,9 @@ class YoutubeChunkedDataSourceFactory(
          override fun getUri(): Uri? = upstream.uri ?: currentUri
  
          override fun close() {
