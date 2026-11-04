@@ -1,3 +1,74 @@
+diff --git a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt
+index ae3af7aca..bda2cdb43 100644
+--- a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt
++++ b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeChunkedDataSourceFactory.kt
+@@ -6,8 +6,9 @@ import androidx.media3.common.C
+ import androidx.media3.common.util.UnstableApi
+ import androidx.media3.datasource.DataSource
+ import androidx.media3.datasource.DataSpec
+-import androidx.media3.datasource.DefaultHttpDataSource
++import androidx.media3.datasource.HttpDataSource
+ import androidx.media3.datasource.TransferListener
++import com.nuvio.app.features.player.PlayerPlaybackNetworking
+ import com.nuvio.app.features.youtube.YouTubeStartTrace
+ import kotlinx.coroutines.runBlocking
+ import java.io.ByteArrayOutputStream
+@@ -47,21 +48,19 @@ class YoutubeChunkedDataSourceFactory(
+     }
+ 
+     override fun createDataSource(): DataSource {
+-        val upstreamFactory = DefaultHttpDataSource.Factory()
+-            .setConnectTimeoutMs(15_000)
+-            .setReadTimeoutMs(15_000)
+-            .setAllowCrossProtocolRedirects(true)
+-        if (defaultRequestHeaders.isNotEmpty()) {
+-            upstreamFactory.setDefaultRequestProperties(defaultRequestHeaders)
+-        }
++        // googlevideo ties a stream URL to the address that asked for it. The extractor asks over IPv4
++        // (IPv4FirstDns); the player's OkHttp client does the same, so the stream is fetched from that address.
++        // The old HttpURLConnection source took IPv6 first on dual-stack networks and got 403 / dropped streams.
++        val upstreamFactory = PlayerPlaybackNetworking
++            .createHttpDataSourceFactory(defaultRequestHeaders) as HttpDataSource.Factory
+         val upstream = upstreamFactory.createDataSource()
+         return YoutubeChunkedDataSource(upstream, chunkSizeBytes) { upstreamFactory.createDataSource() }
+     }
+ 
+     private class YoutubeChunkedDataSource(
+-        private val upstream: DefaultHttpDataSource,
++        private val upstream: HttpDataSource,
+         private val chunkSize: Long,
+-        private val newUpstream: () -> DefaultHttpDataSource
++        private val newUpstream: () -> HttpDataSource
+     ) : DataSource {
+ 
+         private var currentUri: Uri? = null
+diff --git a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeFirstChunkCache.kt b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeFirstChunkCache.kt
+index 50cec222a..87f9f3db8 100644
+--- a/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeFirstChunkCache.kt
++++ b/composeApp/src/androidFull/kotlin/com/nuvio/app/features/trailer/YoutubeFirstChunkCache.kt
+@@ -2,7 +2,6 @@ package com.nuvio.app.features.trailer
+ 
+ import androidx.media3.common.util.UnstableApi
+ import androidx.media3.datasource.DataSpec
+-import androidx.media3.datasource.DefaultHttpDataSource
+ import java.io.ByteArrayOutputStream
+ import java.util.concurrent.Executors
+ 
+@@ -53,11 +52,9 @@ internal object YoutubeFirstChunkCache {
+     }
+ 
+     private fun download(url: String, bytes: Int): ByteArray? {
+-        val upstream = DefaultHttpDataSource.Factory()
+-            .setConnectTimeoutMs(8_000)
+-            .setReadTimeoutMs(8_000)
+-            .setAllowCrossProtocolRedirects(true)
+-            .setDefaultRequestProperties(TrailerExtractionPlatform.defaultHeaders)
++        // Same address family as the extractor (IPv4 first): googlevideo URLs are tied to the asking address.
++        val upstream = com.nuvio.app.features.player.PlayerPlaybackNetworking
++            .createHttpDataSourceFactory(TrailerExtractionPlatform.defaultHeaders)
+             .createDataSource()
+         return try {
+             val rangedUri = android.net.Uri.parse(url).buildUpon()
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
 index b26d7493f..308791ec8 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
