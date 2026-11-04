@@ -1502,10 +1502,10 @@ index 000000000..123dc3ffd
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubeFeedCards.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubeFeedCards.kt
 new file mode 100644
-index 000000000..e833808a9
+index 000000000..e0591f1fd
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubeFeedCards.kt
-@@ -0,0 +1,349 @@
+@@ -0,0 +1,354 @@
 +package com.nuvio.app.youtube
 +
 +import android.view.TextureView
@@ -1823,7 +1823,12 @@ index 000000000..e833808a9
 +    var finished by remember(playable.videoId) { mutableStateOf(false) }
 +    LaunchedEffect(playable.videoId) {
 +        shared.play(playable)
-+        delay(PREVIEW_LENGTH_MS)
++        // Keep the spot, so full screen carries on from it instead of starting over.
++        val startedAt = android.os.SystemClock.elapsedRealtime()
++        while (android.os.SystemClock.elapsedRealtime() - startedAt < PREVIEW_LENGTH_MS) {
++            delay(1_000)
++            if (shared.showing) YouTubeProgress.hint(playable.videoId, shared.player.currentPosition, shared.player.duration.takeIf { it > 0 } ?: 0L)
++        }
 +        finished = true
 +        shared.stop()
 +    }
@@ -3053,10 +3058,10 @@ index 000000000..f8a25389a
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubeProgress.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubeProgress.kt
 new file mode 100644
-index 000000000..32a1ef413
+index 000000000..bbf4eff2f
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubeProgress.kt
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,101 @@
 +package com.nuvio.app.youtube
 +
 +import android.content.Context
@@ -3084,12 +3089,31 @@ index 000000000..32a1ef413
 +    private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "yt-progress").apply { isDaemon = true } }
 +    private val lastReported = ConcurrentHashMap<String, Long>()
 +
++    private class Hint(val positionMs: Long, val durationMs: Long, val at: Long)
++
++    /** Where a video got to a moment ago on this device (preview or full screen), kept in memory. */
++    private val hints = ConcurrentHashMap<String, Hint>()
++    private const val HINT_MAX_AGE_MS = 10 * 60 * 1000L
++
++    fun hint(videoId: String, positionMs: Long, durationMs: Long) {
++        if (positionMs < 1000) return
++        hints[videoId] = Hint(positionMs, durationMs, android.os.SystemClock.elapsedRealtime())
++    }
++
++    /** A recent position from this device, or null. It is newer than anything YouTube's account knows. */
++    fun recentHint(videoId: String?): Pair<Long, Long>? {
++        val h = hints[videoId ?: return null] ?: return null
++        if (android.os.SystemClock.elapsedRealtime() - h.at > HINT_MAX_AGE_MS) return null
++        return h.positionMs to h.durationMs
++    }
++
 +    fun isYouTubeId(contentId: String?) = contentId?.startsWith(ID_PREFIX) == true
 +
 +    /** Called by the player with where it's got to. Safe to call often. */
 +    fun record(context: Context, contentId: String?, positionMs: Long, durationMs: Long) {
 +        val videoId = contentId?.removePrefix(ID_PREFIX)?.takeIf { it.isNotBlank() } ?: return
 +        if (positionMs < 1000) return
++        hint(videoId, positionMs, durationMs)
 +        val app = context.applicationContext
 +        runCatching {
 +            app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
@@ -4523,10 +4547,10 @@ index 000000000..f2937070d
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubeViewModel.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubeViewModel.kt
 new file mode 100644
-index 000000000..a96a7916a
+index 000000000..fb7518bcd
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubeViewModel.kt
-@@ -0,0 +1,834 @@
+@@ -0,0 +1,843 @@
 +package com.nuvio.app.youtube
 +
 +import android.content.Context
@@ -5171,7 +5195,7 @@ index 000000000..a96a7916a
 +    /** The stream for a feed preview, or null when it can't be had (live streams are never previewed). */
 +    suspend fun previewStream(item: YtItem): YtPlayable? {
 +        if (item.kind != YtKind.VIDEO || item.isLive || item.videoId == null) return null
-+        val fresh = withContext(Dispatchers.IO) {
++        val fresh = if (recentPosition(item) != null) (-1 to 0L) else withContext(Dispatchers.IO) {
 +            kotlinx.coroutines.withTimeoutOrNull(2500L) { accountState(item) } ?: (-1 to 0L)
 +        }
 +        val startMs = resumeMs(item, fresh)
@@ -5268,9 +5292,18 @@ index 000000000..a96a7916a
 +        }.getOrDefault(-1 to 0L)
 +    }
 +
++    /** A position from this device in the last few minutes (preview or full screen); it beats the account's. */
++    private fun recentPosition(item: YtItem): Long? {
++        val (pos, dur) = YouTubeProgress.recentHint(item.videoId) ?: return null
++        val total = dur.takeIf { it > 0 } ?: item.source.durationMs
++        if (pos < 1000 || (total > 0 && pos >= total - 5_000L)) return 0L.takeIf { total > 0 && pos >= total - 5_000L }
++        return pos
++    }
++
 +    /** Where to start: the account's place (fresh, else the card's) wins, then this device's own. */
 +    private fun resumeMs(item: YtItem, fresh: Pair<Int, Long>): Long {
 +        if (item.isLive) return 0L
++        recentPosition(item)?.let { return it }
 +        val durationMs = item.source.durationMs.takeIf { it > 0 } ?: fresh.second
 +        if (durationMs <= 0) return 0L
 +        val account = if (fresh.first > 0) fresh.first else item.percentWatched
@@ -5292,7 +5325,7 @@ index 000000000..a96a7916a
 +        played.clear()
 +        prefetchJob?.cancel()
 +        viewModelScope.launch {
-+            val fresh = withContext(Dispatchers.IO) {
++            val fresh = if (recentPosition(item) != null) (-1 to 0L) else withContext(Dispatchers.IO) {
 +                kotlinx.coroutines.withTimeoutOrNull(4000L) { accountState(item) } ?: (-1 to 0L)
 +            }
 +            val startMs = resumeMs(item, fresh)
