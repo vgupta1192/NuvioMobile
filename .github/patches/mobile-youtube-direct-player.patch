@@ -552,14 +552,19 @@ index db2776747..0487698f1 100644
  }
 \ No newline at end of file
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-index 218394f06..dca7978c6 100644
+index 218394f06..455d4d9f3 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
-@@ -950,11 +950,21 @@ internal fun MainAppContent(
+@@ -950,11 +950,26 @@ internal fun MainAppContent(
          }
  
          fun openYouTubeVideo(item: com.nuvio.app.features.youtube.YtItem, positionMs: Long) {
 +            com.nuvio.app.features.youtube.YouTubeStartTrace.begin(item.id)
++            if (item.isLive) {
++                com.nuvio.app.features.youtube.YouTubePlayerHooks.liveItems[item.id] = item
++            } else {
++                com.nuvio.app.features.youtube.YouTubePlayerHooks.liveItems.remove(item.id)
++            }
 +            com.nuvio.app.features.youtube.YouTubeSettings.startQuality.current().toIntOrNull()
 +                .let { com.nuvio.app.features.youtube.YouTubeStreamQuality.setCap(item.id, it) }
 +            com.nuvio.app.features.youtube.YouTubeStreamQuality.setCodec(
@@ -580,7 +585,7 @@ index 218394f06..dca7978c6 100644
                  val playerLaunch = PlayerLaunch(
                      profileId = activePlaybackProfileId,
                      title = item.title,
-@@ -968,7 +978,8 @@ internal fun MainAppContent(
+@@ -968,7 +983,8 @@ internal fun MainAppContent(
                      parentMetaId = item.id,
                      parentMetaType = "other",
                      // 0 means "no position given": pick up where either player left this video.
@@ -590,7 +595,7 @@ index 218394f06..dca7978c6 100644
                          ?: com.nuvio.app.features.youtube.YouTubeRepository.savedPositionMs(item.id),
                  )
                  if (source == null || playerSettingsUiState.externalPlayerEnabled) {
-@@ -977,6 +988,7 @@ internal fun MainAppContent(
+@@ -977,6 +993,7 @@ internal fun MainAppContent(
                  }
                  val launchId = PlayerLaunchStore.put(playerLaunch)
                  navController.navigate(PlayerRoute(launchId = launchId, title = playerLaunch.title))
@@ -598,7 +603,7 @@ index 218394f06..dca7978c6 100644
              }
          }
  
-@@ -988,6 +1000,22 @@ internal fun MainAppContent(
+@@ -988,6 +1005,22 @@ internal fun MainAppContent(
              }
          }
  
@@ -621,7 +626,7 @@ index 218394f06..dca7978c6 100644
          // Jellyfin fork feature: nav entry opens the Jellyfin route
          LaunchedEffect(navController) {
              if (!ownsAppRuntime) return@LaunchedEffect
-@@ -1403,8 +1431,13 @@ internal fun MainAppContent(
+@@ -1403,8 +1436,13 @@ internal fun MainAppContent(
              )
          }
  
@@ -636,7 +641,7 @@ index 218394f06..dca7978c6 100644
                  type = item.parentMetaType,
                  videoId = item.videoId,
                  parentMetaId = item.parentMetaId,
-@@ -1418,7 +1451,17 @@ internal fun MainAppContent(
+@@ -1418,7 +1456,17 @@ internal fun MainAppContent(
  
          val openContinueWatching: (ContinueWatchingItem, Boolean, Boolean) -> Unit = { item, manualSelection, startFromBeginning ->
              resumePromptItem = null
@@ -1868,7 +1873,7 @@ index 9c3d732b9..e344c070a 100644
          val authed = token.startsWith("auth:")
          val plain = token.removePrefix("auth:")
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
-index e2c97bbf8..08cb1fe73 100644
+index e2c97bbf8..9fc38a5e6 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
 @@ -4,6 +4,8 @@ import androidx.compose.foundation.background
@@ -1880,16 +1885,19 @@ index e2c97bbf8..08cb1fe73 100644
  import androidx.compose.foundation.layout.Column
  import androidx.compose.foundation.layout.Row
  import androidx.compose.foundation.layout.fillMaxSize
-@@ -58,6 +60,8 @@ object YouTubePlayerPrefs {
+@@ -58,6 +60,11 @@ object YouTubePlayerPrefs {
  /** Set by the app shell: opens another YouTube video in the player. */
  object YouTubePlayerHooks {
      var playVideo: ((YtItem) -> Unit)? = null
++    /** Live streams opened in the player, by video id; an ended live stream reloads instead of moving on to the next video. */
++    val liveItems = mutableMapOf<String, YtItem>()
++    val liveRetries = mutableMapOf<String, Int>()
 +    /** Opens a channel page and turns the full player into the mini player. */
 +    var openChannel: ((channelId: String, name: String) -> Unit)? = null
  }
  
  private data class SponsorSegment(val startMs: Long, val endMs: Long, val category: String)
-@@ -105,6 +109,7 @@ data class YouTubeSessionState(
+@@ -105,6 +112,7 @@ data class YouTubeSessionState(
      val channel: String = "",
      val thumb: String = "",
      val channelId: String = "",
@@ -1897,7 +1905,7 @@ index e2c97bbf8..08cb1fe73 100644
      val related: List<YtItem> = emptyList(),
      val liked: Boolean = false,
      val disliked: Boolean = false,
-@@ -206,6 +211,8 @@ fun YouTubePlayerOptions(
+@@ -206,6 +214,8 @@ fun YouTubePlayerOptions(
          YouTubePlayerPrefs.loop.ensureLoaded()
          YouTubeRepository.ensureLoaded()
          segments = YouTubeSponsorBlock.segments(videoId)
@@ -1906,7 +1914,36 @@ index e2c97bbf8..08cb1fe73 100644
          val owner = YouTubeRepository.ownerOf(videoId)
          YouTubePlayerSession.update { it.copy(channelId = owner?.first.orEmpty(), channel = owner?.second?.ifBlank { channel } ?: channel) }
          val subs = runCatching { YtInnertube.subscriberText(videoId) }.getOrNull().orEmpty()
-@@ -284,7 +291,7 @@ fun YouTubePlayerOptions(
+@@ -228,6 +238,11 @@ fun YouTubePlayerOptions(
+         }
+     }
+ 
++    // A live stream that played for a minute earns its reload tries back.
++    LaunchedEffect(videoId, positionMs > 60_000L) {
++        if (positionMs > 60_000L) YouTubePlayerHooks.liveRetries.remove(videoId)
++    }
++
+     // End of video: loop it, or move on to the first suggested video.
+     LaunchedEffect(isEnded) {
+         if (!isEnded) {
+@@ -236,6 +251,16 @@ fun YouTubePlayerOptions(
+         }
+         if (handledEnd) return@LaunchedEffect
+         handledEnd = true
++        // A live stream that stops is reloaded (a few times); it never loops or hands over to the next video.
++        YouTubePlayerHooks.liveItems[videoId]?.let { live ->
++            val tries = YouTubePlayerHooks.liveRetries[videoId] ?: 0
++            if (tries < 3) {
++                YouTubePlayerHooks.liveRetries[videoId] = tries + 1
++                kotlinx.coroutines.delay(1500)
++                YouTubePlayerHooks.playVideo?.invoke(live)
++            }
++            return@LaunchedEffect
++        }
+         if (loop && controller != null) {
+             skipped = emptySet()
+             controller.seekTo(0L)
+@@ -284,7 +309,7 @@ fun YouTubePlayerOptions(
  
      if (session.showInfo) {
          val saved by YouTubeRepository.saved.collectAsState()
@@ -1915,7 +1952,7 @@ index e2c97bbf8..08cb1fe73 100644
          val cap = YouTubeStreamQuality.capFor(videoId)
          val subscribed = session.channelId.isNotBlank() && saved.subscriptions.any { it.id == session.channelId }
          val later = saved.watchLater.any { it.id == videoId }
-@@ -310,13 +317,27 @@ fun YouTubePlayerOptions(
+@@ -310,13 +335,27 @@ fun YouTubePlayerOptions(
                  busy = false
              }
          }
@@ -1948,7 +1985,7 @@ index e2c97bbf8..08cb1fe73 100644
                      .verticalScroll(rememberScrollState()),
                  verticalArrangement = Arrangement.spacedBy(10.dp),
              ) {
-@@ -385,7 +406,18 @@ fun YouTubePlayerOptions(
+@@ -385,7 +424,18 @@ fun YouTubePlayerOptions(
                          Text(if (later) "Saved" else "Watch later", color = if (later) accent else Color.White)
                      }
                  }
@@ -1968,7 +2005,7 @@ index e2c97bbf8..08cb1fe73 100644
                  if (heights.isEmpty()) {
                      Text("Resolutions load with the video.", color = Color(0xFFB0B0B0), style = MaterialTheme.typography.bodySmall)
                  } else {
-@@ -418,41 +450,19 @@ fun YouTubePlayerOptions(
+@@ -418,41 +468,19 @@ fun YouTubePlayerOptions(
                  TextButton(onClick = { close(); YouTubePlayerSession.update { it.copy(showUpNext = true) } }) { Text("Up next") }
                  }
              }
