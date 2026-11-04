@@ -1,0 +1,85 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+index b26d7493f..308791ec8 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+@@ -756,6 +756,19 @@ private fun ExoPlayerSurface(
+                     return
+                 }
+ 
++                // Normal YouTube video: googlevideo refused (403) or dropped the stream URL. Resolve a fresh URL and resume here.
++                val ytNetworkError = error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ||
++                        error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
++                        error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
++                        error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED ||
++                        error.errorCode == PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE
++                if (ytLog && ytNetworkError && !exoPlayer.isCurrentMediaItemLive &&
++                    com.nuvio.app.features.youtube.YouTubePlayerHooks.onVodStreamError
++                        ?.invoke(sourceUrl, exoPlayer.currentPosition.coerceAtLeast(0L)) == true
++                ) {
++                    return
++                }
++
+                 val isSourceError = error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW ||
+                         error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED ||
+                         error.cause?.toString()?.contains("UnrecognizedInputFormatException") == true
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+index d473cc50f..d975165fb 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt
+@@ -973,6 +973,9 @@ internal fun MainAppContent(
+                     }.getOrNull()
+                 com.nuvio.app.features.youtube.YouTubeStartTrace.mark("stream resolved")
+                 com.nuvio.app.features.youtube.YouTubeLiveLog.add("open", if (source == null) "no source (extractor: ${com.nuvio.app.features.youtube.YouTubeWarmupHooks.lastExtractFailure.orEmpty()}) -> external player" else "source ${com.nuvio.app.features.youtube.YouTubeLiveLog.shortUrl(source.videoUrl)} audio=${source.audioUrl != null}")
++                if (source != null && !item.isLive) {
++                    com.nuvio.app.features.youtube.YouTubePlayerHooks.vodItems[source.videoUrl] = item
++                }
+                 val playerLaunch = PlayerLaunch(
+                     profileId = activePlaybackProfileId,
+                     title = item.title,
+@@ -1006,6 +1009,22 @@ internal fun MainAppContent(
+                 navController.popBackStack()
+                 openYouTubeVideo(next, 0L)
+             }
++            // googlevideo dropped or refused a normal video's stream URL: resolve a fresh one and resume where it stopped (twice at most).
++            com.nuvio.app.features.youtube.YouTubePlayerHooks.onVodStreamError = onVod@{ url, positionMs ->
++                val item = com.nuvio.app.features.youtube.YouTubePlayerHooks.vodItems[url] ?: return@onVod false
++                val tries = com.nuvio.app.features.youtube.YouTubePlayerHooks.vodRetries[item.id] ?: 0
++                if (tries >= 2) return@onVod false
++                com.nuvio.app.features.youtube.YouTubePlayerHooks.vodRetries[item.id] = tries + 1
++                com.nuvio.app.features.youtube.YouTubeLiveLog.add("open", "${item.id} stream failed, re-resolve try ${tries + 1} at $positionMs")
++                com.nuvio.app.features.youtube.YouTubePlayerHooks.vodItems.remove(url)
++                coroutineScope.launch {
++                    // Drop any cached (stale) source so the next open resolves again.
++                    runCatching { com.nuvio.app.features.youtube.YouTubePrewarm.take(item.id) }
++                    navController.popBackStack()
++                    openYouTubeVideo(item, positionMs.coerceAtLeast(1L))
++                }
++                true
++            }
+         }
+ 
+         androidx.compose.runtime.LaunchedEffect(Unit) { com.nuvio.app.features.youtube.YouTubePrewarm.warmConfig() }
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
+index 9fc38a5e6..86d7dd5a6 100644
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubePlayerOptions.kt
+@@ -63,6 +63,11 @@ object YouTubePlayerHooks {
+     /** Live streams opened in the player, by video id; an ended live stream reloads instead of moving on to the next video. */
+     val liveItems = mutableMapOf<String, YtItem>()
+     val liveRetries = mutableMapOf<String, Int>()
++    /** Normal videos opened in the player, by source URL; a stream URL that googlevideo rejects mid-playback is resolved again. */
++    val vodItems = mutableMapOf<String, YtItem>()
++    val vodRetries = mutableMapOf<String, Int>()
++    /** Called by the engine when a YouTube stream URL fails (403, dropped connection). Returns true when a fresh player was started. */
++    var onVodStreamError: ((sourceUrl: String, positionMs: Long) -> Boolean)? = null
+     /** Opens a channel page and turns the full player into the mini player. */
+     var openChannel: ((channelId: String, name: String) -> Unit)? = null
+ }
+@@ -241,6 +246,7 @@ fun YouTubePlayerOptions(
+     // A live stream that played for a minute earns its reload tries back.
+     LaunchedEffect(videoId, positionMs > 60_000L) {
+         if (positionMs > 60_000L) YouTubePlayerHooks.liveRetries.remove(videoId)
++        if (positionMs > 90_000L) YouTubePlayerHooks.vodRetries.remove(videoId)
+     }
+ 
+     // End of video: loop it, or move on to the first suggested video.
