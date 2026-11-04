@@ -1,0 +1,21 @@
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+index 2f05894f6..a68c905ea 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/PlayerEngine.android.kt
+@@ -702,6 +702,7 @@ private fun ExoPlayerSurface(
+                     "Decoder failure (${error.errorCodeName}); retrying with app decoders",
+                     error,
+                 )
++                com.nuvio.app.features.youtube.YouTubeLiveLog.add("play", "decoder fallback ${error.errorCodeName}")
+                 fallbackStartPositionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+                 decoderPriorityOverride = DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+                 latestOnError.value(null)
+@@ -711,7 +712,7 @@ private fun ExoPlayerSurface(
+         }
+ 
+         val ytLog = sourceUrl.contains("googlevideo.com") || sourceUrl.contains("youtube.com")
+-        if (ytLog) com.nuvio.app.features.youtube.YouTubeLiveLog.add("play", "prepare ${com.nuvio.app.features.youtube.YouTubeLiveLog.shortUrl(sourceUrl)} audio=${sourceAudioUrl != null}")
++        if (ytLog) com.nuvio.app.features.youtube.YouTubeLiveLog.add("play", "prepare ${com.nuvio.app.features.youtube.YouTubeLiveLog.shortUrl(sourceUrl)} audio=${sourceAudioUrl != null} key=${initialPositionRequestKey} dec=${effectiveDecoderPriority} hdr=${sanitizedSourceHeaders.hashCode()} type=${normalizedStreamType} chunk=${useYoutubeChunkedPlayback}")
+         var ytLoadCount = 0
+         val listener = object : Player.Listener {
+             override fun onPlayerError(error: PlaybackException) {
