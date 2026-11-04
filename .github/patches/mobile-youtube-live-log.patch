@@ -210,19 +210,49 @@ index d48d81116..fa753c397 100644
          val deferred = synchronized(lock) {
              previews[item.id]?.takeIf { it.mark.elapsedNow() < MAX_AGE }?.source
 diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
-index 346c410bd..a90dff5ef 100644
+index 346c410bd..993412326 100644
 --- a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
 +++ b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
-@@ -368,6 +368,8 @@ class InAppYouTubeExtractor {
+@@ -252,6 +252,8 @@ class InAppYouTubeExtractor {
+         val clientNotes = mutableListOf<String>()
+         // Player API calls are independent: run them together instead of one after another.
+         var earlyExit = false
++        // A live stream lists adaptive file addresses that cannot be played as plain files; only its HLS playlist plays.
++        var isLiveVideo = false
+         kotlinx.coroutines.coroutineScope {
+             val calls = CLIENTS.map { client -> client.key to async {
+             runCatching {
+@@ -268,6 +270,7 @@ class InAppYouTubeExtractor {
+                     clientNotes += "${client.key}: no streamingData ${status?.stringValue("status")} ${status?.stringValue("reason")?.take(60)}"
+                     return@runCatching
+                 }
++                if (playerResponse.objectValue("videoDetails")?.booleanValue("isLive") == true) isLiveVideo = true
+                 val hlsManifestUrl = streamingData.stringValue("hlsManifestUrl")
+                 if (!hlsManifestUrl.isNullOrBlank()) {
+                     manifestUrls += Triple(client.key, client.priority, hlsManifestUrl)
+@@ -359,7 +362,7 @@ class InAppYouTubeExtractor {
+             } }
+             // The preferred client alone gives a separate video and audio pair: do not wait for the rest.
+             calls.firstOrNull { it.first == PREFERRED_SEPARATE_CLIENT }?.second?.await()
+-            if (!singleUrl && adaptiveVideo.isNotEmpty() && adaptiveAudio.isNotEmpty()) {
++            if (!isLiveVideo && !singleUrl && adaptiveVideo.isNotEmpty() && adaptiveAudio.isNotEmpty()) {
+                 earlyExit = true
+                 calls.forEach { it.second.cancel() }
+             } else {
+@@ -368,6 +371,12 @@ class InAppYouTubeExtractor {
          }
  
          com.nuvio.app.features.youtube.YouTubeStartTrace.mark(if (earlyExit) "clients done (early)" else "clients done (all)")
++        if (isLiveVideo && manifestUrls.isNotEmpty()) {
++            progressive.clear(); adaptiveVideo.clear(); adaptiveAudio.clear()
++            com.nuvio.app.features.youtube.YouTubeLiveLog.add("ext", "$videoId is live: using the HLS playlist only")
++        }
 +        com.nuvio.app.features.youtube.YouTubeLiveLog.add("ext", "$videoId clients: hls=${manifestUrls.joinToString(",") { it.first }.ifEmpty { "none" }} prog=${progressive.size} vid=${adaptiveVideo.size} aud=${adaptiveAudio.size}")
 +        clientNotes.forEach { com.nuvio.app.features.youtube.YouTubeLiveLog.add("ext", it) }
          if (manifestUrls.isEmpty() && progressive.isEmpty() && adaptiveVideo.isEmpty() && adaptiveAudio.isEmpty()) {
              com.nuvio.app.features.youtube.YouTubeWarmupHooks.lastExtractFailure = "no streams: ${clientNotes.joinToString(" | ").take(300)}"
              return null
-@@ -405,6 +407,8 @@ class InAppYouTubeExtractor {
+@@ -405,6 +414,8 @@ class InAppYouTubeExtractor {
              YouTubeLiveUserAgent.value = CLIENTS.firstOrNull { it.key == liveCandidate.client }?.userAgent
              bestManifest = liveCandidate
              com.nuvio.app.features.youtube.YouTubeWarmupHooks.lastExtractFailure = "live probe ${notes.joinToString(" | ")}".take(300)
