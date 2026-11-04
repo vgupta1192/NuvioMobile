@@ -605,6 +605,88 @@ index 867c2303e..000000000
 -        return result
 -    }
 -}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
+index 8fa1ef203..160dda1db 100644
+--- a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/player/generated/GeneratedSubtitleSession.kt
+@@ -898,18 +898,19 @@ internal class GeneratedSubtitleSession(
+             val part = parts.lastOrNull { it.first <= sec + 0.05 } ?: parts.first()
+             return part.third + ((sec.coerceIn(part.first, part.second) - part.first) * 1_000).toLong()
+         }
+-        // Whisper puts a line's start in the quiet before the words, or a little after they began. The
+-        // upload holds only speech, so a start that falls in a gap moves to the next speech part (not
+-        // back to the end of the previous one) and a start near a part's edge snaps to the edge.
++        // Whisper puts a line's start in the quiet before the words, often well ahead of them. The
++        // caller first moves each line onto the real speech in the audio ([refineSpan]); here the
++        // upload position becomes a place on the timeline. The upload holds only speech, so a start
++        // that falls in a gap moves to the next speech part.
+         fun startOnTimeline(sec: Double): Long {
+             val part = parts.firstOrNull { sec < it.second } ?: parts.last()
+-            val into = sec - part.first
+-            return if (into < SNAP_EDGE_SEC) part.third else part.third + ((into.coerceAtMost(part.second - part.first)) * 1_000).toLong()
++            val into = (sec - part.first).coerceIn(0.0, part.second - part.first)
++            return part.third + (into * 1_000).toLong()
+         }
+         fun endOnTimeline(sec: Double): Long {
+             val part = parts.lastOrNull { it.first < sec } ?: parts.first()
+             val into = (sec - part.first).coerceIn(0.0, part.second - part.first)
+-            return if (part.second - part.first - into < SNAP_EDGE_SEC) part.third + ((part.second - part.first) * 1_000).toLong() else part.third + (into * 1_000).toLong()
++            return part.third + (into * 1_000).toLong()
+         }
+         val hint = language.takeUnless { it == GeneratedSubtitles.AUTO }.orEmpty()
+         var heard = groq.recognize(audio, rate, translate = deepl == null, language = hint)
+@@ -928,17 +929,49 @@ internal class GeneratedSubtitleSession(
+             }
+         }
+         var added = 0
++        var floorSec = 0.0
+         heard.forEachIndexed { index, line ->
+             val text = (english?.getOrNull(index) ?: line.text).let(::cleanText) ?: return@forEachIndexed
+             if (isWhisperFiller(text) || !looksEnglish(text)) return@forEachIndexed
+-            val startMs = startOnTimeline(line.startSec)
+-            val endMs = maxOf(endOnTimeline(line.endSec), startMs + MIN_CUE_MS)
++            val (spanStart, spanEnd) = refineSpan(audio, rate, line.startSec, line.endSec, floorSec)
++            floorSec = spanEnd
++            val startMs = startOnTimeline(spanStart)
++            val endMs = maxOf(endOnTimeline(spanEnd), startMs + MIN_CUE_MS)
+             addLine(current, startMs, endMs, text)
+             added++
+         }
+         return added
+     }
+ 
++    /**
++     * Whisper's line times are rough: a line often starts in the quiet before the words. This finds
++     * where the speech really starts and ends inside Whisper's span, from the loudness of the audio
++     * itself, so the line shows when the words are heard. [floorSec] keeps it off the previous line.
++     */
++    private fun refineSpan(audio: FloatArray, rate: Int, startSec: Double, endSec: Double, floorSec: Double): Pair<Double, Double> {
++        val frame = rate / 50 // 20 ms
++        val lo = (maxOf(floorSec, startSec - 0.25).coerceAtLeast(0.0) * rate).toInt()
++        val hi = minOf(audio.size.toDouble(), (endSec + 0.15) * rate).toInt()
++        val count = (hi - lo) / frame
++        if (count < 6) return startSec to endSec
++        val level = FloatArray(count) { i ->
++            var sum = 0f
++            val from = lo + i * frame
++            for (n in from until from + frame) sum += audio[n] * audio[n]
++            kotlin.math.sqrt(sum / frame)
++        }
++        val sorted = level.sortedArray()
++        val noise = sorted[(count * 0.15).toInt()]
++        val peak = sorted[(count * 0.95).toInt().coerceAtMost(count - 1)]
++        val threshold = maxOf(noise * 2.5f, peak * 0.18f, 0.003f)
++        fun loud(i: Int) = i in 0 until count && level[i] >= threshold
++        val first = (0 until count - 2).firstOrNull { loud(it) && loud(it + 1) && loud(it + 2) } ?: return startSec to endSec
++        val last = (count - 1 downTo 2).firstOrNull { loud(it) && loud(it - 1) && loud(it - 2) } ?: return startSec to endSec
++        val start = (lo + first * frame).toDouble() / rate - 0.04
++        val end = (lo + (last + 1) * frame).toDouble() / rate + 0.1
++        return if (end - start >= 0.3) maxOf(start, floorSec) to end else startSec to endSec
++    }
++
+     /** Set when the last window was dropped because the user seeked away (not a failure). */
+     @Volatile
+     private var cancelledWindow = false
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/streams/YouTubeDiagReport.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/streams/YouTubeDiagReport.android.kt
 deleted file mode 100644
 index f5e23955f..000000000
