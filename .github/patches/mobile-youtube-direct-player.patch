@@ -1286,10 +1286,10 @@ index 000000000..fb9f4dcf1
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
 new file mode 100644
-index 000000000..90b440414
+index 000000000..8ccf368f8
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
-@@ -0,0 +1,260 @@
+@@ -0,0 +1,311 @@
 +package com.nuvio.app.features.youtube
 +
 +import androidx.compose.foundation.background
@@ -1347,6 +1347,19 @@ index 000000000..90b440414
 +    val activeKey = mutableStateOf<String?>(null)
 +    val muted = mutableStateOf(true)
 +    val captions = mutableStateOf(false)
++    /** Live position of the playing preview, for the card's time badge. */
++    val elapsedKey = mutableStateOf<String?>(null)
++    val elapsedMs = mutableStateOf(0L)
++    /** Where each preview last was, so the full player can open at that point. */
++    val positions = HashMap<String, Long>()
++
++    fun format(ms: Long): String {
++        val total = (ms / 1000).coerceAtLeast(0)
++        val h = total / 3600
++        val m = (total % 3600) / 60
++        val sec = total % 60
++        return if (h > 0) "$h:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}" else "$m:${sec.toString().padStart(2, '0')}"
++    }
 +}
 +
 +private fun previewable(item: YtItem) =
@@ -1424,6 +1437,31 @@ index 000000000..90b440414
 +        }
 +    }
 +    LaunchedEffect(controller, muted) { controller?.setMuted(muted) }
++    // Starts where the preview or the full player last left this video.
++    var resumed by remember(item.id) { mutableStateOf(false) }
++    LaunchedEffect(controller, snapshot.durationMs) {
++        val c = controller ?: return@LaunchedEffect
++        if (resumed || snapshot.durationMs <= 0L) return@LaunchedEffect
++        resumed = true
++        val at = InlinePreview.positions[item.id] ?: YouTubeRepository.savedPositionMs(item.id)
++        if (at > 2_000L && at < snapshot.durationMs - 10_000L) c.seekTo(at)
++    }
++    LaunchedEffect(snapshot.positionMs) {
++        if (snapshot.positionMs > 0L) {
++            InlinePreview.positions[item.id] = snapshot.positionMs
++            InlinePreview.elapsedKey.value = item.key
++            InlinePreview.elapsedMs.value = snapshot.positionMs
++        }
++    }
++    DisposableEffect(item.id) { onDispose { if (InlinePreview.elapsedKey.value == item.key) InlinePreview.elapsedKey.value = null } }
++    var captionNote by remember(item.id) { mutableStateOf(false) }
++    LaunchedEffect(captions, cues) {
++        captionNote = false
++        if (captions && cues.isEmpty()) {
++            delay(4_000)
++            if (cues.isEmpty()) captionNote = true
++        }
++    }
 +    LaunchedEffect(snapshot.isEnded) {
 +        if (snapshot.isEnded) {
 +            controller?.seekTo(0L)
@@ -1463,7 +1501,7 @@ index 000000000..90b440414
 +            Box(
 +                Modifier
 +                    .fillMaxSize()
-+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onOpen(snapshot.positionMs) },
++                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onOpen(snapshot.positionMs.takeIf { it > 0L } ?: InlinePreview.positions[item.id] ?: 0L) },
 +            )
 +            val cue = if (captions) cues.firstOrNull { snapshot.positionMs >= it.startTimeMs && snapshot.positionMs < it.endTimeMs } else null
 +            if (cue != null) {
@@ -1476,6 +1514,19 @@ index 000000000..90b440414
 +                    modifier = Modifier
 +                        .align(Alignment.BottomCenter)
 +                        .padding(start = 24.dp, end = 24.dp, bottom = 16.dp)
++                        .clip(RoundedCornerShape(4.dp))
++                        .background(Color.Black.copy(alpha = 0.7f))
++                        .padding(horizontal = 6.dp, vertical = 2.dp),
++                )
++            }
++            if (captionNote) {
++                Text(
++                    text = "No captions for this video",
++                    color = Color.White,
++                    fontSize = 11.sp,
++                    modifier = Modifier
++                        .align(Alignment.BottomCenter)
++                        .padding(bottom = 22.dp)
 +                        .clip(RoundedCornerShape(4.dp))
 +                        .background(Color.Black.copy(alpha = 0.7f))
 +                        .padding(horizontal = 6.dp, vertical = 2.dp),
@@ -1864,7 +1915,7 @@ index 000000000..0e268ffa7
 +    private const val MAX_ENTRIES = 8
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
-index 206bbcbdb..d3e89b50d 100644
+index 206bbcbdb..24f9f0ccb 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeScreen.kt
 @@ -2,6 +2,9 @@ package com.nuvio.app.features.youtube
@@ -1894,7 +1945,7 @@ index 206bbcbdb..d3e89b50d 100644
  import androidx.compose.runtime.collectAsState
  import androidx.compose.runtime.derivedStateOf
  import androidx.compose.runtime.getValue
-@@ -87,10 +93,15 @@ import kotlinx.coroutines.launch
+@@ -87,10 +93,17 @@ import kotlinx.coroutines.launch
  /** Opens a video in the app's full player: item and the position to start from. */
  private val LocalFullPlayer = staticCompositionLocalOf<(YtItem, Long) -> Unit> { { _, _ -> } }
  
@@ -1907,11 +1958,13 @@ index 206bbcbdb..d3e89b50d 100644
          YouTubeRepository.openShortsAt(item, siblings)
          YouTubeRepository.push(YtPage.Shorts)
 +    } else if (item.kind == YtKind.VIDEO && directPlayer != null) {
++        // The preview resumes from the full player's saved position afterwards.
++        if (startMs > 0L) InlinePreview.positions.remove(item.id)
 +        directPlayer?.invoke(item, startMs)
      } else {
          YouTubeRepository.play(item)
      }
-@@ -102,6 +113,12 @@ fun YouTubeScreen(
+@@ -102,6 +115,12 @@ fun YouTubeScreen(
      onOpenInPlayer: (item: YtItem, positionMs: Long) -> Unit,
  ) {
      val tokens = MaterialTheme.nuvio
@@ -1924,7 +1977,7 @@ index 206bbcbdb..d3e89b50d 100644
      LaunchedEffect(Unit) {
          YouTubeRepository.ensureLoaded()
          YouTubePrefs.autoplay.ensureLoaded()
-@@ -138,6 +155,8 @@ fun YouTubeScreen(
+@@ -138,6 +157,8 @@ fun YouTubeScreen(
          YtPage.Shorts -> "Shorts"
      }
  
@@ -1933,7 +1986,7 @@ index 206bbcbdb..d3e89b50d 100644
      CompositionLocalProvider(LocalFullPlayer provides onOpenInPlayer) {
          Box(Modifier.fillMaxSize().background(tokens.colors.background)) {
              Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
-@@ -246,8 +265,18 @@ private fun YouTubeRootHeader(title: String, onSettings: () -> Unit, onAccount:
+@@ -246,8 +267,18 @@ private fun YouTubeRootHeader(title: String, onSettings: () -> Unit, onAccount:
  }
  
  @Composable
@@ -1952,7 +2005,7 @@ index 206bbcbdb..d3e89b50d 100644
      val horizontal = tokens.spacing.screenHorizontal
      val account by YouTubeAccount.state.collectAsState()
      LaunchedEffect(Unit) { YouTubeAccount.ensureLoaded() }
-@@ -276,19 +305,31 @@ private fun RootContent(tab: Int, onTab: (Int) -> Unit) {
+@@ -276,19 +307,31 @@ private fun RootContent(tab: Int, onTab: (Int) -> Unit) {
              items(shownTabs.size) { position ->
                  val id = shownTabs[position]
                  val index = YouTubeSettings.tabs.indexOfFirst { it.first == id }
@@ -1994,7 +2047,7 @@ index 206bbcbdb..d3e89b50d 100644
          }
      }
  }
-@@ -334,76 +375,72 @@ private fun SearchField(modifier: Modifier = Modifier) {
+@@ -334,76 +377,72 @@ private fun SearchField(modifier: Modifier = Modifier) {
  }
  
  @Composable
@@ -2119,7 +2172,7 @@ index 206bbcbdb..d3e89b50d 100644
      if (!account.signedIn && saved.subscriptions.isEmpty()) {
          Column(Modifier.fillMaxWidth().padding(horizontal = horizontal), verticalArrangement = Arrangement.spacedBy(12.dp)) {
              YouTubeAccountPanel()
-@@ -411,7 +448,10 @@ private fun SubscriptionsTab() {
+@@ -411,7 +450,10 @@ private fun SubscriptionsTab() {
          }
          return
      }
@@ -2130,7 +2183,7 @@ index 206bbcbdb..d3e89b50d 100644
          modifier = Modifier.fillMaxSize(),
          contentPadding = PaddingValues(start = horizontal, end = horizontal, bottom = 24.dp),
          verticalArrangement = Arrangement.spacedBy(16.dp),
-@@ -434,7 +474,7 @@ private fun SubscriptionsTab() {
+@@ -434,7 +476,7 @@ private fun SubscriptionsTab() {
  
  /** A feed that only exists for a signed-in account: history and playlists. */
  @Composable
@@ -2139,7 +2192,7 @@ index 206bbcbdb..d3e89b50d 100644
      val horizontal = MaterialTheme.nuvio.spacing.screenHorizontal
      val account by YouTubeAccount.state.collectAsState()
      if (!account.signedIn) {
-@@ -444,17 +484,17 @@ private fun AccountFeedTab(id: String, browseId: String, signInHint: String) {
+@@ -444,17 +486,17 @@ private fun AccountFeedTab(id: String, browseId: String, signInHint: String) {
          }
          return
      }
@@ -2160,7 +2213,7 @@ index 206bbcbdb..d3e89b50d 100644
          if (token != null) return@PagedPage YtInnertube.continuation(token)
          val page = feed?.let { YtInnertube.browseFeed(it.first) }
          if (page != null && page.items.isNotEmpty()) page else feed?.let { YtInnertube.search(it.second, YtInnertube.VIDEOS_ONLY) } ?: page
-@@ -509,13 +549,14 @@ private fun ShortsHost(modifier: Modifier) {
+@@ -509,13 +551,14 @@ private fun ShortsHost(modifier: Modifier) {
  }
  
  @Composable
@@ -2176,7 +2229,7 @@ index 206bbcbdb..d3e89b50d 100644
      LazyColumn(
          modifier = Modifier.fillMaxSize(),
          contentPadding = PaddingValues(start = horizontal, end = horizontal, bottom = 24.dp),
-@@ -659,6 +700,7 @@ private fun ChannelHeader(channelId: String, name: String) {
+@@ -659,6 +702,7 @@ private fun ChannelHeader(channelId: String, name: String) {
  private fun PagedPage(
      key: Any,
      header: (@Composable () -> Unit)?,
@@ -2184,7 +2237,7 @@ index 206bbcbdb..d3e89b50d 100644
      load: suspend (token: String?) -> YtPageResult?,
  ) {
      val tokens = MaterialTheme.nuvio
-@@ -700,8 +742,16 @@ private fun PagedPage(
+@@ -700,8 +744,16 @@ private fun PagedPage(
      }
  
      val visible = items.filter(keep)
@@ -2202,7 +2255,7 @@ index 206bbcbdb..d3e89b50d 100644
      LazyColumn(
          state = listState,
          modifier = Modifier.fillMaxSize(),
-@@ -709,17 +759,11 @@ private fun PagedPage(
+@@ -709,17 +761,11 @@ private fun PagedPage(
          verticalArrangement = Arrangement.spacedBy(16.dp),
      ) {
          if (header != null) item(key = "header") { header() }
@@ -2223,7 +2276,7 @@ index 206bbcbdb..d3e89b50d 100644
          if (loading) item(key = "loading") { CenteredLoader() }
          if (failed) {
              item(key = "failed") { EmptyState("Could not load this page.", "Retry") { startFetch(null) } }
-@@ -729,9 +773,67 @@ private fun PagedPage(
+@@ -729,9 +775,67 @@ private fun PagedPage(
      }
  }
  
@@ -2291,7 +2344,7 @@ index 206bbcbdb..d3e89b50d 100644
      Box(
          modifier = Modifier
              .width(130.dp)
-@@ -747,7 +849,7 @@ private fun ShortCard(item: YtItem, siblings: List<YtItem>) {
+@@ -747,7 +851,7 @@ private fun ShortCard(item: YtItem, siblings: List<YtItem>) {
              modifier = Modifier.fillMaxSize(),
          )
          Text(
@@ -2300,7 +2353,7 @@ index 206bbcbdb..d3e89b50d 100644
              color = Color.White,
              style = MaterialTheme.typography.labelMedium,
              maxLines = 2,
-@@ -786,7 +888,18 @@ private fun ItemCard(
+@@ -786,7 +890,18 @@ private fun ItemCard(
          }
          return
      }
@@ -2320,7 +2373,7 @@ index 206bbcbdb..d3e89b50d 100644
          Box(
              modifier = Modifier
                  .fillMaxWidth()
-@@ -795,11 +908,13 @@ private fun ItemCard(
+@@ -795,15 +910,22 @@ private fun ItemCard(
                  .background(tokens.colors.surfaceCard),
          ) {
              AsyncImage(
@@ -2335,7 +2388,17 @@ index 206bbcbdb..d3e89b50d 100644
              val badge = when {
                  item.kind == YtKind.PLAYLIST -> "PLAYLIST"
                  item.isLive -> "LIVE"
-@@ -831,7 +946,7 @@ private fun ItemCard(
+-                else -> item.duration
++                else -> {
++                    val liveMs = InlinePreview.elapsedMs.value
++                    if (previewKey == item.key && InlinePreview.elapsedKey.value == item.key && liveMs > 0L) {
++                        "${InlinePreview.format(liveMs)} / ${item.duration}"
++                    } else item.duration
++                }
+             }
+             if (badge.isNotBlank()) {
+                 Text(
+@@ -831,7 +953,7 @@ private fun ItemCard(
          Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.Top) {
              Column(Modifier.weight(1f)) {
                  Text(
