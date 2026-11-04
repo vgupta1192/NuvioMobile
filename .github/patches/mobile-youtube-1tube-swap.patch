@@ -2241,16 +2241,18 @@ index 000000000..ac1c21430
 +}
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubePlayerPanel.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubePlayerPanel.kt
 new file mode 100644
-index 000000000..87b9eb852
+index 000000000..5a43d07da
 --- /dev/null
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/youtube/YouTubePlayerPanel.kt
-@@ -0,0 +1,345 @@
+@@ -0,0 +1,350 @@
 +package com.nuvio.app.youtube
 +
 +import androidx.activity.compose.BackHandler
 +import androidx.compose.foundation.background
 +import androidx.compose.foundation.clickable
 +import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.verticalScroll
 +import androidx.compose.foundation.layout.Box
 +import androidx.compose.foundation.layout.BoxWithConstraints
 +import androidx.compose.foundation.layout.Column
@@ -2410,7 +2412,10 @@ index 000000000..87b9eb852
 +        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
 +        return
 +    }
-+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
++    Column(
++        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
++        verticalArrangement = Arrangement.spacedBy(8.dp),
++    ) {
 +        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
 +            Action(
 +                label = if (info?.likeCount != null) "Like  ${info.likeCount}" else "Like",
@@ -5680,10 +5685,31 @@ index 06cf52fa7..edfca1dc0 100644
      val controller = playerController ?: return
      val sourceUrl = activeSourceUrl
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
-index 2382e0432..181a13ab8 100644
+index 2382e0432..52085fde0 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeEffects.kt
-@@ -575,6 +575,16 @@ private fun PlayerScreenRuntime.BindPlayerMetadataAndSkipEffects() {
+@@ -429,8 +429,11 @@ private fun PlayerScreenRuntime.BindPlayerUiVisibilityEffects() {
+         playbackSnapshot.isLoading,
+         showParentalGuide,
+         errorMessage,
++        com.nuvio.app.features.youtube.YouTubeHost.panelOpen,
+     ) {
++        val isYouTube = (contentType ?: parentMetaType).equals("youtube", ignoreCase = true)
+         if (
++            com.nuvio.app.features.youtube.YouTubeHost.panelOpen ||
+             !controlsVisible ||
+             isScrubbingTimeline ||
+             !playbackSnapshot.isPlaying ||
+@@ -440,7 +443,7 @@ private fun PlayerScreenRuntime.BindPlayerUiVisibilityEffects() {
+         ) {
+             return@LaunchedEffect
+         }
+-        delay(if (folded) 5000 else 3500)
++        delay(if (isYouTube) 8000 else if (folded) 5000 else 3500)
+         controlsVisible = false
+     }
+ 
+@@ -575,6 +578,16 @@ private fun PlayerScreenRuntime.BindPlayerMetadataAndSkipEffects() {
          val season = activeSeasonNumber
          val episode = activeEpisodeNumber
          val vid = activeVideoId
@@ -5700,7 +5726,7 @@ index 2382e0432..181a13ab8 100644
          if (!playerSettingsUiState.skipIntroEnabled) return@LaunchedEffect
          if ((contentType ?: parentMetaType).equals("movie", ignoreCase = true)) {
              applyRemoteSkipTimes(SkipIntroRepository.getMovieSkipIntervals(parentMetaId, vid))
-@@ -633,9 +643,14 @@ private fun PlayerScreenRuntime.BindPlayerMetadataAndSkipEffects() {
+@@ -633,9 +646,14 @@ private fun PlayerScreenRuntime.BindPlayerMetadataAndSkipEffects() {
          val controller = playerController
          if (current != null && controller != null &&
              playerControllerSourceUrl == activeSourceUrl &&
@@ -5730,7 +5756,7 @@ index 9b81c6b54..fc9d34312 100644
      if (hasRequestedScrobbleStartForCurrentItem) return
      hasRequestedScrobbleStartForCurrentItem = true
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index c1b62abdf..53b8160f9 100644
+index c1b62abdf..318878888 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 @@ -26,8 +26,8 @@ import androidx.compose.runtime.getValue
@@ -5752,7 +5778,7 @@ index c1b62abdf..53b8160f9 100644
                      modifier = videoModifier,
                      playWhenReady = shouldPlay,
                      initialPositionMs = activeInitialPositionMs.takeIf { it > 0L },
-@@ -369,23 +369,28 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+@@ -369,23 +369,32 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
                      .padding(end = horizontalSafePadding + 16.dp, bottom = 96.dp),
              )
          }
@@ -5775,6 +5801,10 @@ index c1b62abdf..53b8160f9 100644
 -                durationMs = playbackSnapshot.durationMs,
 +        val isYouTube = (contentType ?: parentMetaType).equals("youtube", ignoreCase = true)
 +        var showYouTubePanel by remember { mutableStateOf(false) }
++        androidx.compose.runtime.DisposableEffect(showYouTubePanel) {
++            com.nuvio.app.features.youtube.YouTubeHost.panelOpen = showYouTubePanel
++            onDispose { com.nuvio.app.features.youtube.YouTubeHost.panelOpen = false }
++        }
 +        val youTubeAction = if (isYouTube && com.nuvio.app.features.youtube.YouTubeHost.playerPanel != null) {
 +            com.nuvio.app.features.youtube.YouTubeHost.playerControls
 +                ?.invoke(activeVideoId ?: videoId.orEmpty()) { showYouTubePanel = true }
@@ -5798,7 +5828,7 @@ index c1b62abdf..53b8160f9 100644
              )
          }
          Box(modifier = videoModifier) {
-@@ -406,6 +411,19 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
+@@ -406,6 +415,19 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
              RenderPlayerModals(displayedPositionMs = displayedPositionMs)
              RenderParty(runtime = runtime)
          }
@@ -5818,7 +5848,7 @@ index c1b62abdf..53b8160f9 100644
          }
      }
  }
-@@ -544,7 +562,9 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
+@@ -544,7 +566,9 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
                  flushWatchProgress()
                  args.onBack()
              },
@@ -5829,7 +5859,7 @@ index c1b62abdf..53b8160f9 100644
                  { openPartyPanel() }
              } else {
                  null
-@@ -571,7 +591,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
+@@ -571,7 +595,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
              } else {
                  null
              },
@@ -5838,7 +5868,7 @@ index c1b62abdf..53b8160f9 100644
              onEpisodesClick = if (isSeries) { { openEpisodesPanel() } } else null,
              chapters = chapters,
              onChaptersClick = if (chapters.isNotEmpty()) { { openChaptersPanel() } } else null,
-@@ -651,9 +671,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
+@@ -651,9 +675,7 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
              onQualityClick = if (!isIos) {
                  {
                      refreshTracks()
@@ -5849,7 +5879,7 @@ index c1b62abdf..53b8160f9 100644
                  }
              } else {
                  null
-@@ -792,9 +810,6 @@ private fun BoxScope.RenderPlaybackOverlays(
+@@ -792,9 +814,6 @@ private fun BoxScope.RenderPlaybackOverlays(
                  args.onBack()
              },
          )
@@ -7603,13 +7633,15 @@ index fb9f4dcf1..000000000
 -}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeHost.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeHost.kt
 new file mode 100644
-index 000000000..e2f26fab3
+index 000000000..a8dbf8e3a
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeHost.kt
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,84 @@
 +package com.nuvio.app.features.youtube
 +
 +import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.setValue
 +import androidx.compose.ui.Modifier
 +
 +/** What the YouTube page hands back when you pick a video. */
@@ -7646,6 +7678,9 @@ index 000000000..e2f26fab3
 +val LocalYouTubePlayerAction = androidx.compose.runtime.compositionLocalOf<YouTubePlayerAction?> { null }
 +
 +object YouTubeHost {
++    /** True while a YouTube panel is open; the player keeps its controls up meanwhile. */
++    var panelOpen by androidx.compose.runtime.mutableStateOf(false)
++
 +    /** The panel opened from the player's YouTube button: like, subscribe, save, comments. */
 +    var playerPanel: (@Composable (videoId: String, onDismiss: () -> Unit) -> Unit)? = null
 +
