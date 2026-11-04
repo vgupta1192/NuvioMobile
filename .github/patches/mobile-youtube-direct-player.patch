@@ -857,7 +857,7 @@ index 82df34dbd..0d5823099 100644
              flushWatchProgress(TrackingScrobbleAction.STOP)
              previousIsPlaying = false
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index bb470fdf6..8777f2abc 100644
+index bb470fdf6..a1f34d13f 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 @@ -210,6 +210,8 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
@@ -869,7 +869,17 @@ index bb470fdf6..8777f2abc 100644
                      modifier = videoModifier,
                      playWhenReady = shouldPlay,
                      initialPositionMs = activeInitialPositionMs.takeIf { it > 0L },
-@@ -649,7 +651,9 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
+@@ -539,7 +541,8 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
+             },
+             onBack = {
+                 flushWatchProgress()
+-                if (!isIos && MiniPlayerSetting.isEnabled()) handOffToMiniPlayer()
++                // The back button of a YouTube video leaves to the feed, whose preview resumes here; swipe-back still minimizes.
++                if (!isIos && activeProviderName != "YouTube" && MiniPlayerSetting.isEnabled()) handOffToMiniPlayer()
+                 args.onBack()
+             },
+             onPartyClick = if (PartyRepository.available.collectAsStateWithLifecycle().value) {
+@@ -649,7 +652,9 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
              onQualityClick = if (!isIos) {
                  {
                      refreshTracks()
