@@ -735,16 +735,18 @@ index e5a4e66b2..679cad68b 100644
              } else if (action.icon != null) {
                  Icon(action.icon, null, tint = Color.White, modifier = Modifier.size(NuvioTokens.Icon.md))
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/MiniPlayer.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/MiniPlayer.kt
-index 48c14936d..3ec13608f 100644
+index 48c14936d..9a3f23471 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/MiniPlayer.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/MiniPlayer.kt
-@@ -187,7 +187,8 @@ internal fun PlayerScreenRuntime.BindMiniPlayerEffects(presentation: Boolean?) {
-     // Back minimizes into the mini player (like upstream) when it is enabled; otherwise it leaves.
+@@ -184,10 +184,9 @@ internal fun PlayerScreenRuntime.BindMiniPlayerEffects(presentation: Boolean?) {
+             onDispose { MiniPlayerController.detach(runtime) }
+         }
+     }
+-    // Back minimizes into the mini player (like upstream) when it is enabled; otherwise it leaves.
++    // Back (button or swipe) always leaves; the mini player starts only from its button in the player.
      PlatformBackHandler(enabled = presentation == false) {
          flushWatchProgress()
 -        if (MiniPlayerSetting.isEnabled()) handOffToMiniPlayer()
-+        // A YouTube video leaves to the feed; its mini player starts only from the mini player button.
-+        if (activeProviderName != "YouTube" && MiniPlayerSetting.isEnabled()) handOffToMiniPlayer()
          args.onBack()
      }
  }
@@ -943,7 +945,7 @@ index 82df34dbd..2382e0432 100644
              flushWatchProgress(TrackingScrobbleAction.STOP)
              previousIsPlaying = false
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
-index bb470fdf6..a1f34d13f 100644
+index bb470fdf6..04276c2fc 100644
 --- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
 @@ -210,6 +210,8 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
@@ -955,17 +957,15 @@ index bb470fdf6..a1f34d13f 100644
                      modifier = videoModifier,
                      playWhenReady = shouldPlay,
                      initialPositionMs = activeInitialPositionMs.takeIf { it > 0L },
-@@ -539,7 +541,8 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
+@@ -539,7 +541,6 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
              },
              onBack = {
                  flushWatchProgress()
 -                if (!isIos && MiniPlayerSetting.isEnabled()) handOffToMiniPlayer()
-+                // The back button of a YouTube video leaves to the feed, whose preview resumes here; swipe-back still minimizes.
-+                if (!isIos && activeProviderName != "YouTube" && MiniPlayerSetting.isEnabled()) handOffToMiniPlayer()
                  args.onBack()
              },
              onPartyClick = if (PartyRepository.available.collectAsStateWithLifecycle().value) {
-@@ -649,7 +652,9 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
+@@ -649,7 +650,9 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
              onQualityClick = if (!isIos) {
                  {
                      refreshTracks()
@@ -3139,7 +3139,7 @@ index 000000000..0d06be8b4
 +    var lastExtractFailure: String? = null
 +}
 diff --git a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
-index 3ff0cebd2..08a7c972e 100644
+index 3ff0cebd2..1c3d671f8 100644
 --- a/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
 +++ b/composeApp/src/fullCommonMain/kotlin/com/nuvio/app/features/trailer/InAppYouTubeExtractor.kt
 @@ -1,7 +1,12 @@
@@ -3295,7 +3295,7 @@ index 3ff0cebd2..08a7c972e 100644
                          )
                      } else if (hasAudio) {
                          val bitrate = format.numberValue("bitrate")
-@@ -282,32 +347,49 @@ class InAppYouTubeExtractor {
+@@ -282,32 +347,50 @@ class InAppYouTubeExtractor {
                          )
                      }
                  }
@@ -3319,33 +3319,28 @@ index 3ff0cebd2..08a7c972e 100644
              return null
          }
  
-+        val manifestCandidates = if (earlyExit) emptyList() else kotlinx.coroutines.coroutineScope {
-+            manifestUrls.map { (clientKey, priority, manifestUrl) -> async {
-+                runCatching {
-+                    val variant = parseHlsManifest(manifestUrl) ?: return@runCatching null
-+                    ManifestCandidate(
-+                        client = clientKey,
-+                        priority = priority,
-+                        manifestUrl = manifestUrl,
-+                        selectedVariantUrl = variant.url,
-+                        height = variant.height,
-+                        bandwidth = variant.bandwidth,
-+                    )
-+                }.getOrNull()
-+            } }.awaitAll().filterNotNull()
-+        }
-         var bestManifest: ManifestCandidate? = null
+-        var bestManifest: ManifestCandidate? = null
 -        for ((clientKey, priority, manifestUrl) in manifestUrls) {
 -            runCatching {
 -                val variant = parseHlsManifest(manifestUrl) ?: return@runCatching
 -                val candidate = ManifestCandidate(
--                    client = clientKey,
--                    priority = priority,
--                    manifestUrl = manifestUrl,
++        val manifestCandidates = if (earlyExit) emptyList() else kotlinx.coroutines.coroutineScope {
++            manifestUrls.map { (clientKey, priority, manifestUrl) -> async {
++                // A manifest that cannot be fetched or lists no variant still plays: the player reads the master itself (live streams).
++                val variant = runCatching { parseHlsManifest(manifestUrl) }
++                    .onFailure { com.nuvio.app.features.youtube.YouTubeWarmupHooks.lastExtractFailure = "manifest: ${it.message?.take(120)}" }
++                    .getOrNull()
++                ManifestCandidate(
+                     client = clientKey,
+                     priority = priority,
+                     manifestUrl = manifestUrl,
 -                    selectedVariantUrl = variant.url,
 -                    height = variant.height,
 -                    bandwidth = variant.bandwidth,
--                )
++                    selectedVariantUrl = variant?.url ?: manifestUrl,
++                    height = variant?.height ?: 0,
++                    bandwidth = variant?.bandwidth ?: 0L,
+                 )
 -                if (
 -                    bestManifest == null ||
 -                    candidate.height > bestManifest.height ||
@@ -3353,6 +3348,9 @@ index 3ff0cebd2..08a7c972e 100644
 -                ) {
 -                    bestManifest = candidate
 -                }
++            } }.awaitAll().filterNotNull()
++        }
++        var bestManifest: ManifestCandidate? = null
 +        for (candidate in manifestCandidates) {
 +            if (
 +                bestManifest == null ||
@@ -3363,7 +3361,7 @@ index 3ff0cebd2..08a7c972e 100644
              }
          }
  
-@@ -319,15 +401,16 @@ class InAppYouTubeExtractor {
+@@ -319,15 +402,16 @@ class InAppYouTubeExtractor {
          if (heights.isNotEmpty()) com.nuvio.app.features.youtube.YouTubeStreamQuality.publish(videoId, heights)
          val cap = com.nuvio.app.features.youtube.YouTubeStreamQuality.capFor(videoId)
          val pool = if (cap != null) adaptiveVideo.filter { it.height in 1..cap }.ifEmpty { adaptiveVideo } else adaptiveVideo
@@ -3382,7 +3380,7 @@ index 3ff0cebd2..08a7c972e 100644
      }
  
      private suspend fun singleUrlSource(
-@@ -551,6 +634,30 @@ class InAppYouTubeExtractor {
+@@ -551,6 +635,30 @@ class InAppYouTubeExtractor {
          return parseUrl(url)?.query?.get("n")?.firstOrNull()?.isNotBlank() == true
      }
  
