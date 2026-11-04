@@ -1286,10 +1286,10 @@ index 000000000..fb9f4dcf1
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
 new file mode 100644
-index 000000000..8ccf368f8
+index 000000000..40dd6d631
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/youtube/YouTubeInlinePreview.kt
-@@ -0,0 +1,311 @@
+@@ -0,0 +1,312 @@
 +package com.nuvio.app.features.youtube
 +
 +import androidx.compose.foundation.background
@@ -1363,7 +1363,7 @@ index 000000000..8ccf368f8
 +}
 +
 +private fun previewable(item: YtItem) =
-+    item.kind == YtKind.VIDEO && !item.isShort && !item.isLive && item.id.isNotBlank()
++    item.kind == YtKind.VIDEO && !item.isShort && item.id.isNotBlank()
 +
 +/**
 + * Picks the previewable card nearest the middle of the list once scrolling has settled and at least
@@ -1388,11 +1388,12 @@ index 000000000..8ccf368f8
 +                val top = info.viewportStartOffset
 +                val bottom = info.viewportEndOffset
 +                val middle = (top + bottom) / 2
-+                info.visibleItemsInfo
++                val candidates = info.visibleItemsInfo
 +                    .filter { (it.key as? String) in byKey && it.size > 0 }
 +                    .filter { (minOf(it.offset + it.size, bottom) - maxOf(it.offset, top)).toFloat() / it.size >= 0.7f }
-+                    .minByOrNull { kotlin.math.abs(it.offset + it.size / 2 - middle) }
-+                    ?.key as? String
++                // A list at its top (a tab just opened) previews its first video, not the one nearest the middle.
++                if (!listState.canScrollBackward) candidates.minByOrNull { it.offset }?.key as? String
++                else candidates.minByOrNull { kotlin.math.abs(it.offset + it.size / 2 - middle) }?.key as? String
 +            }
 +        }
 +            .distinctUntilChanged()
