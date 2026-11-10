@@ -1,5 +1,5 @@
 name: Build NuvioMobile Jellyfin+LiveTV (upstream release sync)
-# sync-pulse: 0.6.10-beta 2026-11-08T09:00:14Z
+# sync-pulse: 0.6.11-beta 2026-11-10T01:30:07Z
 
 on:
   push:
